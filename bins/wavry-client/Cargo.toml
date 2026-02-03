@@ -1,0 +1,18 @@
+[package]
+name = "wavry-client"
+version = "0.0.1"
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+clap.workspace = true
+mdns-sd.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+rift-core = { path = "../../crates/rift-core" }
+wavry-media = { path = "../../crates/wavry-media" }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+evdev = "0.12"

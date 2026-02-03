@@ -1,0 +1,16 @@
+[package]
+name = "wavry-platform"
+version = "0.0.1"
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+wavry-media = { path = "../wavry-media" }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+ashpd = "0.11"
+evdev = "0.12"
+gstreamer = "0.22"
+gstreamer-app = "0.22"
+gstreamer-video = "0.22"

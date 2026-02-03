@@ -1,0 +1,192 @@
+use std::fs;
+use std::os::fd::{AsRawFd, OwnedFd};
+use std::path::{Path, PathBuf};
+
+use anyhow::{anyhow, Context, Result};
+use ashpd::desktop::screencast::{CursorMode, PersistMode, Screencast, SourceType};
+use gstreamer as gst;
+use gstreamer::prelude::*;
+use gstreamer_app as gst_app;
+
+use crate::{Codec, DecodeConfig, EncodedFrame, EncodeConfig};
+
+pub struct PipewireEncoder {
+    _fd: OwnedFd,
+    pipeline: gst::Pipeline,
+    appsink: gst_app::AppSink,
+}
+
+impl PipewireEncoder {
+    pub async fn new(config: EncodeConfig) -> Result<Self> {
+        gst::init()?;
+        let (fd, node_id) = open_portal_stream().await?;
+
+        let encoder = match config.codec {
+            Codec::Hevc => "vaapih265enc",
+            Codec::H264 => "vaapih264enc",
+        };
+        let parser = match config.codec {
+            Codec::Hevc => "h265parse",
+            Codec::H264 => "h264parse",
+        };
+
+        if gst::ElementFactory::find(encoder).is_none() {
+            return Err(anyhow!("missing GStreamer encoder element: {encoder}"));
+        }
+        if gst::ElementFactory::find(parser).is_none() {
+            return Err(anyhow!("missing GStreamer parser element: {parser}"));
+        }
+
+        let keyframe_interval_frames = ((config.fps as u32 * config.keyframe_interval_ms) / 1000)
+            .max(1);
+        let pipeline_str = format!(
+            "pipewiresrc fd={} path={} do-timestamp=true ! videoconvert ! video/x-raw,format=NV12,width={},height={},framerate={}/1 ! {} bitrate={} keyframe-period={} ! {} config-interval=-1 ! appsink name=sink max-buffers=1 drop=true sync=false",
+            fd.as_raw_fd(),
+            node_id,
+            config.resolution.width,
+            config.resolution.height,
+            config.fps,
+            encoder,
+            config.bitrate_kbps,
+            keyframe_interval_frames,
+            parser,
+        );
+
+        let pipeline = gst::parse::launch(&pipeline_str)?
+            .downcast::<gst::Pipeline>()
+            .map_err(|_| anyhow!("failed to downcast pipeline"))?;
+
+        let appsink = pipeline
+            .by_name("sink")
+            .ok_or_else(|| anyhow!("appsink not found"))?
+            .downcast::<gst_app::AppSink>()
+            .map_err(|_| anyhow!("appsink type mismatch"))?;
+
+        pipeline.set_state(gst::State::Playing)?;
+
+        Ok(Self {
+            _fd: fd,
+            pipeline,
+            appsink,
+        })
+    }
+
+    pub fn next_frame(&mut self) -> Result<EncodedFrame> {
+        let sample = self
+            .appsink
+            .pull_sample()
+            .map_err(|_| anyhow!("failed to pull sample"))?;
+        let buffer = sample.buffer().ok_or_else(|| anyhow!("missing buffer"))?;
+        let map = buffer.map_readable().map_err(|_| anyhow!("buffer map failed"))?;
+        let pts = buffer
+            .pts()
+            .map(|t| t.nseconds() / 1_000)
+            .unwrap_or(0);
+        let keyframe = !buffer.flags().contains(gst::BufferFlags::DELTA_UNIT);
+        Ok(EncodedFrame {
+            timestamp_us: pts,
+            keyframe,
+            data: map.as_slice().to_vec(),
+        })
+    }
+}
+
+pub struct GstVideoRenderer {
+    pipeline: gst::Pipeline,
+    appsrc: gst_app::AppSrc,
+}
+
+impl GstVideoRenderer {
+    pub fn new(config: DecodeConfig) -> Result<Self> {
+        gst::init()?;
+        let parser = match config.codec {
+            Codec::Hevc => "h265parse",
+            Codec::H264 => "h264parse",
+        };
+
+        if gst::ElementFactory::find(parser).is_none() {
+            return Err(anyhow!("missing GStreamer parser element: {parser}"));
+        }
+
+        let pipeline_str = format!(
+            "appsrc name=src is-live=true format=time do-timestamp=true ! {} ! decodebin ! videoconvert ! autovideosink sync=false",
+            parser
+        );
+        let pipeline = gst::parse::launch(&pipeline_str)?
+            .downcast::<gst::Pipeline>()
+            .map_err(|_| anyhow!("failed to downcast pipeline"))?;
+        let appsrc = pipeline
+            .by_name("src")
+            .ok_or_else(|| anyhow!("appsrc not found"))?
+            .downcast::<gst_app::AppSrc>()
+            .map_err(|_| anyhow!("appsrc type mismatch"))?;
+
+        let caps_str = match config.codec {
+            Codec::Hevc => "video/x-h265,stream-format=(string)byte-stream,alignment=(string)au",
+            Codec::H264 => "video/x-h264,stream-format=(string)byte-stream,alignment=(string)au",
+        };
+        let caps = gst::Caps::from_str(caps_str)?;
+        appsrc.set_caps(Some(&caps));
+
+        pipeline.set_state(gst::State::Playing)?;
+
+        Ok(Self { pipeline, appsrc })
+    }
+
+    pub fn push(&self, payload: &[u8], timestamp_us: u64) -> Result<()> {
+        let mut buffer = gst::Buffer::with_size(payload.len())?;
+        {
+            let buffer = buffer.get_mut().ok_or_else(|| anyhow!("buffer mut failed"))?;
+            buffer.copy_from_slice(0, payload)?;
+            buffer.set_pts(gst::ClockTime::from_nseconds(timestamp_us * 1_000));
+        }
+        self.appsrc.push_buffer(buffer)?;
+        Ok(())
+    }
+}
+
+async fn open_portal_stream() -> Result<(OwnedFd, u32)> {
+    let proxy = Screencast::new().await?;
+    let session = proxy.create_session().await?;
+    let restore_token = load_restore_token();
+    proxy
+        .select_sources(
+            &session,
+            CursorMode::Metadata,
+            SourceType::Monitor,
+            false,
+            restore_token.as_deref(),
+            PersistMode::ExplicitlyRevoked,
+        )
+        .await?;
+    let response = proxy.start(&session, None).await?.response()?;
+    if let Some(token) = response.restore_token() {
+        save_restore_token(token)?;
+    }
+    let fd = proxy.open_pipe_wire_remote(&session).await?;
+    let stream = response
+        .streams()
+        .get(0)
+        .ok_or_else(|| anyhow!("no screencast streams returned"))?;
+    Ok((fd, stream.pipe_wire_node_id()))
+}
+
+fn load_restore_token() -> Option<String> {
+    let path = token_path()?;
+    fs::read_to_string(path).ok().map(|s| s.trim().to_string())
+}
+
+fn save_restore_token(token: &str) -> Result<()> {
+    let path = token_path().ok_or_else(|| anyhow!("missing config path"))?;
+    if let Some(dir) = path.parent() {
+        fs::create_dir_all(dir).ok();
+    }
+    fs::write(path, token).context("failed to write restore token")
+}
+
+fn token_path() -> Option<PathBuf> {
+    let base = std::env::var_os("XDG_CONFIG_HOME").map(PathBuf::from).or_else(|| {
+        std::env::var_os("HOME").map(|home| Path::new(&home).join(".config"))
+    })?;
+    Some(base.join("wavry").join("portal_restore_token"))
+}
