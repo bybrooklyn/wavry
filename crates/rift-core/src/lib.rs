@@ -1,4 +1,14 @@
+//! Core RIFT protocol types, framing, and constants.
+//!
+//! This crate provides:
+//! - Packet types for Control, Input, and Media channels
+//! - Handshake state machine
+//! - Video chunking and FEC for error correction
+//! - Relay wire protocol for forwarding through relays
+
 #![forbid(unsafe_code)]
+
+pub mod relay;
 
 use serde::{Deserialize, Serialize};
 
@@ -188,7 +198,7 @@ pub fn chunk_video_payload(
     if max_payload == 0 {
         return Err(ChunkError::InvalidMaxPayload);
     }
-    let chunk_count = (payload.len() + max_payload - 1) / max_payload;
+    let chunk_count = payload.len().div_ceil(max_payload);
     if chunk_count > u16::MAX as usize {
         return Err(ChunkError::TooManyChunks);
     }

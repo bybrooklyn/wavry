@@ -1,8 +1,9 @@
 [package]
 name = "rift-core"
-version = "0.0.1"
+version.workspace = true
 edition.workspace = true
 license.workspace = true
+description = "Core RIFT protocol types, framing, and constants"
 
 [dependencies]
 anyhow.workspace = true
@@ -10,3 +11,7 @@ bincode.workspace = true
 bitflags.workspace = true
 serde.workspace = true
 thiserror.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+rand = "0.8"

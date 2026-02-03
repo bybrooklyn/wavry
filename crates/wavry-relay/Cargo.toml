@@ -1,0 +1,20 @@
+[package]
+name = "wavry-relay"
+version = "0.0.1"
+edition.workspace = true
+license.workspace = true
+description = "Wavry relay node - forwards encrypted UDP traffic between peers"
+
+[dependencies]
+anyhow.workspace = true
+clap.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+uuid.workspace = true
+chrono.workspace = true
+thiserror.workspace = true
+
+rift-core = { path = "../rift-core" }
+rift-crypto = { path = "../rift-crypto" }
+wavry-common = { path = "../wavry-common" }

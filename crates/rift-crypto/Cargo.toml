@@ -1,0 +1,32 @@
+[package]
+name = "rift-crypto"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Cryptographic primitives for RIFT: Ed25519 identity, Noise XX sessions, replay protection"
+
+[dependencies]
+anyhow.workspace = true
+thiserror.workspace = true
+serde.workspace = true
+base64.workspace = true
+rand.workspace = true
+zeroize.workspace = true
+
+# Noise Protocol Framework
+snow.workspace = true
+
+# Ed25519 signatures
+ed25519-dalek.workspace = true
+
+# X25519 key agreement (for Noise DH)
+x25519-dalek.workspace = true
+
+# ChaCha20-Poly1305 for per-packet encryption with explicit nonces
+chacha20poly1305 = "0.10"
+
+# Internal
+rift-core = { path = "../rift-core" }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["test-util"] }

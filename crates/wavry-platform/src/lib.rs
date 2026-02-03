@@ -47,3 +47,6 @@ mod linux;
 
 #[cfg(target_os = "linux")]
 pub use linux::{PipewireCapturer, UinputInjector};
+
+mod dummy;
+pub use dummy::{DummyCapturer, DummyInjector};

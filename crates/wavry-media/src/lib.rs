@@ -1,4 +1,4 @@
-#![forbid(unsafe_code)]
+// #![forbid(unsafe_code)]
 
 use anyhow::Result;
 use std::os::fd::OwnedFd;
@@ -94,3 +94,11 @@ mod linux;
 
 #[cfg(target_os = "linux")]
 pub use linux::{PipewireEncoder, GstVideoRenderer};
+
+mod dummy;
+pub use dummy::{DummyEncoder, DummyRenderer};
+
+#[cfg(target_os = "macos")]
+mod mac_screen_encoder;
+#[cfg(target_os = "macos")]
+pub use mac_screen_encoder::MacScreenEncoder;

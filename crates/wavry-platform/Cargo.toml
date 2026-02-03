@@ -6,6 +6,7 @@ license.workspace = true
 
 [dependencies]
 anyhow.workspace = true
+tracing.workspace = true
 wavry-media = { path = "../wavry-media" }
 
 [target.'cfg(target_os = "linux")'.dependencies]
