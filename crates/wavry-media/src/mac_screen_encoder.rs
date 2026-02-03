@@ -16,15 +16,37 @@ use objc2_screen_capture_kit::{
     SCContentFilter, SCStream, SCStreamConfiguration, SCStreamOutput, SCStreamOutputType,
     SCShareableContent,
 };
+use objc2_core_media::{CMSampleBuffer, CMTime, CMVideoCodecType};
 #[cfg(target_os = "macos")]
-use objc2_core_media::{CMSampleBuffer, CMTime};
+use objc2_video_toolbox::{
+    VTCompressionSession, VTCompressionOutputCallback, VTEncodeInfoFlags,
+};
 #[cfg(target_os = "macos")]
-use objc2_video_toolbox::VTCompressionSession;
+use objc2_core_foundation::{CFAllocator, CFDictionary};
+#[cfg(target_os = "macos")]
+use std::ffi::c_void;
+
+#[cfg(target_os = "macos")]
+#[link(name = "CoreMedia", kind = "framework")]
+extern "C" {
+    fn CMSampleBufferGetDataBuffer(sbuf: &CMSampleBuffer) -> *mut c_void; // Returns CMBlockBuffer
+    fn CMBlockBufferGetDataPointer(
+        the_buffer: *mut c_void,
+        offset: usize,
+        length_at_offset_out: *mut usize,
+        total_length_out: *mut usize,
+        data_pointer_out: *mut *mut u8
+    ) -> i32; // OSStatus
+    fn CMSampleBufferGetImageBuffer(sbuf: &CMSampleBuffer) -> *mut c_void; // Returns CVImageBufferRef
+    fn CMSampleBufferGetPresentationTimeStamp(sbuf: &CMSampleBuffer) -> CMTime;
+    fn CMSampleBufferGetDuration(sbuf: &CMSampleBuffer) -> CMTime;
+}
 
 // Define Ivars
 #[cfg(target_os = "macos")]
 struct OutputHandlerIvars {
-    tx: mpsc::Sender<EncodedFrame>,
+    // tx: mpsc::Sender<EncodedFrame>, // Removed: tx is passed to session callback context
+    session: Retained<VTCompressionSession>,
 }
 
 // Define OutputHandler
@@ -53,16 +75,35 @@ define_class!(
             kind: SCStreamOutputType
         ) {
             if kind == SCStreamOutputType::Screen {
-                 // Placeholder
+                // Feed to compression session
+                let ivars = self.ivars();
+                // We need to pass presentation timestamp. Use Invalid/Indefinite if unknown but VT requires it.
+                // CMSampleBuffer has it.
+                // VTCompressionSession::encode_frame(session, sampleBuffer, presentationTime, duration, frameProperties, sourceFrameRefCon, infoFlagsOut)
+                
+                // Using method call for objc2 0.6.3 (if mapped) or manually calling function?
+                // The error earlier suggested `VTCompressionSession::encode_frame`.
+                // Let's assume it maps to `VTCompressionSessionEncodeFrame`.
+                // Signature: (&self, image_buffer: &CVImageBuffer, presentation_time_stamp: CMTime, duration: CMTime, frame_properties: Option<&CFDictionary>, source_frame_ref_con: *mut c_void, info_flags_out: *mut VTEncodeInfoFlags) -> OSStatus
+                
+                // WAIT! VTCompressionSessionEncodeFrame takes IMAGE BUFFER (CVPixelBuffer), not CMSampleBuffer!
+                // CaptureKit provides CMSampleBuffer.
+                // We must extract CVPixelBuffer (ImageBuffer) from CMSampleBuffer.
+                // CMSampleBufferGetImageBuffer(sbuf) -> CVImageBufferRef.
+                
+                // I need another extern function: CMSampleBufferGetImageBuffer.
             }
         }
     }
 );
 
+// ...
+
+
 #[cfg(target_os = "macos")]
 impl OutputHandler {
-    fn new(tx: mpsc::Sender<EncodedFrame>) -> Retained<Self> {
-        let this = Self::alloc().set_ivars(OutputHandlerIvars { tx });
+    fn new(session: Retained<VTCompressionSession>) -> Retained<Self> {
+        let this = Self::alloc().set_ivars(OutputHandlerIvars { session });
         // this is PartialInit<Self>. We need validation.
         // We call [super init] to finalize initialization.
         // msg_send![super(this), init]

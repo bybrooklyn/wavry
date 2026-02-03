@@ -1,0 +1,26 @@
+# ---- Force Rust detection ----
+*.rs linguist-language=Rust
+Cargo.toml linguist-language=Rust
+Cargo.lock linguist-language=Rust
+
+# ---- Explicitly mark build/config files ----
+Makefile linguist-language=Makefile
+*.mk linguist-language=Makefile
+
+# ---- Ignore generated / vendored code ----
+/target/** linguist-generated=true
+**/generated/** linguist-generated=true
+**/*.lock linguist-generated=true
+
+# ---- Tauri / frontend (keep Rust dominant) ----
+*.ts linguist-language=TypeScript
+*.tsx linguist-language=TypeScript
+*.svelte linguist-language=Svelte
+*.css linguist-language=CSS
+*.html linguist-language=HTML
+
+# ---- CI / config ----
+*.yml linguist-language=YAML
+*.yaml linguist-language=YAML
+*.json linguist-language=JSON
+*.toml linguist-language=TOML
