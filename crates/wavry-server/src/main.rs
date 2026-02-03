@@ -10,7 +10,7 @@ mod host {
         InputMessage, Message, Packet, Ping, Pong, Role, StatsReport, UNASSIGNED_SESSION_ID,
         RIFT_VERSION,
     };
-    use rift_crypto::connection::{handshake_type, SecureServer, ConnectionError};
+    use rift_crypto::connection::{handshake_type, SecureServer};
     use wavry_media::{Codec, EncodeConfig, Resolution as MediaResolution};
     #[cfg(target_os = "linux")]
     use wavry_media::PipewireEncoder as VideoEncoder;
@@ -582,7 +582,7 @@ mod host {
     fn generate_session_id(peer: SocketAddr) -> u128 {
         let now = SystemTime::now()
             .duration_since(SystemTime::UNIX_EPOCH)
-            .map(|d| d.as_nanos() as u128)
+            .map(|d| d.as_nanos())
             .unwrap_or(1);
         let addr_hash = peer.ip().to_string().bytes().fold(0u128, |acc, b| {
             acc.wrapping_mul(257).wrapping_add(b as u128)

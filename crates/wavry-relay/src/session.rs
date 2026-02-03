@@ -15,6 +15,7 @@ use uuid::Uuid;
 
 /// Session state machine states
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(dead_code)]
 pub enum SessionState {
     /// First LEASE_PRESENT received, validating
     Init,
@@ -51,6 +52,7 @@ impl TryFrom<u8> for PeerRole {
 
 /// Per-peer state within a session
 #[derive(Debug)]
+#[allow(dead_code)]
 pub struct PeerState {
     /// Peer's Wavry ID (from lease)
     pub wavry_id: String,
@@ -75,6 +77,7 @@ impl PeerState {
 
 /// A relay session between two peers
 #[derive(Debug)]
+#[allow(dead_code)]
 pub struct RelaySession {
     /// Unique session ID (UUID)
     pub session_id: Uuid,
@@ -216,6 +219,7 @@ impl RelaySession {
 
 /// Session management errors
 #[derive(Debug, thiserror::Error)]
+#[allow(dead_code)]
 pub enum SessionError {
     #[error("peer already registered")]
     PeerAlreadyRegistered,
@@ -304,6 +308,7 @@ impl SessionPool {
     }
 
     /// Get session count
+    #[allow(dead_code)]
     pub fn len(&self) -> usize {
         self.sessions.len()
     }

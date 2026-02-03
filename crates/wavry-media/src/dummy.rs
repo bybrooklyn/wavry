@@ -31,7 +31,7 @@ impl DummyEncoder {
 
         Ok(EncodedFrame {
             timestamp_us,
-            keyframe: self.seq % 60 == 0,
+            keyframe: self.seq.is_multiple_of(60),
             data: vec![0x99; 1000], // Dummy payload
         })
     }

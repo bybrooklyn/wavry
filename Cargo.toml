@@ -17,7 +17,7 @@ members = [
   "crates/wavry-relay",
   "crates/wavry-master",
   "crates/wavry-cli",
-  "crates/wavry-desktop/src-tauri",
+  "crates/wavry-desktop/src-tauri", "crates/wavry-ffi",
 ]
 resolver = "2"
 

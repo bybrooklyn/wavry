@@ -1,26 +1,38 @@
-# ---- Force Rust detection ----
+# Rust
 *.rs linguist-language=Rust
-Cargo.toml linguist-language=Rust
-Cargo.lock linguist-language=Rust
+Cargo.toml linguist-language=TOML
+Cargo.lock linguist-generated=true
 
-# ---- Explicitly mark build/config files ----
-Makefile linguist-language=Makefile
-*.mk linguist-language=Makefile
-
-# ---- Ignore generated / vendored code ----
-/target/** linguist-generated=true
-**/generated/** linguist-generated=true
-**/*.lock linguist-generated=true
-
-# ---- Tauri / frontend (keep Rust dominant) ----
-*.ts linguist-language=TypeScript
-*.tsx linguist-language=TypeScript
+# Web / Svelte
 *.svelte linguist-language=Svelte
+*.ts linguist-language=TypeScript
+*.js linguist-language=JavaScript
 *.css linguist-language=CSS
 *.html linguist-language=HTML
-
-# ---- CI / config ----
-*.yml linguist-language=YAML
-*.yaml linguist-language=YAML
 *.json linguist-language=JSON
-*.toml linguist-language=TOML
+
+# Build & Dependencies (Ignored)
+target/ linguist-generated=true
+**/target/ linguist-generated=true
+node_modules/ linguist-generated=true
+**/node_modules/ linguist-generated=true
+dist/ linguist-generated=true
+**/dist/ linguist-generated=true
+out/ linguist-generated=true
+**/out/ linguist-generated=true
+build/ linguist-generated=true
+**/build/ linguist-generated=true
+.svelte-kit/ linguist-generated=true
+**/.svelte-kit/ linguist-generated=true
+
+# Lockfiles
+bun.lock linguist-generated=true
+bun.lockb linguist-generated=true
+yarn.lock linguist-generated=true
+package-lock.json linguist-generated=true
+pnpm-lock.yaml linguist-generated=true
+
+# Documentation
+*.md linguist-documentation=true
+LICENSE linguist-documentation=true
+docs/ linguist-documentation=true

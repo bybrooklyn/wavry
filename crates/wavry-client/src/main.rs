@@ -20,7 +20,7 @@ mod client {
         Handshake, HandshakeError, InputEvent as RiftInputEvent, InputMessage, Message, Packet,
         Ping, StatsReport, UNASSIGNED_SESSION_ID, RIFT_VERSION,
     };
-    use rift_crypto::connection::{handshake_type, SecureClient, ConnectionError};
+    use rift_crypto::connection::{handshake_type, SecureClient};
     use wavry_media::{Codec, DecodeConfig, Resolution as MediaResolution};
     #[cfg(target_os = "linux")]
     use wavry_media::GstVideoRenderer as VideoRenderer;
@@ -63,6 +63,7 @@ mod client {
             }
         }
 
+        #[allow(dead_code)]
         fn is_established(&self) -> bool {
             matches!(self, CryptoState::Established(_) | CryptoState::Disabled)
         }
@@ -146,7 +147,7 @@ mod client {
         handshake.on_send_hello().map_err(|e| anyhow!(format_handshake_error(e)))?;
 
         let packet_counter = Arc::new(AtomicU64::new(1));
-        let mut next_packet_id = || {
+        let next_packet_id = || {
             packet_counter.fetch_add(1, Ordering::Relaxed)
         };
 
@@ -617,7 +618,7 @@ mod client {
     }
 
     async fn discover_host(timeout: Duration) -> Result<SocketAddr> {
-        let handle = tokio::task::spawn_blocking(move || discover_host_blocking());
+        let handle = tokio::task::spawn_blocking(discover_host_blocking);
         let addr = time::timeout(timeout, handle).await??;
         addr
     }
@@ -687,6 +688,7 @@ mod client {
     #[cfg(not(target_os = "linux"))]
     enum _DeviceKind {}
 
+    #[allow(dead_code)]
     fn scale_abs(value: i32, min: i32, max: i32) -> i32 {
         if max <= min {
             return value;

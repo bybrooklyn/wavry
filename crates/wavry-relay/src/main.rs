@@ -17,7 +17,7 @@ use anyhow::Result;
 use clap::Parser;
 use rift_core::relay::{
     LeaseAckPayload, LeaseRejectPayload, LeaseRejectReason, RelayHeader, RelayPacketType,
-    RELAY_HEADER_SIZE, RELAY_MAX_PACKET_SIZE, RELAY_VERSION,
+    RELAY_HEADER_SIZE, RELAY_MAX_PACKET_SIZE,
 };
 use session::{PeerRole, SessionError, SessionPool};
 use tokio::net::UdpSocket;
