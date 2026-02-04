@@ -46,6 +46,7 @@ pub enum RiftError {
     #[error("protobuf decode error: {0}")]
     ProtoDecode(String),
 }
+pub mod cc;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PhysicalPacket {

@@ -13,6 +13,7 @@ thiserror.workspace = true
 uuid.workspace = true
 prost = "0.13"
 crc16 = "0.4"
+tracing.workspace = true
 
 [build-dependencies]
 prost-build = "0.13"

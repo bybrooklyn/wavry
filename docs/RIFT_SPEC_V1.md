@@ -132,11 +132,10 @@ RIFT uses an interleaved XOR-based FEC by default.
 
 The following features are under consideration for v0.2.0 and beyond.
 
-### 6.1 RIFT-CC (Congestion Control) [Planned]
-A delay-based congestion control algorithm (inspired by BBR and GCC) to:
-- Dynamically adjust `initial_bitrate_kbps`.
-- Adjust FEC redundancy ratio based on packet loss.
-- Signal `target_fps` to the encoder.
+### 6.1 DELTA Congestion Control [Planned]
+Wavry uses the **DELTA** (Differential Latency Estimation and Tuning Algorithm) for congestion control. DELTA is a delay-based, trend-driven algorithm optimized for ultra-low latency. 
+
+For full technical details, see the [DELTA Spec](DELTA_CC_SPEC.md).
 
 ### 6.2 Zero-RTT Resumption [Planned]
 Using Noise PSK (Pre-Shared Key) or Session Tickets to eliminate the 3-packet handshake overhead on reconnection.
