@@ -28,6 +28,10 @@ struct WavryApp: App {
                 }
             }
             .frame(minWidth: 900, minHeight: 650)
+            .sheet(isPresented: $appState.showLoginSheet) {
+                LoginView(appState: appState)
+                    .frame(width: 400, height: 500)
+            }
         }
         .windowStyle(.hiddenTitleBar)
         .windowToolbarStyle(.unified)

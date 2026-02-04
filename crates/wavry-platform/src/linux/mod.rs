@@ -120,12 +120,21 @@ impl UinputInjector {
         self.device.emit(&[event])?;
         Ok(())
     }
+    
+    /// Emit SYN_REPORT to synchronize input events.
+    /// Required for proper input device operation on Linux.
+    fn sync(&mut self) -> Result<()> {
+        // SYN_REPORT = type 0, code 0, value 0
+        self.device.emit(&[InputEvent::new(EventType::SYNCHRONIZATION, 0, 0)])?;
+        Ok(())
+    }
 }
 
 impl InputInjector for UinputInjector {
     fn key(&mut self, keycode: u32, pressed: bool) -> Result<()> {
         let value = if pressed { 1 } else { 0 };
-        self.emit(InputEvent::new(EventType::KEY, keycode, value))
+        self.emit(InputEvent::new(EventType::KEY, keycode, value))?;
+        self.sync()
     }
 
     fn mouse_button(&mut self, button: u8, pressed: bool) -> Result<()> {
@@ -136,7 +145,8 @@ impl InputInjector for UinputInjector {
             3 => 0x111,
             _ => 0x110,
         };
-        self.emit(InputEvent::new(EventType::KEY, code, value))
+        self.emit(InputEvent::new(EventType::KEY, code, value))?;
+        self.sync()
     }
 
     fn mouse_motion(&mut self, dx: i32, dy: i32) -> Result<()> {
@@ -144,7 +154,7 @@ impl InputInjector for UinputInjector {
             InputEvent::new(EventType::RELATIVE, RelativeAxisType::REL_X.0, dx),
             InputEvent::new(EventType::RELATIVE, RelativeAxisType::REL_Y.0, dy),
         ])?;
-        Ok(())
+        self.sync()
     }
 
     fn mouse_absolute(&mut self, x: i32, y: i32) -> Result<()> {
@@ -152,7 +162,7 @@ impl InputInjector for UinputInjector {
             InputEvent::new(EventType::ABSOLUTE, AbsoluteAxisType::ABS_X.0, x),
             InputEvent::new(EventType::ABSOLUTE, AbsoluteAxisType::ABS_Y.0, y),
         ])?;
-        Ok(())
+        self.sync()
     }
 }
 

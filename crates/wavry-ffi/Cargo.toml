@@ -16,3 +16,10 @@ env_logger = "0.10"
 # Internal dependencies
 wavry-common = { path = "../wavry-common" }
 wavry-media = { version = "0.0.1", path = "../wavry-media" }
+rift-core = { path = "../rift-core" }
+rift-crypto = { path = "../rift-crypto" }
+tokio = { workspace = true, features = ["full"] }
+anyhow = { workspace = true }
+once_cell = "1.18"
+wavry-client = { path = "../wavry-client" }
+x25519-dalek.workspace = true

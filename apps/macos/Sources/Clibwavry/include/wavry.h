@@ -5,9 +5,33 @@
 
 int wavry_init(void);
 const char *wavry_version(void);
-int wavry_connect(void);
+
+// Session Management
+int wavry_start_host(uint16_t port);
+int wavry_start_client(const char *host_ip, uint16_t port);
+int wavry_stop(void);
+
+// Identity Management
+int32_t wavry_init_identity(const char *storage_path);
+int32_t wavry_get_public_key(uint8_t *out_buffer_32);
+int32_t wavry_connect_signaling(const char *token);
+int32_t wavry_send_connect_request(const char *target_username);
+
+// Renderer & Injector
 int wavry_init_renderer(void *layer_ptr);
 int wavry_init_injector(unsigned int width, unsigned int height);
 int wavry_test_input_injection(void);
+
+// Stats
+typedef struct {
+  int32_t connected;
+  uint32_t fps;
+  uint32_t rtt_ms;
+  uint32_t bitrate_kbps;
+  uint64_t frames_encoded;
+  uint64_t frames_decoded;
+} WavryStats;
+
+int wavry_get_stats(WavryStats *out);
 
 #endif

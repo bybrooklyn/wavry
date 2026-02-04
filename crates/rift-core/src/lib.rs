@@ -47,6 +47,7 @@ pub enum RiftError {
     ProtoDecode(String),
 }
 pub mod cc;
+pub mod stun;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PhysicalPacket {
@@ -430,6 +431,7 @@ pub fn decode_msg(bytes: &[u8]) -> Result<Message, RiftError> {
 mod tests {
     use super::*;
 
+    #[allow(dead_code)]
     fn sample_hello() -> Hello {
         Hello {
             client_name: "test".to_string(),

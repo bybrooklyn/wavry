@@ -10,6 +10,9 @@ class AppState: ObservableObject {
     @Published var fps: Int = 0
     @Published var rtt: Double = 0.0
     
+    @Published var isAuthenticated: Bool = UserDefaults.standard.string(forKey: "authToken") != nil
+    @Published var authToken: String? = UserDefaults.standard.string(forKey: "authToken")
+    
     private var permissionTimer: Timer?
     public let videoLayer = AVSampleBufferDisplayLayer()
     
@@ -23,7 +26,19 @@ class AppState: ObservableObject {
             print("Failed to init renderer")
         }
         
-        // Init Injector (Hardcoded size for verification, should be dynamic)
+        if let supportDir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first {
+             let path = supportDir.path
+             path.withCString { ptr in
+                 let res = wavry_init_identity(ptr)
+                 if res != 0 {
+                     print("Failed to init identity: \(res)")
+                 } else {
+                     print("Identity initialized at \(path)")
+                 }
+             }
+        }
+        
+        // Init Input Injector (Hardcoded size for verification, should be dynamic)
         wavry_init_injector(1920, 1080)
         
         // Poll for permissions in case user changes them in System Settings
@@ -55,23 +70,69 @@ class AppState: ObservableObject {
     }
     
     // Connect to Rust backend
-    func connect() {
-        wavry_connect()
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
-            self.isConnected = true
-            self.startMockStats()
+    @Published var isHost: Bool = false
+
+    // Connect to Rust backend
+    func startHosting() {
+        // Start on random high port for now, or fixed 
+        let port: UInt16 = 4444
+        let res = wavry_start_host(port)
+        if res == 0 {
+            self.isHost = true
+            self.startPollingStats()
+        } else {
+            print("Failed to start host")
         }
     }
     
-    func disconnect() {
+    func connectToHost(ip: String) {
+        let port: UInt16 = 4444
+        // Convert Swift String to C String
+        ip.withCString { ipPtr in
+            let res = wavry_start_client(ipPtr, port)
+            if res == 0 {
+                self.isHost = false
+                self.startPollingStats()
+            } else {
+                print("Failed to connect to host")
+            }
+        }
+    }
+    
+    func connectViaId(username: String) {
+        // Send connection request through signaling
+        username.withCString { usernamePtr in
+            let res = wavry_send_connect_request(usernamePtr)
+            if res != 0 {
+                print("Failed to send connection request")
+            } else {
+                print("Connection request sent to \(username)")
+            }
+        }
+    }
+    
+    func stopSession() {
+        wavry_stop()
+        self.statsTimer?.invalidate()
+        self.statsTimer = nil
         self.isConnected = false
     }
     
-    func startMockStats() {
-        Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { _ in
-            guard self.isConnected else { return }
-            self.fps = Int.random(in: 58...60)
-            self.rtt = Double.random(in: 2.0...5.0)
+    private var statsTimer: Timer?
+    
+    func startPollingStats() {
+        self.statsTimer?.invalidate()
+        self.statsTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
+            var stats = WavryStats()
+            let res = wavry_get_stats(&stats)
+            if res == 0 {
+                DispatchQueue.main.async {
+                    self?.isConnected = stats.connected != 0
+                    self?.fps = Int(stats.fps)
+                    self?.rtt = Double(stats.rtt_ms)
+                    // Update other stats if needed
+                }
+            }
         }
     }
     
@@ -96,6 +157,7 @@ class AppState: ObservableObject {
     @Published var clientPort: Int = UserDefaults.standard.integer(forKey: "clientPort") == 0 ? 0 : UserDefaults.standard.integer(forKey: "clientPort")
     @Published var hostStartPort: Int = UserDefaults.standard.integer(forKey: "hostStartPort") == 0 ? 0 : UserDefaults.standard.integer(forKey: "hostStartPort")
     @Published var upnpEnabled: Bool = UserDefaults.standard.object(forKey: "upnpEnabled") == nil ? true : UserDefaults.standard.bool(forKey: "upnpEnabled")
+    @Published var showLoginSheet: Bool = false
     
     var effectiveDisplayName: String {
         if isUsingHostname || displayName.isEmpty {
@@ -130,6 +192,35 @@ class AppState: ObservableObject {
     func resetSetup() {
         self.isSetupCompleted = false
         UserDefaults.standard.removeObject(forKey: "isSetupCompleted")
+    }
+    
+    func completeLogin(token: String, email: String) {
+        self.authToken = token
+        UserDefaults.standard.set(token, forKey: "authToken")
+        self.displayName = email
+        self.isAuthenticated = true
+        
+        // Connect Signaling (only in Cloud mode)
+        if connectivityMode != .direct {
+            token.withCString { ptr in
+                _ = wavry_connect_signaling(ptr)
+            }
+        }
+    }
+    
+    func logout() {
+        self.authToken = nil
+        self.isAuthenticated = false
+        UserDefaults.standard.removeObject(forKey: "authToken")
+    }
+    func getPublicKey() -> String? {
+        var buffer = [UInt8](repeating: 0, count: 32)
+        let res = wavry_get_public_key(&buffer)
+        if res == 0 {
+            // Convert to hex string
+            return buffer.map { String(format: "%02x", $0) }.joined()
+        }
+        return nil
     }
 }
 

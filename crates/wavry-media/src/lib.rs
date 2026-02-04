@@ -115,7 +115,7 @@ impl CapabilityProbe for NullProbe {
 mod linux;
 
 #[cfg(target_os = "linux")]
-pub use linux::{PipewireEncoder, GstVideoRenderer};
+pub use linux::{PipewireEncoder, GstVideoRenderer, GstAudioRenderer, PipewireAudioCapturer};
 
 mod dummy;
 pub use dummy::{DummyEncoder, DummyRenderer};

@@ -123,6 +123,30 @@ struct SettingsView: View {
     
     var networkSettings: some View {
         VStack(alignment: .leading, spacing: 20) {
+            SettingsSectionHeader(title: "Connectivity Mode")
+            SettingsRow(
+                label: "Mode",
+                sublabel: "LAN Only disables cloud features (no login, no relay).",
+                control: Picker("", selection: $appState.connectivityMode) {
+                    Text("Wavry Cloud").tag(ConnectivityMode.wavry)
+                    Text("LAN Only").tag(ConnectivityMode.direct)
+                    Text("Custom Server").tag(ConnectivityMode.custom)
+                }.labelsHidden().pickerStyle(.menu).frame(width: 180)
+            )
+            
+            if appState.connectivityMode == .custom {
+                SettingsRow(
+                    label: "Gateway URL",
+                    sublabel: "Custom signaling server address.",
+                    control: TextField("wss://...", text: $appState.authServer)
+                        .textFieldStyle(.plain)
+                        .padding(6)
+                        .background(Color.bgElevation1)
+                        .cornerRadius(.themeRadius.sm)
+                        .frame(width: 250)
+                )
+            }
+            
             SettingsSectionHeader(title: "Ports")
             SettingsRow(label: "Client Port", sublabel: "UDP port used for client traffic.", control: TextField("0", value: $appState.clientPort, formatter: NumberFormatter()).textFieldStyle(.plain).padding(6).background(Color.bgElevation1).cornerRadius(.themeRadius.sm).frame(width: 80))
             SettingsRow(label: "Host Start Port", sublabel: "Starting port for host listeners.", control: TextField("0", value: $appState.hostStartPort, formatter: NumberFormatter()).textFieldStyle(.plain).padding(6).background(Color.bgElevation1).cornerRadius(.themeRadius.sm).frame(width: 80))
@@ -142,7 +166,7 @@ struct SettingsView: View {
             SettingsRow(label: "Use Hostname", sublabel: "Automatically use MacBook's name as your identity.", control: Toggle("", isOn: $appState.isUsingHostname).labelsHidden())
             
             SettingsSectionHeader(title: "Security")
-            SettingsRow(label: "Public Key", sublabel: "Cryptographic device fingerprint.", control: HostKeyView(key: appState.publicKey))
+            SettingsRow(label: "Public Key", sublabel: "Cryptographic device fingerprint.", control: HostKeyView(key: appState.getPublicKey() ?? "Not Loaded"))
             
             SettingsSectionHeader(title: "Infrastructure")
             SettingsRow(label: "Auth Server", sublabel: "Wavry Master Server for signaling.", control: TextField("URL", text: $appState.authServer).textFieldStyle(.plain).padding(6).background(Color.bgElevation1).cornerRadius(.themeRadius.sm).frame(width: 250))

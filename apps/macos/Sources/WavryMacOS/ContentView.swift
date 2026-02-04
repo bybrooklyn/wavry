@@ -81,8 +81,9 @@ struct ContentView: View {
 
 struct SessionsView: View {
     @ObservedObject var appState: AppState
-    
-    
+    @State private var remoteIP: String = "127.0.0.1"
+    @State private var remoteUsername: String = ""
+
     var body: some View {
         VStack(alignment: .leading, spacing: .themeSpacing.xxl) {
             // Header
@@ -109,26 +110,79 @@ struct SessionsView: View {
                     }
                     .padding(.horizontal, .themeSpacing.xxl)
                     
-                    // Active Sessions
+                    // Remote Connection
                     VStack(alignment: .leading, spacing: .themeSpacing.sm) {
-                        Text("ACTIVE SESSIONS")
+                        Text("REMOTE CONNECTION")
                             .font(.caption)
                             .fontWeight(.bold)
                             .foregroundColor(.textSecondary)
                         
-                        VStack {
-                            WavryIcon(name: .noSessions, size: 30, color: .textSecondary.opacity(0.3))
-                            Text("No active sessions")
-                                .font(.body)
-                                .foregroundColor(.textSecondary)
-                                .opacity(0.5)
+                        VStack(spacing: 16) {
+                            if appState.isConnected && !appState.isHost {
+                                VideoPlayerView(layer: appState.videoLayer)
+                                    .frame(height: 300)
+                                    .cornerRadius(12)
+                                    .overlay(
+                                        RoundedRectangle(cornerRadius: 12)
+                                            .stroke(Color.accentSuccess, lineWidth: 2)
+                                    )
+                                    
+                                Button(action: { appState.stopSession() }) {
+                                    Text("Disconnect")
+                                        .frame(maxWidth: .infinity)
+                                        .padding()
+                                        .background(Color.accentDanger)
+                                        .foregroundColor(.white)
+                                        .cornerRadius(8)
+                                }
+                                .buttonStyle(.plain)
+                            } else {
+                                // Connect via ID (Cloud Mode)
+                                if appState.connectivityMode != .direct {
+                                    HStack {
+                                        TextField("Username or ID", text: $remoteUsername)
+                                            .textFieldStyle(RoundedBorderTextFieldStyle())
+                                        
+                                        Button(action: { appState.connectViaId(username: remoteUsername) }) {
+                                            Text("Connect via ID")
+                                                .padding(.horizontal, 20)
+                                                .padding(.vertical, 8)
+                                                .background(Color.accentPrimary)
+                                                .foregroundColor(.white)
+                                                .cornerRadius(8)
+                                        }
+                                        .buttonStyle(.plain)
+                                    }
+                                    .padding()
+                                    .background(Color.bgElevation1)
+                                    .cornerRadius(12)
+                                    
+                                    Text("OR").font(.caption).foregroundColor(.textSecondary)
+                                }
+                                
+                                // Direct IP Connection (LAN Mode & Fallback)
+                                HStack {
+                                    TextField("Host IP", text: $remoteIP)
+                                        .textFieldStyle(RoundedBorderTextFieldStyle())
+                                    
+                                    Button(action: { appState.connectToHost(ip: remoteIP) }) {
+                                        Text("Connect Directly")
+                                            .padding(.horizontal, 20)
+                                            .padding(.vertical, 8)
+                                            .background(Color.accentPrimary.opacity(appState.connectivityMode == .direct ? 1.0 : 0.6))
+                                            .foregroundColor(.white)
+                                            .cornerRadius(8)
+                                    }
+                                    .buttonStyle(.plain)
+                                }
+                                .padding()
+                                .background(Color.bgElevation1)
+                                .cornerRadius(12)
+                            }
                         }
-                        .frame(maxWidth: .infinity)
-                        .frame(height: 120)
-                        .background(Color.bgElevation1)
-                        .cornerRadius(.themeRadius.md)
                     }
                     .padding(.horizontal, .themeSpacing.xxl)
+
                 }
             }
         }
@@ -143,7 +197,7 @@ struct HostCard: View {
             // Preview / Thumbnail
             ZStack {
                 Color.bgElevation2
-                if appState.isConnected {
+                if appState.isConnected && appState.isHost {
                     // Live indicator
                     VStack {
                         Spacer()
@@ -152,7 +206,7 @@ struct HostCard: View {
                                 Circle()
                                     .fill(Color.accentSuccess)
                                     .frame(width: 6, height: 6)
-                                Text("LIVE")
+                                Text("HOSTING")
                                     .font(.caption2)
                                     .fontWeight(.bold)
                                     .foregroundColor(.accentSuccess)
@@ -163,25 +217,6 @@ struct HostCard: View {
                     }
                 } else {
                     WavryIcon(name: .hostDefault, size: 60, color: .textSecondary.opacity(0.5))
-                }
-                
-                if appState.isConnected {
-                    VStack {
-                        Spacer()
-                        HStack {
-                            HStack(spacing: 6) {
-                                Circle()
-                                    .fill(Color.accentSuccess)
-                                    .frame(width: 6, height: 6)
-                                Text("LIVE")
-                                    .font(.caption2)
-                                    .fontWeight(.bold)
-                                    .foregroundColor(.accentSuccess)
-                            }
-                            .padding(8)
-                            Spacer()
-                        }
-                    }
                 }
             }
             .frame(height: 200)
@@ -197,22 +232,28 @@ struct HostCard: View {
                         .foregroundColor(.textSecondary)
                 }
                 Spacer()
-                Button(action: {
-                    if appState.isConnected {
-                        appState.disconnect()
-                    } else {
-                        appState.connect()
+                
+                if appState.isConnected && !appState.isHost {
+                    Text("Client Active")
+                        .foregroundColor(.textSecondary)
+                } else {
+                    Button(action: {
+                        if appState.isConnected {
+                            appState.stopSession()
+                        } else {
+                            appState.startHosting()
+                        }
+                    }) {
+                        Text(appState.isConnected ? "Stop Hosting" : "Start Hosting")
+                            .fontWeight(.bold)
+                            .padding(.horizontal, .themeSpacing.xl)
+                            .padding(.vertical, 8)
+                            .background(appState.isConnected ? Color.accentDanger : Color.accentPrimary)
+                            .foregroundColor(.white)
+                            .cornerRadius(.themeRadius.sm)
                     }
-                }) {
-                    Text(appState.isConnected ? "Stop Hosting" : "Start Session")
-                        .fontWeight(.bold)
-                        .padding(.horizontal, .themeSpacing.xl)
-                        .padding(.vertical, 8)
-                        .background(appState.isConnected ? Color.accentDanger : Color.accentPrimary)
-                        .foregroundColor(.white)
-                        .cornerRadius(.themeRadius.sm)
+                    .buttonStyle(.plain)
                 }
-                .buttonStyle(.plain)
             }
             .padding(.themeSpacing.lg)
         }
@@ -238,6 +279,24 @@ struct SidebarIcon: View {
                 .cornerRadius(.themeRadius.lg)
         }
         .buttonStyle(.plain)
+    }
+}
+
+struct VideoPlayerView: NSViewRepresentable {
+    var layer: CALayer
+    
+    func makeNSView(context: Context) -> NSView {
+        let view = NSView()
+        view.layer = layer
+        view.wantsLayer = true
+        // layer.backgroundColor = NSColor.black.cgColor
+        return view
+    }
+    
+    func updateNSView(_ nsView: NSView, context: Context) {
+        if nsView.layer != layer {
+            nsView.layer = layer
+        }
     }
 }
 

@@ -11,22 +11,23 @@
         <span class="label">LIVE</span>
       </div>
     {:else}
-       <span class="host-icon">💻</span>
+      <span class="host-icon">💻</span>
     {/if}
   </div>
-  
+
   <div class="info">
     <div class="meta">
-      <h3>{appState.displayName || 'Mac'}</h3>
-      <p>{appState.connectivityMode || 'Wavry Service'}</p>
+      <h3>{appState.displayName || "Mac"}</h3>
+      <p>{appState.connectivityMode || "Wavry Service"}</p>
     </div>
-    
-    <button 
-      class="action-btn" 
-      class:stop={appState.isConnected}
-      onclick={() => appState.isConnected ? appState.disconnect() : appState.connect()}
+
+    <button
+      class="action-btn"
+      class:stop={appState.isHosting}
+      onclick={() =>
+        appState.isHosting ? appState.stopHosting() : appState.startHosting()}
     >
-      {appState.isConnected ? 'Stop Hosting' : 'Start Session'}
+      {appState.isHosting ? "Stop Hosting" : "Start Hosting"}
     </button>
   </div>
 </div>
@@ -86,7 +87,9 @@
   }
 
   .meta h3 {
-    font-size: var(--font-size-body); /* headline in SwiftUI is approx body font size but bold */
+    font-size: var(
+      --font-size-body
+    ); /* headline in SwiftUI is approx body font size but bold */
     font-weight: var(--font-weight-bold);
     color: var(--colors-text-primary);
     margin-bottom: 4px;

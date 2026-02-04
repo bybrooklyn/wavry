@@ -2,26 +2,25 @@ import SwiftUI
 
 struct SetupWizardView: View {
     @ObservedObject var appState: AppState
-    @State private var step = 1
+    @State private var step = 0 // 0 = Welcome, 1 = Identity, 2 = Mode
     @State private var displayName: String = ""
     @State private var selectedMode: ConnectivityMode = .wavry
     
     var body: some View {
         ZStack {
-            // Background - matching ContentView exactly
             Color.bgBase.ignoresSafeArea()
             
             VStack {
                 Spacer()
                 
                 VStack(spacing: .themeSpacing.xxxl) {
-                    if step == 1 {
-                        identityView
-                    } else {
-                        connectivityView
+                    switch step {
+                    case 0: welcomeView
+                    case 1: identityView
+                    default: connectivityView
                     }
                 }
-                .frame(maxWidth: 600) // Constrain content for better scaling
+                .frame(maxWidth: 600)
                 .padding(.themeSpacing.xxxl)
                 .background(Color.bgModal)
                 .cornerRadius(.themeRadius.xxl)
@@ -38,6 +37,49 @@ struct SetupWizardView: View {
         .preferredColorScheme(.dark)
     }
     
+    // Step 0: Welcome
+    var welcomeView: some View {
+        VStack(spacing: .themeSpacing.xxl) {
+            VStack(spacing: .themeSpacing.lg) {
+                WavryIcon(name: .hostDefault, size: 80, color: .accentPrimary)
+                
+                Text("Welcome to Wavry!")
+                    .font(.system(size: 36, weight: .light))
+                    .foregroundColor(.white)
+                
+                Text("Ultra-low latency remote desktop streaming.\nFast, secure, and private.")
+                    .font(.body)
+                    .foregroundColor(.textSecondary)
+                    .multilineTextAlignment(.center)
+            }
+            
+            VStack(spacing: .themeSpacing.md) {
+                Button(action: {
+                    withAnimation { step = 1 }
+                }) {
+                    Text("Get Started")
+                        .fontWeight(.bold)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, .themeSpacing.lg)
+                        .background(Color.accentPrimary)
+                        .foregroundColor(.white)
+                        .cornerRadius(.themeRadius.xl)
+                }
+                .buttonStyle(.plain)
+                
+                Button(action: {
+                    // Show login sheet
+                    appState.showLoginSheet = true
+                }) {
+                    Text("I already have an account")
+                        .font(.subheadline)
+                        .foregroundColor(.textSecondary)
+                }
+                .buttonStyle(.plain)
+            }
+        }
+    }
+    
     // Step 1: Identity
     var identityView: some View {
         VStack(spacing: .themeSpacing.xxl) {
@@ -46,42 +88,56 @@ struct SetupWizardView: View {
                     .font(.system(size: 64))
                     .foregroundColor(.accentPrimary)
                 
-                Text("Set Your Local Host Name")
+                Text("Set Your Host Name")
                     .font(.system(size: 32, weight: .light))
                     .foregroundColor(.white)
                 
-                Text("This name identifies your computer when hosting sessions or connecting to others.")
+                Text("This name identifies your computer on the network.")
                     .font(.body)
                     .foregroundColor(.gray)
                     .multilineTextAlignment(.center)
             }
             
             VStack(alignment: .leading, spacing: .themeSpacing.sm) {
-                TextField("e.g. My MacPro", text: $displayName)
+                TextField("e.g. My MacBook", text: $displayName)
                     .textFieldStyle(PlainTextFieldStyle())
                     .padding(.themeSpacing.lg)
                     .background(Color.bgElevation1)
                     .cornerRadius(.themeRadius.xl)
-                    .font(.system(size: .themeSpacing.xl)) // Using 20 as roughly 18
+                    .font(.system(size: .themeSpacing.xl))
                     .overlay(
                         RoundedRectangle(cornerRadius: .themeRadius.xl)
                             .stroke(Color.borderInput, lineWidth: 1)
                     )
             }
             
-            Button(action: {
-                withAnimation { step = 2 }
-            }) {
-                Text("Continue")
-                    .fontWeight(.bold)
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, .themeSpacing.lg)
-                    .background(displayName.isEmpty ? Color.textSecondary.opacity(0.2) : Color.accentPrimary)
-                    .foregroundColor(displayName.isEmpty ? .textSecondary : .white)
-                    .cornerRadius(.themeRadius.xl)
+            HStack(spacing: .themeSpacing.lg) {
+                Button(action: {
+                    withAnimation { step = 0 }
+                }) {
+                    Text("Back")
+                        .fontWeight(.semibold)
+                        .padding(.vertical, 14)
+                        .padding(.horizontal, .themeSpacing.xxl)
+                        .background(Color.bgElevation3)
+                        .cornerRadius(.themeRadius.xl)
+                }
+                .buttonStyle(.plain)
+                
+                Button(action: {
+                    withAnimation { step = 2 }
+                }) {
+                    Text("Continue")
+                        .fontWeight(.bold)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 14)
+                        .background(displayName.isEmpty ? Color.textSecondary.opacity(0.2) : Color.accentPrimary)
+                        .foregroundColor(displayName.isEmpty ? .textSecondary : .white)
+                        .cornerRadius(.themeRadius.xl)
+                }
+                .buttonStyle(.plain)
+                .disabled(displayName.isEmpty)
             }
-            .buttonStyle(.plain)
-            .disabled(displayName.isEmpty)
         }
     }
     
@@ -93,23 +149,23 @@ struct SetupWizardView: View {
                     .font(.system(size: 32, weight: .light))
                     .foregroundColor(.white)
                 
-                Text("Select how you want to discover and connect to peers.")
+                Text("How do you want to connect to other devices?")
                     .font(.body)
                     .foregroundColor(.gray)
             }
             
             VStack(spacing: .themeSpacing.lg) {
                 ModeOptionCard(
-                    title: "Wavry Service",
-                    description: "Global discovery via Wavry's secure signaling network.",
+                    title: "Wavry Cloud",
+                    description: "Connect via username. Requires account.",
                     icon: "cloud.fill",
                     isSelected: selectedMode == .wavry,
                     onSelect: { selectedMode = .wavry }
                 )
                 
                 ModeOptionCard(
-                    title: "Direct Connection",
-                    description: "Manual IP/Port connection. Best for LAN and power users.",
+                    title: "LAN Only",
+                    description: "Direct IP connection. Fully offline, no account needed.",
                     icon: "network",
                     isSelected: selectedMode == .direct,
                     onSelect: { selectedMode = .direct }
@@ -132,7 +188,7 @@ struct SetupWizardView: View {
                 Button(action: {
                     appState.completeSetup(name: displayName, mode: selectedMode)
                 }) {
-                    Text("Ready to Start")
+                    Text("Finish Setup")
                         .fontWeight(.bold)
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 14)

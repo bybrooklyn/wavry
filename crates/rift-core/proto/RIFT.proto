@@ -141,18 +141,16 @@ message VideoChunk {
     bytes payload = 6;
 }
 
-message FecPacket {
-    uint64 group_id = 1;
-    uint64 first_packet_id = 2;
-    uint32 shard_count = 3;
-    uint32 parity_index = 4; // For Reed-Solomon
-    bytes payload = 5;
+message AudioPacket {
+    uint64 timestamp_us = 1;
+    bytes payload = 2;
 }
 
 message MediaMessage {
     oneof content {
         VideoChunk video = 1;
         FecPacket fec = 2;
+        AudioPacket audio = 3;
     }
 }
 

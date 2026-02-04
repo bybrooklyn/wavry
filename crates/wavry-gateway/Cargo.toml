@@ -1,0 +1,42 @@
+[package]
+name = "wavry-gateway"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+# Web Framework
+axum = { version = "0.7", features = ["macros", "ws"] }
+tokio = { workspace = true }
+tower = { version = "0.4", features = ["util"] }
+tower-http = { version = "0.5", features = ["cors", "trace", "fs"] }
+
+# Database
+# Using sqlite for embedded simplicity, easy to backup
+sqlx = { version = "0.7", features = ["runtime-tokio-rustls", "sqlite", "uuid", "chrono", "migrate"] }
+
+# Serialization
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+# Auth & Crypto
+argon2 = "0.5"
+totp-rs = { version = "5.5", features = ["qr"] }
+rand = { workspace = true }
+uuid = { workspace = true }
+chrono = { workspace = true }
+base64 = { workspace = true }
+
+# Logging
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+# Env
+dotenv = "0.15"
+
+# Utilities
+anyhow = { workspace = true }
+
+# Shared protocol definitions (for Signaling)
+wavry-common = { path = "../wavry-common" }
+base32 = "0.5.1"
+futures = "0.3.31"
