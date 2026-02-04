@@ -20,7 +20,7 @@
 
 Wavry is a high-performance, secure, and extensible remote desktop and gaming streaming platform implemented in Rust. The project is designed to solve the challenges of high-fidelity, low-latency data transmission over unpredictable network environments. By leveraging a custom transport protocol and a modular media pipeline, Wavry aims to approach the responsiveness of local hardware.
 
-The project is built around the **RIFT (Real-time Interactive Frame Transport)** protocol, which optimizes for sub-frame latency by minimizing serialization overhead and utilizing advanced jitter-buffering techniques.
+The project is built around the **RIFT (Remote Interactive Frame Transport)** protocol, which optimizes for sub-frame latency by minimizing serialization overhead and utilizing advanced jitter-buffering techniques.
 
 ---
 
@@ -73,7 +73,7 @@ Wavry is architected as a modular Rust workspace:
 ## Technical Specifications
 
 ### The RIFT Protocol
-Wavry uses the **RIFT (Real-time Interactive Frame Transport)** protocol to manage the logical separation of control, input, and media data.
+Wavry uses the **RIFT (Remote Interactive Frame Transport)** protocol to manage the logical separation of control, input, and media data.
 1.  **Control Channel**: Session negotiation, capability exchange, and statistics reporting.
 2.  **Input Channel**: Priority path for HID events (keyboard, mouse, gamepad) for minimal "click-to-photon" latency.
 3.  **Media Channel**: High-bandwidth path for encoded video and audio, utilizing loss-tolerant framing.

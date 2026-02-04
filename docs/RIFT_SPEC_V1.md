@@ -1,16 +1,16 @@
 # RIFT Protocol Specification v0.1.0
 
 **Status:** Current stable baseline for development.
-**Change Discipline:** This document is the source of truth. Changes to protocol behavior must be updated here.
+**Change Discipline:** This document is the source of truth. Changes to protocol behavior MUST be updated here.
 
 ---
 
 ## 1. Overview
 
-RIFT (Real-time Interactive Frame Transport) is a high-performance, low-latency UDP protocol designed for remote desktop and game streaming. It emphasizes minimal overhead, strong encryption, and flexible error correction.
+RIFT (Remote Interactive Frame Transport) is a high-performance, low-latency UDP protocol designed for remote desktop and game streaming. It emphasizes minimal overhead, strong encryption, and flexible error correction.
 
 A RIFT session consists of three logical planes:
-1.  **Secure Plane**: Noise-based encryption establishmemt.
+1.  **Secure Plane**: Noise-based encryption establishment.
 2.  **Physical Plane**: UDP framing, checksums, and session multiplexing.
 3.  **Logical Plane**: Protobuf-encoded control, input, and media messages.
 
@@ -18,7 +18,7 @@ A RIFT session consists of three logical planes:
 
 ## 2. Physical Plane (Framing)
 
-All RIFT traffic travels over UDP. Each datagram starts with a Physical Header.
+All RIFT traffic MUST travel over UDP. Each datagram MUST start with a Physical Header.
 
 ### 2.1 Header Formats
 
@@ -44,10 +44,10 @@ Used for all traffic after the session is established.
 | 8 | 8 | Packet ID | Monotonic 64-bit counter |
 | 16 | 2 | Checksum | CRC16-KERMIT over bytes [0..16] |
 
-**Note on Detection:** A receiver distinguishes these by the value at offset 4. If the first 4 bytes of the ID space are zero AND the total length is at least 30 bytes, it is treated as a Handshake Header.
+**Note on Detection:** A receiver MUST distinguish these by the 4-byte value starting at Offset 4. If these 4 bytes are all zero (`0x00000000`) AND the total packet length is >= 30 bytes, the packet MUST be treated as a Handshake Header. Otherwise, if the total length is at least 18 bytes, it SHOULD be treated as a Transport Header. Packets failing both criteria MUST be silently dropped.
 
 ### 2.2 Integrity
-All packets are protected by a **CRC16-KERMIT** checksum. The checksum is calculated over the header (excluding the checksum field itself) and verified by the receiver. Packets with mismatched checksums MUST be dropped.
+All packets MUST be protected by a **CRC16-KERMIT** checksum. The checksum is calculated over the header (excluding the checksum field itself). Checksum verification MUST be performed by the receiver BEFORE any AEAD decryption or logical processing. Packets with mismatched checksums MUST be dropped.
 
 ---
 
@@ -56,31 +56,42 @@ All packets are protected by a **CRC16-KERMIT** checksum. The checksum is calcul
 Before the RIFT logical handshake occurs, peers MUST establish an encrypted session using the **Noise Protocol Framework**.
 
 ### 3.1 Handshake Pattern
-RIFT uses the **Noise_XX_25519_ChaChaPoly_BLAKE2b** pattern by default:
+RIFT MUST use the **Noise_XX_25519_ChaChaPoly_BLAKE2b** pattern by default:
 - **XX**: Full 3-way handshake with mutual identity exchange.
 - **IK**: (Proposed) 0-RTT resumption for re-connections.
 
 ### 3.2 Key Rotation
-Packet IDs are 64-bit, providing ample headroom. However, keys SHOULD be rotated if the `packet_id` wraps or after 24 hours of continuous streaming.
+Packet IDs are 64-bit, providing ample headroom. However, keys SHOULD be rotated if the `packet_id` reaches its maximum value ($2^{64}-1$) or after 24 hours of continuous streaming.
 
-### 3.3 Protocol Wrapping
+### 3.3 Packet ID Semantics
+- Packet IDs MUST be monotonic 64-bit counters.
+- Counters are independent for each session direction (Client-to-Host vs Host-to-Client).
+- Counters are global across all logical channels (Control, Input, Media) within a single direction.
+- If a counter wraps ($2^{64}-1$), the session MUST be re-keyed or terminated to prevent nonce reuse in AEAD.
+
+### 3.4 Protocol Wrapping
 Noise handshake messages (MSG1, MSG2, MSG3) are transmitted as the **payload** of Physical Packets.
-- MSG1/MSG2 typically use the **Handshake Header**.
-- MSG3/Transport typically use the **Transport Header**.
+- MSG1/MSG2 MUST use the **Handshake Header**.
+- Transport packets SHOULD use the **Transport Header** once a session alias is assigned.
 
 ---
 
 ## 4. Logical Plane (Protobuf)
 
-Once the encryption is established, all logical messages are Protobuf v3 encoded.
+Once the encryption is established, all logical messages MUST be Protobuf v3 encoded.
 
 ### 4.1 Message Structure
-The top-level `Message` contains a `oneof` content field:
+The top-level `Message` MUST contain a `oneof` content field:
 - **Control**: Session management (Hello, Ping, Stats).
 - **Input**: User interaction (Keyboard, Mouse, Gamepad).
 - **Media**: Stream data (Video chunks, FEC).
 
-### 4.2 Logical Message Types
+### 4.2 Logical Plane Ordering Policy
+- **Control Channel**: Messages SHOULD be processed with highest priority to maintain session stability.
+- **Input Channel**: Messages MUST be processed before Media messages to minimize "click-to-photon" latency.
+- **Media Channel**: Messages MAY be buffered for jitter compensation, but the receiver SHOULD prioritize dropping stale frames over inducing rendering lag.
+
+### 4.3 Logical Message Types
 
 #### Control Messages
 - **Hello**: Client capabilities and preferences.
@@ -119,37 +130,37 @@ RIFT uses an interleaved XOR-based FEC by default.
 
 ## 6. Future Roadmap & Improvements
 
-The following features are planned for v0.2.0 and beyond.
+The following features are under consideration for v0.2.0 and beyond.
 
-### 6.1 RIFT-CC (Congestion Control)
+### 6.1 RIFT-CC (Congestion Control) [Planned]
 A delay-based congestion control algorithm (inspired by BBR and GCC) to:
 - Dynamically adjust `initial_bitrate_kbps`.
 - Adjust FEC redundancy ratio based on packet loss.
 - Signal `target_fps` to the encoder.
 
-### 6.2 Zero-RTT Resumption
+### 6.2 Zero-RTT Resumption [Planned]
 Using Noise PSK (Pre-Shared Key) or Session Tickets to eliminate the 3-packet handshake overhead on reconnection.
 
-### 6.3 PMTU Discovery
+### 6.3 PMTU Discovery [Exploratory]
 Dynamic path MTU discovery to find the largest possible datagram size without fragmentation, maximizing throughput.
 
-### 6.4 Zero-Copy Media Framing
+### 6.4 Zero-Copy Media Framing [Experimental]
 Optimizing the `PhysicalPacket` -> `VideoChunk` path to avoid intermediate buffer allocations. This involves using a specialized "Tail-Header" for media packets where Protobuf metadata is appended after the raw NAL units.
 
-### 6.5 Audio Synchronization
+### 6.5 Audio Synchronization [Planned]
 Implementation of Opus-based audio channels with Lip-Sync timestamps locked to `frame_id`.
 
-### 6.6 Z-Frame Padding (Pipe Warming)
+### 6.6 Z-Frame Padding (Pipe Warming) [Experimental]
 Optional low-priority "Zero Frames" sent during idle periods to keep NAT mappings active and prevent ISP "sleep" states from inducing first-packet jitter.
 
-### 6.7 Header Bitfields
+### 6.7 Header Bitfields [Experimental]
 Optimizing the `PhysicalPacket` header to use bitfields for `Option` flags (e.g., `has_alias`, `is_encrypted`), saving several bytes per packet.
 
-### 6.8 Multi-Link & Mobility
+### 6.8 Multi-Link & Mobility [Planned]
 Support for seamless session migration between network interfaces (e.g., Wi-Fi to 5G) using a signed "Session Rebind" message.
 
-### 6.9 Tiled Streaming
+### 6.9 Tiled Streaming [Exploratory]
 Parallelizing high-resolution streams (4K/8K) by splitting frames into tiles, each with independent FEC and timestamps, allowing for distributed decoding.
 
-### 6.10 Hybrid QUIC Support
+### 6.10 Hybrid QUIC Support [Exploratory]
 Exploring the use of standard QUIC as a parallel transport specifically for the **Control** and **Input** channels, leveraging its mature congestion control and reliability, while keeping `RIFT-UDP` for high-throughput Media.
