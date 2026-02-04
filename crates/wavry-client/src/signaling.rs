@@ -1,25 +1,9 @@
 use anyhow::{anyhow, Result};
 use futures::{SinkExt, StreamExt};
-use serde::{Deserialize, Serialize};
 use tokio::net::TcpStream;
 use tokio_tungstenite::{connect_async, MaybeTlsStream, WebSocketStream};
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "type")]
-pub enum SignalMessage {
-    BIND { token: String },
-    OFFER { target_username: String, sdp: String, public_addr: Option<String> },
-    ANSWER { target_username: String, sdp: String, public_addr: Option<String> },
-    CANDIDATE { target_username: String, candidate: String },
-    
-    // Relay
-    #[serde(rename = "REQUEST_RELAY")]
-    RequestRelay { target_username: String },
-    #[serde(rename = "RELAY_CREDENTIALS")]
-    RelayCredentials { token: String, addr: String },
-
-    ERROR { code: u16, message: String },
-}
+pub use wavry_common::protocol::SignalMessage;
 
 pub struct SignalingClient {
     ws: WebSocketStream<MaybeTlsStream<TcpStream>>,

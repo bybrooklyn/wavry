@@ -1,5 +1,4 @@
-# WAVRY
-### Ultra-Low Latency Remote Streaming Platform
+# WAVRY: The Latency-First Streaming Platform
 
 [![Rust](https://img.shields.io/badge/language-Rust-orange.svg)](https://www.rust-lang.org/)
 [![Protocol](https://img.shields.io/badge/protocol-RIFT--v1.0-blue)](docs/RIFT_SPEC_V1.md)
@@ -7,154 +6,146 @@
 
 ---
 
-## Overview
+## ⚡ The Manifesto
 
-Wavry is a high-performance, secure remote desktop streaming platform built in Rust. It's designed for sub-frame latency using the custom **RIFT (Remote Interactive Frame Transport)** protocol. Wavry supports both **LAN-only** (fully offline) and **Cloud** (signaling + relay) connectivity modes.
+Wavry is not just another remote desktop app. It is an engineering statement that **latency is a feature**.
 
-### Key Features
+Existing solutions (Parsec, Moonlight, Sunshine) are excellent, but they are often tied to specific hardware vendors (NVIDIA GameStream) or proprietary ecosystems. Wavry is built from first principles in Rust to provide a fully open-source, vendor-agnostic, and mathematically optimized streaming experience.
 
-- **RIFT Protocol**: Custom UDP transport with ChaCha20-Poly1305 encryption and DELTA congestion control.
-- **Noise XX Handshake**: Mutual authentication with persistent Ed25519 device identity keys.
-- **Wavry ID**: Cryptographically secure identity—users are identified by their public key, no central password storage.
-- **P2P by Default**: Integrated STUN discovery for direct NAT hole punching, minimizing relay dependency.
-- **macOS Native Client**: SwiftUI app with Metal rendering and performance-tuned VideoToolbox encoding.
+We believe:
+1.  **Input is Sacred**: A dropped video frame is annoying; a delayed input event is a failure. We process input on a separate, high-priority thread that never waits for video encoding.
+2.  **Physics Over Heuristics**: Our congestion control (DELTA) is based on queuing theory and first-derivative latency trends, not arbitrary packet loss thresholds.
+3.  **Privacy by Default**: Your identity is your keypair. We do not store passwords. We do not inspect your traffic. Encryption is mandatory and end-to-end.
+4.  **Native Performance**: We use Direct Metal/VideoToolbox on macOS and VA-API/PipeWire on Linux. No Electron wrappers for the core engine.
+5.  **P2P First**: We aggressively punch holes in NATs (STUN). Your data should flow directly between your devices, not through our servers, whenever physically possible.
 
 ---
 
-## Architecture
+## 🏗️ System Architecture
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                          Applications                           │
-├─────────────────┬─────────────────┬─────────────────────────────┤
-│  apps/macos     │ apps/desktop    │ crates/wavry-cli            │
-│  (SwiftUI)      │ (Svelte/Tauri)  │ (Planned)                   │
-└─────────────────┴─────────────────┴─────────────────────────────┘
-                            │
-              ┌─────────────┴─────────────┐
-              │       wavry-ffi           │
-              │  (C FFI Bridge Layer)     │
-              └─────────────┬─────────────┘
-                            │
-┌───────────────────────────┴─────────────────────────────────────┐
-│                         Core Crates                             │
-├────────────────┬───────────────┬────────────────┬───────────────┤
-│  wavry-client  │  wavry-media  │  rift-crypto   │  rift-core    │
-│  (Session/Net) │  (Codecs/GPU) │  (Noise/AEAD)  │  (Protocol)   │
-└────────────────┴───────────────┴────────────────┴───────────────┘
-                            │
-              ┌─────────────┴─────────────┐
-              │      wavry-master         │
-              │ (Identity + Matchmaking)  │
-              └───────────────────────────┘
+Wavry is a distributed system composed of several modular crates.
+
+```mermaid
+graph TD
+    Client[Client (macOS/Linux)]
+    Host[Host (Linux/macOS)]
+    Master[Wavry Master]
+    Relay[Blind Relay]
+    STUN[STUN Server]
+
+    Client -- "1. Auth & Signal" --> Master
+    Host -- "1. Register & Signal" --> Master
+    
+    Client -. "2. Discovery" .-> STUN
+    Host -. "2. Discovery" .-> STUN
+    
+    Client -- "3. P2P Media (RIFT)" --> Host
+    Host -- "3. P2P Media (RIFT)" --> Client
+    
+    Client -. "Fallback" .-> Relay
+    Relay -. "Fallback" .-> Host
 ```
 
----
+### Core Ecosystem
 
-## Project Structure
-
-| Component | Path | Description |
-|:----------|:-----|:------------|
-| **Master** | `crates/wavry-master` | Coordination server: Identity (Ed25519), Signaling, and Matchmaking |
-| **Client Core** | `crates/wavry-client` | Session management, networking, signaling client, STUN discovery |
-| **Media** | `crates/wavry-media` | Hardware-accelerated codecs (VideoToolbox, QSV, NVENC) |
-| **Crypto** | `crates/rift-crypto` | Noise XX handshake, ChaCha20-Poly1305 encryption |
-| **Protocol** | `crates/rift-core` | RIFT wire format and DELTA congestion control |
-| **FFI** | `crates/wavry-ffi` | C-compatible FFI with background P2P signaling support |
-| **macOS App** | `apps/macos` | Native SwiftUI client with performance-tuned VideoToolbox |
-
----
-
-## Identity: Wavry ID
-
-Wavry uses **cryptographic identity**. Your "account" is an Ed25519 keypair.
-- **Wavry ID**: The Base64url-encoded public key.
-- **No Passwords**: Authentication is done via a single-use random challenge signed by your private key.
-- **Privacy**: The Master server never sees your private key or your media data.
+| Crate | Logic Layer | Description |
+|:---|:---|:---|
+| **`rift-core`** | **Protocol** | Defines the **RIFT** wire format, packet framing, and **DELTA** congestion control logic. Pure Rust, `no_std` compatible. |
+| **`rift-crypto`** | **Security** | Implements the **Noise_XX** handshake and ChaCha20-Poly1305 AEAD. Handles key management. |
+| **`wavry-media`** | **Hardware** | Abstraction layer for hardware-accelerated codecs (`VideoToolbox`, `VA-API`, `NVENC`) and audio capture (`PipeWire`, `ScreenCaptureKit`). |
+| **`wavry-client`** | **Session** | The "brain" of the client. Manages state, signaling, socket binding, and STUN discovery. |
+| **`wavry-ffi`** | **Bridge** | Exposes `wavry-client` functionality to other languages (C, Swift, Kotlin) via a stable C ABI. |
+| **`wavry-master`** | **Coordination** | The central authority. Handles Ed25519 identity verification, node discovery, relay registry, and signaling routing. |
+| **`wavry-relay`** | **Transport** | A "dumb", blind UDP packet forwarder. Verifies cryptographic leases but cannot decrypt traffic. |
+| **`apps/macos`** | **UI/UX** | Native Swift application using `wavry-ffi`. Standard-bearer for the "Wavry Experience." |
 
 ---
 
-## Connectivity Modes
+## 📡 The RIFT Protocol
 
-### LAN Only (Default for Privacy)
-- **No login required** — fully offline
-- Uses **mDNS discovery** (`_wavry._udp.local.`) for local network hosts
-- Direct UDP connection to host IP
-- Zero external network calls
+**Remote Interactive Frame Transport (RIFT)** is our custom UDP protocol, specified in [`docs/RIFT_SPEC_V1.md`](docs/RIFT_SPEC_V1.md).
 
-### Cloud Mode
-- **Account-based** — register with email/username + public key
-- **Signaling server** routes connection offers/answers
-- **UDP Relay** available for NAT traversal fallback
-- Host your own Gateway or use Wavry Cloud
+It is designed to be:
+*   **Zero-Copy Friendly**: Headers are designed to be prepended to media buffers without reallocation.
+*   **Multiplexed**: Control, Input, and Media flow over a single UDP socket pair (or relayed path).
+*   **Secure**: The handshake (Noise XX) creates session keys. Every subsequent packet is authenticated.
+
+### Congestion Control: DELTA
+**Differential Latency Estimation and Tuning Algorithm (DELTA)** is our custom congestion controller. Unlike TCP-CUBIC (throughput oriented) or BBR (bandwidth oriented), DELTA is **delay oriented**.
+
+1.  **Measurement**: We measure the one-way queuing delay trend ($\frac{d}{dt} \text{RTT}$).
+2.  **Reaction**: If the queue is growing (trend > 0), we throttle encoding bitrate *before* packet loss occurs.
+3.  **Result**: We maintain a "standing queue" of near zero, ensuring the lowest possible round-trip time for input.
 
 ---
 
-## Quick Start
+## 🔐 Security & Identity
+
+We use **Ed25519** for all identity operations.
+
+*   **Wavry ID**: A user's public key (e.g., `8f4b...3a1c`).
+*   **Authentication**: To log in, the Master sends a random challenge. The client signs it with their private key. No passwords ever leave the device.
+*   **Perfect Forward Secrecy**: Each session generates ephemeral keys via the Noise XX handshake. Even if your long-term key is compromised, past sessions cannot be decrypted.
+
+---
+
+## 🚀 Getting Started
 
 ### Prerequisites
-- Rust 1.75+
-- macOS 14+ (for macOS client) or Linux
-- `protobuf-compiler` for proto generation
+*   **Rust**: 1.75+ (Stable)
+*   **System Deps**: `protobuf-compiler` (for `rift-core`), `pkg-config`
+*   **Linux Host**: `libva-dev`, `libpipewire-0.3-dev`, `libclang-dev`
+*   **macOS Host**: Xcode 15+ (for Metal/ScreenCaptureKit)
 
-### Build All Crates
+### Quick Build (All Components)
 ```bash
 git clone https://github.com/wavry/wavry.git
 cd wavry
-cargo build --release
+cargo build --release --workspace
 ```
 
-### Run Gateway (for Cloud Mode)
-```bash
-cd crates/wavry-gateway
-touch gateway.db
-DATABASE_URL="sqlite:gateway.db" cargo run
-# Listening on http://0.0.0.0:3000 (API) + udp://0.0.0.0:3478 (Relay)
-```
+### Running the Infrastructure (Local Dev)
+1.  **Start the Master Server**
+    ```bash
+    # Runs on localhost:8080
+    cargo run --bin wavry-master
+    ```
 
-### Run macOS Client
+2.  **Start a Relay (Optional)**
+    ```bash
+    # Runs on UDP 4000, registers with Master
+    cargo run --bin wavry-relay -- --master-url http://localhost:8080
+    ```
+
+### Running the Client (macOS)
+The macOS client is a native Swift app that links against the Rust core.
 ```bash
 ./scripts/dev-macos.sh
-# Or open apps/macos in Xcode
 ```
+This script builds `wavry-ffi`, generates the header, and opens/runs the Xcode project.
 
 ---
 
-## API Endpoints (Master)
+## 🤝 Contributing
 
-| Method | Path | Description |
-|:-------|:-----|:------------|
-| POST | `/v1/auth/register` | Start identity registration (returns challenge) |
-| POST | `/v1/auth/register/verify` | Prove identity with signature (returns session token) |
-| POST | `/v1/connect` | Request matchmaking for a Peer ID |
-| WS | `/ws` | Signaling WebSocket (OFFER, ANSWER, CANDIDATE) |
+We welcome contributions that align with our **Manifesto**.
 
----
+*   **Performance PRs**: Must be accompanied by benchmarks (latency/CPU usage).
+*   **Protocol Changes**: Must update `docs/RIFT_SPEC_V1.md`.
+*   **Code Style**: We use `rustfmt` and `clippy`. Please run `cargo clippy --workspace` before submitting.
 
-## Security
-
-- **Noise XX Handshake**: Mutual identity verification for every session.
-- **STUN / NAT Traversal**: Automatic public address discovery for direct P2P.
-- **ChaCha20-Poly1305**: All media traffic is authenticated and encrypted.
-- **Persistent Identity**: Secure key storage in `Application Support/Wavry/`.
+### Project Structure
+*   `crates/` - Core Rust libraries and servers.
+*   `apps/` - Platform-specific frontends (macOS, Desktop, Android planned).
+*   `docs/` - Architecture decisions and specifications.
+*   `scripts/` - CI and formatting utilities.
 
 ---
 
-## Development Status
+## 📜 License
 
-| Phase | Status |
-|:------|:-------|
-| RIFT Protocol | ✅ Complete |
-| Noise XX Encryption | ✅ Complete |
-| DELTA Congestion Control | ✅ Complete |
-| STUN / NAT Traversal | ✅ Complete |
-| Master (Identity + Signaling) | ✅ Complete |
-| macOS Screen/Video Tuning | ✅ Complete |
-| Audio Streaming | ✅ Complete |
-| Windows/Linux Clients | 📋 In Progress |
+Wavry is open source software licensed under the **GNU Affero General Public License v3.0 (AGPL-3.0)**. 
+See [`LICENSE`](LICENSE) for the full text.
 
----
-
-## License
-
-Wavry is released under the **GNU Affero General Public License v3.0** (AGPL-3.0). See [LICENSE](LICENSE) for details.
+*   **You are free to**: Use, modify, and distribute the code.
+*   **You must**: Open-source any modifications if you distribute them (including over a network, i.e., SaaS).

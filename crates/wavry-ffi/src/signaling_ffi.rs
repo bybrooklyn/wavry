@@ -44,7 +44,7 @@ pub fn send_offer(target_username: &str) {
         // SDP contains our advertised port (host mode) for now
         let sdp = format!("{{\"type\":\"connect_request\",\"port\":{}}}", port);
         
-        let tx = tx.clone();
+        let tx: mpsc::UnboundedSender<SignalMessage> = tx.clone();
         let target = target_username.to_string();
         
         // Use the runtime to do STUN discovery and then send
@@ -53,7 +53,7 @@ pub fn send_offer(target_username: &str) {
             let public_addr = if let Some(ref s) = udp {
                 let tokio_u = tokio::net::UdpSocket::from_std(s.try_clone().unwrap()).ok();
                 if let Some(tu) = tokio_u {
-                    wavry_client::discover_public_addr(&tu).await.ok().map(|a| a.to_string())
+                    wavry_client::discover_public_addr(&tu).await.ok().map(|a: std::net::SocketAddr| a.to_string())
                 } else { None }
             } else { None };
 
@@ -69,13 +69,10 @@ pub fn send_offer(target_username: &str) {
     }
 }
 
-pub async fn start_signaling_bg(token: String) {
-    let url = "wss://auth.wavry.dev/ws"; 
-    
+pub async fn start_signaling_bg(url: String, token: String) {
     info!("Connecting to signaling server: {}", url);
-    // ... rest of start_signaling_bg remains similar but uses updated SignalMessage variants
     
-    match SignalingClient::connect(url, &token).await {
+    match SignalingClient::connect(&url, &token).await {
         Ok(client) => {
             info!("Signaling Connected!");
             SIGNALING.is_connected.store(true, Ordering::SeqCst);
@@ -133,7 +130,7 @@ async fn handle_signal_message(msg: SignalMessage) {
                 let my_public_addr = if let Some(ref s) = udp {
                     let tokio_u = tokio::net::UdpSocket::from_std(s.try_clone().unwrap()).ok();
                     if let Some(tu) = tokio_u {
-                        wavry_client::discover_public_addr(&tu).await.ok().map(|a| a.to_string())
+                        wavry_client::discover_public_addr(&tu).await.ok().map(|a: std::net::SocketAddr| a.to_string())
                     } else { None }
                 } else { None };
 
@@ -147,6 +144,7 @@ async fn handle_signal_message(msg: SignalMessage) {
                         sdp: answer_sdp,
                         public_addr: my_public_addr,
                     };
+                    let tx: mpsc::UnboundedSender<SignalMessage> = tx.clone();
                     let _ = tx.send(answer);
                     info!("Sent ANSWER to {}", target_username);
                 }
@@ -163,7 +161,7 @@ async fn handle_signal_message(msg: SignalMessage) {
                 info!("P2P potential: Host is reachable at {}", addr);
             }
         },
-        SignalMessage::RelayCredentials { token, addr } => {
+        SignalMessage::RELAY_CREDENTIALS { token, addr } => {
             info!("Received RELAY credentials: {} @ {}", token, addr);
             // TODO: Store and use for relay connection
         },
@@ -171,6 +169,9 @@ async fn handle_signal_message(msg: SignalMessage) {
             info!("Received ICE candidate from {}: {}", target_username, candidate);
             // Not used in Wavry's direct UDP model, but logged for completeness
         },
+        SignalMessage::ERROR { code, message } => {
+            error!("Received signal ERROR (code {:?}): {}", code, message);
+        }
         _ => {
             info!("Received signal: {:?}", msg);
         }
@@ -178,16 +179,23 @@ async fn handle_signal_message(msg: SignalMessage) {
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn wavry_connect_signaling(token_ptr: *const c_char) -> i32 {
-    if token_ptr.is_null() { return -1; }
-    let c_str = CStr::from_ptr(token_ptr);
-    let token = match c_str.to_str() {
+pub unsafe extern "C" fn wavry_connect_signaling(url_ptr: *const c_char, token_ptr: *const c_char) -> i32 {
+    if url_ptr.is_null() || token_ptr.is_null() { return -1; }
+    
+    let c_url = CStr::from_ptr(url_ptr);
+    let url = match c_url.to_str() {
+        Ok(s) => s.to_string(),
+        Err(_) => return -2,
+    };
+
+    let c_token = CStr::from_ptr(token_ptr);
+    let token = match c_token.to_str() {
         Ok(s) => s.to_string(),
         Err(_) => return -2,
     };
 
     RUNTIME.spawn(async move {
-        start_signaling_bg(token).await;
+        start_signaling_bg(url, token).await;
     });
 
     0

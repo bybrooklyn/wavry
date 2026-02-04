@@ -49,57 +49,62 @@ pub enum RiftError {
 pub mod cc;
 pub mod stun;
 
+use bytes::{Bytes, BytesMut, Buf, BufMut};
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PhysicalPacket {
     pub version: u16,
     pub session_id: Option<u128>,
     pub session_alias: Option<u32>,
     pub packet_id: u64,
-    pub payload: Vec<u8>,
+    pub payload: Bytes,
 }
 
 impl PhysicalPacket {
-    pub fn encode(&self) -> Vec<u8> {
+    pub fn encode(&self) -> Bytes {
         let is_handshake = self.session_id.is_some();
-        let size = if is_handshake {
+        let header_size = if is_handshake {
             HANDSHAKE_HEADER_SIZE
         } else {
             TRANSPORT_HEADER_SIZE
-        } + self.payload.len();
-
-        let mut buf = Vec::with_capacity(size);
-        buf.extend_from_slice(&RIFT_MAGIC);
-        buf.extend_from_slice(&self.version.to_be_bytes());
+        };
+        
+        let mut buf = BytesMut::with_capacity(header_size + self.payload.len());
+        buf.put_slice(&RIFT_MAGIC);
+        buf.put_u16(self.version);
 
         if let Some(id) = self.session_id {
-            buf.extend_from_slice(&id.to_be_bytes());
+            buf.put_u128(id);
         } else {
-            buf.extend_from_slice(&self.session_alias.unwrap_or(0).to_be_bytes());
+            buf.put_u32(self.session_alias.unwrap_or(0));
         }
 
-        buf.extend_from_slice(&self.packet_id.to_be_bytes());
+        buf.put_u64(self.packet_id);
         
         // Placeholder for checksum
-        buf.extend_from_slice(&[0u8, 0u8]);
+        let csum_pos = buf.len();
+        buf.put_u16(0);
 
-        buf.extend_from_slice(&self.payload);
+        buf.put_slice(&self.payload);
 
         // Compute checksum over everything except checksum field
         let mut state = crc16::State::<crc16::KERMIT>::new();
-        state.update(&buf[..buf.len() - self.payload.len() - 2]);
+        state.update(&buf[..csum_pos]);
         let csum = state.get();
-        let csum_idx = if is_handshake { 28 } else { 16 };
-        buf[csum_idx..csum_idx+2].copy_from_slice(&csum.to_be_bytes());
+        
+        // Fill checksum
+        let mut buf_slice = &mut buf[csum_pos..csum_pos+2];
+        buf_slice.put_u16(csum);
 
-        buf
+        buf.freeze()
     }
 
-    pub fn decode(bytes: &[u8]) -> Result<Self, RiftError> {
+    pub fn decode(bytes: Bytes) -> Result<Self, RiftError> {
         if bytes.len() < TRANSPORT_HEADER_SIZE {
             return Err(RiftError::TooShort(bytes.len()));
         }
 
-        if bytes[0..2] != RIFT_MAGIC {
+        if &bytes[0..2] != RIFT_MAGIC {
             return Err(RiftError::InvalidMagic([bytes[0], bytes[1]]));
         }
 
@@ -108,17 +113,25 @@ impl PhysicalPacket {
             return Err(RiftError::UnsupportedVersion(version));
         }
 
-        // We distinguish handshake by length OR by a reserved alias (0)
-        // For now, let's assume if len >= HANDSHAKE_HEADER_SIZE and alias is 0, it's handshake
-        let alias_test = u32::from_be_bytes([bytes[4], bytes[5], bytes[6], bytes[7]]);
+        // Check if handshake
+        let alias_test = u32::from_be_bytes(bytes[4..8].try_into().unwrap());
         
         if alias_test == 0 && bytes.len() >= HANDSHAKE_HEADER_SIZE {
-            // Handshake
+            // Handshake (30 bytes)
             let session_id = u128::from_be_bytes(bytes[4..20].try_into().unwrap());
             let packet_id = u64::from_be_bytes(bytes[20..28].try_into().unwrap());
-            let _csum = u16::from_be_bytes([bytes[28], bytes[29]]);
-            // Verification omitted for speed in this prototype
-            let payload = bytes[30..].to_vec();
+            let csum = u16::from_be_bytes([bytes[28], bytes[29]]);
+            
+            // Verify checksum
+            let mut state = crc16::State::<crc16::KERMIT>::new();
+            state.update(&bytes[..28]);
+            if state.get() != csum {
+                return Err(RiftError::ChecksumMismatch);
+            }
+
+            let mut payload = bytes;
+            payload.advance(HANDSHAKE_HEADER_SIZE);
+
             Ok(Self {
                 version,
                 session_id: Some(session_id),
@@ -127,11 +140,21 @@ impl PhysicalPacket {
                 payload,
             })
         } else {
-            // Transport
+            // Transport (18 bytes)
             let session_alias = alias_test;
             let packet_id = u64::from_be_bytes(bytes[8..16].try_into().unwrap());
-            let _csum = u16::from_be_bytes([bytes[16], bytes[17]]);
-            let payload = bytes[18..].to_vec();
+            let csum = u16::from_be_bytes([bytes[16], bytes[17]]);
+            
+            // Verify checksum
+            let mut state = crc16::State::<crc16::KERMIT>::new();
+            state.update(&bytes[..16]);
+            if state.get() != csum {
+                return Err(RiftError::ChecksumMismatch);
+            }
+
+            let mut payload = bytes;
+            payload.advance(TRANSPORT_HEADER_SIZE);
+
             Ok(Self {
                 version,
                 session_id: None,
@@ -477,10 +500,10 @@ mod tests {
             session_id: Some(12345),
             session_alias: None,
             packet_id: 10,
-            payload: vec![1, 2, 3, 4],
+            payload: Bytes::from(vec![1, 2, 3, 4]),
         };
         let bytes = packet.encode();
-        let decoded = PhysicalPacket::decode(&bytes).unwrap();
+        let decoded = PhysicalPacket::decode(bytes).unwrap();
         assert_eq!(packet.packet_id, decoded.packet_id);
         assert_eq!(packet.session_id, decoded.session_id);
     }

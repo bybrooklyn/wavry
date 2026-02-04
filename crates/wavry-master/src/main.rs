@@ -18,7 +18,6 @@ use std::sync::Arc;
 use tower_http::cors::CorsLayer;
 use tracing::info;
 
-use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Mutex;
 use ed25519_dalek::{Verifier, VerifyingKey, Signature};
@@ -35,16 +34,10 @@ struct Args {
     log_level: String,
 }
 
-// --- Signal Protocol ---
-#[derive(Debug, Serialize, Deserialize, Clone)]
-#[serde(tag = "type")]
-pub enum SignalMessage {
-    BIND { token: String },
-    OFFER { target_username: String, sdp: String, public_addr: Option<String> },
-    ANSWER { target_username: String, sdp: String, public_addr: Option<String> },
-    CANDIDATE { target_username: String, candidate: String },
-    ERROR { message: String },
-}
+use wavry_common::protocol::{
+    SignalMessage,
+    RegisterRequest, VerifyRequest
+};
 
 type PeerMap = Arc<RwLock<HashMap<String, mpsc::UnboundedSender<Message>>>>;
 
@@ -52,18 +45,6 @@ struct AppState {
     // wavry_id -> challenge
     challenges: Mutex<HashMap<String, [u8; 32]>>,
     peers: PeerMap,
-}
-
-#[derive(Deserialize)]
-struct RegisterRequest {
-    wavry_id: String,
-    display_name: String,
-}
-
-#[derive(Deserialize)]
-struct VerifyRequest {
-    wavry_id: String,
-    signature_hex: String,
 }
 
 #[tokio::main]
@@ -202,7 +183,18 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
                         }).await;
                     }
                 },
-                SignalMessage::ERROR { message } => {
+                SignalMessage::REQUEST_RELAY { target_username } => {
+                    if let Some(src) = &my_username {
+                        relay_signal(&state, &target_username, SignalMessage::REQUEST_RELAY {
+                            target_username: src.clone(),
+                        }).await;
+                    }
+                },
+                SignalMessage::RELAY_CREDENTIALS { .. } => {
+                   // Ensure we don't panic on received credentials without target
+                   info!("Received RELAY_CREDENTIALS from client. Ignoring (no target).");
+                },
+                SignalMessage::ERROR { message, .. } => {
                     info!("Received ERROR message from client: {}", message);
                 }
             }

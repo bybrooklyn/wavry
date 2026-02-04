@@ -4,6 +4,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use anyhow::{anyhow, Result};
+use bytes::Bytes;
 use tokio::net::UdpSocket;
 use tokio::sync::oneshot;
 
@@ -152,7 +153,7 @@ pub async fn run_host(
                         
                         // Parse RIFT message if this is a valid RIFT packet
                         if len >= 2 && buf[0..2] == RIFT_MAGIC {
-                            if let Ok(phys) = PhysicalPacket::decode(&buf[..len]) {
+                            if let Ok(phys) = PhysicalPacket::decode(Bytes::copy_from_slice(&buf[..len])) {
                                 // For now, no encryption on host (MVP)
                                 if let Ok(msg) = decode_msg(&phys.payload) {
                                     if let Some(rift_core::message::Content::Control(ctrl)) = msg.content {
@@ -172,7 +173,7 @@ pub async fn run_host(
                                                     session_id: None,
                                                     session_alias: phys.session_alias,
                                                     packet_id: sequence,
-                                                    payload,
+                                                    payload: Bytes::from(payload),
                                                 };
                                                 let _ = socket.send_to(&phys_out.encode(), src).await;
                                                 sequence = sequence.wrapping_add(1);
@@ -211,7 +212,7 @@ pub async fn run_host(
                                                         session_id: None,
                                                         session_alias: phys.session_alias,
                                                         packet_id: sequence,
-                                                        payload,
+                                                        payload: Bytes::from(payload),
                                                     };
                                                     let _ = socket.send_to(&phys_out.encode(), src).await;
                                                     sequence = sequence.wrapping_add(1);

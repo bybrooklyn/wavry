@@ -5,8 +5,10 @@
 #![forbid(unsafe_code)]
 
 pub mod error;
+pub mod protocol;
 
 pub use error::{Error, Result};
+pub use protocol::*;
 
 /// Initialize tracing with sensible defaults.
 ///

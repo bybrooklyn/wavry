@@ -27,6 +27,7 @@ use wavry_media::GstVideoRenderer as VideoRenderer;
 #[cfg(not(target_os = "linux"))]
 use wavry_media::DummyRenderer as VideoRenderer;
 use tokio::{net::UdpSocket, sync::mpsc, time};
+use bytes::Bytes;
 use tracing::{debug, info, warn};
 
 const FRAME_TIMEOUT_US: u64 = 50_000;
@@ -121,18 +122,18 @@ pub async fn run_client(config: ClientConfig, renderer_factory: Option<RendererF
             session_id: Some(0), // Handshake
             session_alias: None,
             packet_id: 0,
-            payload: msg1_payload,
+            payload: Bytes::copy_from_slice(&msg1_payload),
         };
         socket.send_to(&phys1.encode(), connect_addr).await?;
         debug!("sent crypto msg1");
 
         // Wait for msg2
-        let mut buf = vec![0u8; 4096];
-        let (len, _) = time::timeout(Duration::from_secs(5), socket.recv_from(&mut buf))
+        let mut buf_arr = [0u8; 4096];
+        let (len, _) = time::timeout(Duration::from_secs(5), socket.recv_from(&mut buf_arr))
             .await
             .map_err(|_| anyhow!("crypto handshake timeout"))??;
         
-        let phys2 = PhysicalPacket::decode(&buf[..len])
+        let phys2 = PhysicalPacket::decode(Bytes::copy_from_slice(&buf_arr[..len]))
             .map_err(|e| anyhow!("RIFT decode error in handshake: {}", e))?;
         
         debug!("received crypto msg2");
@@ -146,7 +147,7 @@ pub async fn run_client(config: ClientConfig, renderer_factory: Option<RendererF
             session_id: None,
             session_alias: Some(1), // Dummy alias for msg3
             packet_id: 0,
-            payload: msg3_payload,
+            payload: Bytes::copy_from_slice(&msg3_payload),
         };
         socket.send_to(&phys3.encode(), connect_addr).await?;
         debug!("sent crypto msg3");
@@ -255,7 +256,7 @@ pub async fn run_client(config: ClientConfig, renderer_factory: Option<RendererF
                 let (len, peer) = recv?;
                 let raw = &buf[..len];
 
-                let phys = match PhysicalPacket::decode(raw) {
+                let phys = match PhysicalPacket::decode(Bytes::copy_from_slice(raw)) {
                     Ok(p) => p,
                     Err(e) => {
                         debug!("RIFT decode error from {}: {}", peer, e);
@@ -386,7 +387,7 @@ async fn send_rift_msg(
         session_id: None,
         session_alias: alias,
         packet_id,
-        payload,
+        payload: Bytes::copy_from_slice(&payload),
     };
 
     socket.send_to(&phys.encode(), dest).await?;
@@ -395,7 +396,7 @@ async fn send_rift_msg(
 
 fn decrypt_packet(crypto: &mut CryptoState, phys: &PhysicalPacket) -> Result<Vec<u8>> {
     match crypto {
-        CryptoState::Disabled => Ok(phys.payload.clone()),
+        CryptoState::Disabled => Ok(phys.payload.to_vec()),
         CryptoState::Established(client) => {
             client.decrypt(phys.packet_id, &phys.payload)
                 .map_err(|e| anyhow!("decrypt failed: {}", e))

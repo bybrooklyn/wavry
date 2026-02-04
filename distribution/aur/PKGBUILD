@@ -1,0 +1,49 @@
+# Maintainer: Wavry Contributors <https://github.com/wavry/wavry>
+pkgname=wavry-desktop
+pkgver=0.1.0
+pkgrel=1
+pkgdesc="Ultra-low latency remote streaming platform (Desktop Client)"
+arch=('x86_64' 'aarch64')
+url="https://github.com/wavry/wavry"
+license=('AGPL-3.0-only')
+depends=('webkit2gtk-4.1' 'gtk3' 'libappindicator-gtk3' 'librsvg' 'libvpx' 'opus')
+makedepends=('rust' 'cargo' 'nodejs' 'npm' 'pkg-config' 'python' 'git')
+source=("git+https://github.com/wavry/wavry.git")
+sha256sums=('SKIP')
+
+build() {
+  cd "wavry"
+  
+  # Build frontend
+  echo "Building frontend..."
+  cd crates/wavry-desktop
+  npm install
+  npm run build
+  
+  # Build Tauri app
+  echo "Building Tauri app..."
+  cargo tauri build --bundle deb # We use deb bundle flags to ensure metadata is generated
+}
+
+package() {
+  cd "wavry"
+  
+  # Install binary
+  install -Dm755 "crates/wavry-desktop/src-tauri/target/release/Wavry" "$pkgdir/usr/bin/wavry"
+  
+  # Install desktop entry
+  install -Dm644 "crates/wavry-desktop/src-tauri/icons/icon.png" "$pkgdir/usr/share/pixmaps/wavry.png"
+  
+  # Create .desktop file
+  mkdir -p "$pkgdir/usr/share/applications"
+  cat > "$pkgdir/usr/share/applications/wavry.desktop" << EOF
+[Desktop Entry]
+Name=Wavry
+Comment=Ultra-low latency remote streaming
+Exec=wavry
+Icon=wavry
+Terminal=false
+Type=Application
+Categories=Network;RemoteAccess;
+EOF
+}

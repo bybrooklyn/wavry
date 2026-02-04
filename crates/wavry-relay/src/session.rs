@@ -31,24 +31,7 @@ pub enum SessionState {
     Rejected,
 }
 
-/// Peer role in a relay session
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PeerRole {
-    Client = 0,
-    Server = 1,
-}
-
-impl TryFrom<u8> for PeerRole {
-    type Error = ();
-
-    fn try_from(value: u8) -> Result<Self, Self::Error> {
-        match value {
-            0 => Ok(PeerRole::Client),
-            1 => Ok(PeerRole::Server),
-            _ => Err(()),
-        }
-    }
-}
+pub use rift_core::relay::PeerRole;
 
 /// Per-peer state within a session
 #[derive(Debug)]
@@ -311,6 +294,11 @@ impl SessionPool {
     #[allow(dead_code)]
     pub fn len(&self) -> usize {
         self.sessions.len()
+    }
+
+    /// Get active session count
+    pub fn active_count(&self) -> usize {
+        self.sessions.values().filter(|s| matches!(s.state, SessionState::Active | SessionState::Renewed)).count()
     }
 
     /// Check if empty

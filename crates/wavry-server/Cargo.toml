@@ -11,6 +11,7 @@ mdns-sd.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
+bytes.workspace = true
 rift-core = { path = "../../crates/rift-core" }
 rift-crypto = { path = "../../crates/rift-crypto" }
 wavry-common = { path = "../../crates/wavry-common" }

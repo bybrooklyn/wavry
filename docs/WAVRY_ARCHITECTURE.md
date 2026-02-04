@@ -46,8 +46,9 @@ Protocol details live in `docs/RIFT_SPEC_V1.md`.
 
 | Component | Purpose |
 |:----------|:--------|
-| `wavry-gateway` | Auth server (SQLite), WebSocket signaling, UDP relay |
-| `wavry-master` | Discovery registry (planned, currently in gateway) |
+| `wavry-gateway` | Legacy/Reference implementation (Auth + Signaling + Relay) |
+| `wavry-master` | Production Coordination Server: Identity, Signaling, Relay Registry |
+| `wavry-relay` | Blind UDP Forwarder with Ed25519 Lease Validation |
 
 ### Applications
 

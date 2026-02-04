@@ -23,6 +23,7 @@ mod host {
     #[cfg(not(target_os = "linux"))]
     use wavry_platform::DummyInjector as InjectorImpl;
     use tokio::{net::UdpSocket, sync::mpsc};
+    use bytes::Bytes;
     use tracing::{debug, info, warn};
 
     const MAX_DATAGRAM_SIZE: usize = 1200;
@@ -182,7 +183,7 @@ mod host {
         raw: &[u8],
         injector: &mut InjectorImpl,
     ) -> Result<()> {
-        let phys = PhysicalPacket::decode(raw).map_err(|e| anyhow!("RIFT decode error: {}", e))?;
+        let phys = PhysicalPacket::decode(Bytes::copy_from_slice(raw)).map_err(|e| anyhow!("RIFT decode error: {}", e))?;
 
         // Dispatch based on crypto state
         match &mut peer_state.crypto {
@@ -202,7 +203,7 @@ mod host {
                             session_id: Some(0),
                             session_alias: None,
                             packet_id: 0,
-                            payload: msg2_payload,
+                            payload: Bytes::copy_from_slice(&msg2_payload),
                         };
                         socket.send_to(&resp.encode(), peer).await?;
                         Ok(())
@@ -360,7 +361,7 @@ mod host {
             session_id: None,
             session_alias: Some(peer_state.session_alias),
             packet_id,
-            payload,
+            payload: Bytes::copy_from_slice(&payload),
         };
 
         socket.send_to(&phys.encode(), peer).await?;

@@ -14,7 +14,7 @@ impl StunMessage {
     pub fn new_binding_request() -> Self {
         use rand::RngCore;
         let mut transaction_id = [0u8; 12];
-        rand::thread_rng().fill_bytes(&transaction_id);
+        rand::thread_rng().fill_bytes(&mut transaction_id);
         Self {
             msg_type: BINDING_REQUEST,
             transaction_id,

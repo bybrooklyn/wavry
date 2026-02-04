@@ -9,8 +9,6 @@ use serde::{Deserialize, Serialize};
 /// Global session state for the desktop app
 struct SessionState {
     stop_tx: Option<oneshot::Sender<()>>,
-    token: Option<String>,
-    username: Option<String>,
     cc_config_tx: Option<mpsc::UnboundedSender<rift_core::cc::DeltaConfig>>,
     current_bitrate: Arc<AtomicU32>,
     cc_state: Arc<Mutex<String>>,
@@ -21,7 +19,6 @@ static AUTH_STATE: Mutex<Option<AuthState>> = Mutex::new(None);
 
 struct AuthState {
     token: String,
-    username: String,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -95,31 +92,6 @@ async fn register(email: String, password: String, display_name: String, usernam
 }
 
 #[tauri::command]
-async fn login(email: String, password: String) -> Result<String, String> {
-    let client = reqwest::Client::new();
-    let res = client.post("https://auth.wavry.dev/auth/login")
-        .json(&serde_json::json!({
-            "email": email,
-            "password": password
-        }))
-        .send()
-        .await
-        .map_err(|e| e.to_string())?;
-
-    if res.status().is_success() {
-        let resp: LoginResponse = res.json().await.map_err(|e| e.to_string())?;
-        let mut auth = AUTH_STATE.lock().unwrap();
-        *auth = Some(AuthState {
-            token: resp.session.token.clone(),
-            username: resp.user.username.clone(),
-        });
-        Ok(resp.user.username)
-    } else {
-        Err("Login failed".into())
-    }
-}
-
-#[tauri::command]
 async fn login_full(email: String, password: String) -> Result<serde_json::Value, String> {
     let client = reqwest::Client::new();
     let res = client.post("https://auth.wavry.dev/auth/login")
@@ -136,7 +108,6 @@ async fn login_full(email: String, password: String) -> Result<serde_json::Value
         let mut auth = AUTH_STATE.lock().unwrap();
         *auth = Some(AuthState {
             token: resp.session.token.clone(),
-            username: resp.user.username.clone(),
         });
         Ok(serde_json::json!({
             "username": resp.user.username,
@@ -153,7 +124,6 @@ async fn set_signaling_token(token: Option<String>) -> Result<(), String> {
     if let Some(t) = token {
         *auth = Some(AuthState {
             token: t,
-            username: "Recovered User".into(), // We could persist this too, but for signaling, token is king
         });
         log::info!("Signaling token re-hydrated from frontend");
     } else {
@@ -161,6 +131,9 @@ async fn set_signaling_token(token: Option<String>) -> Result<(), String> {
     }
     Ok(())
 }
+
+#[tauri::command]
+async fn start_session(addr: String) -> Result<String, String> {
     let socket_addr = if let Ok(s) = SocketAddr::from_str(&addr) {
         Some(s)
     } else if addr.is_empty() {
@@ -190,10 +163,10 @@ async fn set_signaling_token(token: Option<String>) -> Result<(), String> {
 async fn connect_via_id(target_username: String) -> Result<String, String> {
     use wavry_client::signaling::{SignalingClient, SignalMessage};
     
-    let (token, username) = {
+    let token = {
         let auth = AUTH_STATE.lock().unwrap();
         if let Some(ref a) = *auth {
-            (a.token.clone(), a.username.clone())
+            a.token.clone()
         } else {
             return Err("Not logged in".into());
         }
@@ -266,8 +239,6 @@ async fn start_host(port: u16) -> Result<String, String> {
         let mut state = SESSION_STATE.lock().unwrap();
         *state = Some(SessionState {
             stop_tx: Some(stop_tx),
-            token: None, // Will fill if logged in
-            username: None,
             cc_config_tx: Some(cc_tx),
             current_bitrate: current_bitrate.clone(),
             cc_state: cc_state_shared.clone(),
