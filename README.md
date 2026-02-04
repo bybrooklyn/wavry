@@ -13,11 +13,11 @@ Wavry is a high-performance, secure remote desktop streaming platform built in R
 
 ### Key Features
 
-- **RIFT Protocol**: Custom UDP transport with ChaCha20-Poly1305 encryption, minimal framing, and hardware-accelerated codecs
-- **Noise XX Handshake**: Mutual authentication with persistent device identity keys
-- **Connect via ID**: P2P connection establishment via username using the Gateway signaling server
-- **LAN-Only Mode**: Fully offline operation with mDNS discovery — no external servers needed
-- **macOS Native Client**: SwiftUI app with Metal rendering and hardware VideoToolbox encoding
+- **RIFT Protocol**: Custom UDP transport with ChaCha20-Poly1305 encryption and DELTA congestion control.
+- **Noise XX Handshake**: Mutual authentication with persistent Ed25519 device identity keys.
+- **Wavry ID**: Cryptographically secure identity—users are identified by their public key, no central password storage.
+- **P2P by Default**: Integrated STUN discovery for direct NAT hole punching, minimizing relay dependency.
+- **macOS Native Client**: SwiftUI app with Metal rendering and performance-tuned VideoToolbox encoding.
 
 ---
 
@@ -27,8 +27,8 @@ Wavry is a high-performance, secure remote desktop streaming platform built in R
 ┌─────────────────────────────────────────────────────────────────┐
 │                          Applications                           │
 ├─────────────────┬─────────────────┬─────────────────────────────┤
-│  apps/macos     │ apps/desktop    │ crates/wavry-cli (planned)  │
-│  (SwiftUI)      │ (Svelte/Tauri)  │                             │
+│  apps/macos     │ apps/desktop    │ crates/wavry-cli            │
+│  (SwiftUI)      │ (Svelte/Tauri)  │ (Planned)                   │
 └─────────────────┴─────────────────┴─────────────────────────────┘
                             │
               ┌─────────────┴─────────────┐
@@ -36,7 +36,7 @@ Wavry is a high-performance, secure remote desktop streaming platform built in R
               │  (C FFI Bridge Layer)     │
               └─────────────┬─────────────┘
                             │
-┌─────────────────────────────────────────────────────────────────┐
+┌───────────────────────────┴─────────────────────────────────────┐
 │                         Core Crates                             │
 ├────────────────┬───────────────┬────────────────┬───────────────┤
 │  wavry-client  │  wavry-media  │  rift-crypto   │  rift-core    │
@@ -44,8 +44,8 @@ Wavry is a high-performance, secure remote desktop streaming platform built in R
 └────────────────┴───────────────┴────────────────┴───────────────┘
                             │
               ┌─────────────┴─────────────┐
-              │      wavry-gateway        │
-              │  (Auth + Signaling + Relay)│
+              │      wavry-master         │
+              │ (Identity + Matchmaking)  │
               └───────────────────────────┘
 ```
 
@@ -55,14 +55,22 @@ Wavry is a high-performance, secure remote desktop streaming platform built in R
 
 | Component | Path | Description |
 |:----------|:-----|:------------|
-| **Gateway** | `crates/wavry-gateway` | Auth server + WebSocket signaling + UDP relay |
-| **Client Core** | `crates/wavry-client` | Session management, networking, signaling client |
+| **Master** | `crates/wavry-master` | Coordination server: Identity (Ed25519), Signaling, and Matchmaking |
+| **Client Core** | `crates/wavry-client` | Session management, networking, signaling client, STUN discovery |
 | **Media** | `crates/wavry-media` | Hardware-accelerated codecs (VideoToolbox, QSV, NVENC) |
 | **Crypto** | `crates/rift-crypto` | Noise XX handshake, ChaCha20-Poly1305 encryption |
-| **Protocol** | `crates/rift-core` | RIFT wire format and framing |
-| **FFI** | `crates/wavry-ffi` | C-compatible FFI for native clients |
-| **macOS App** | `apps/macos` | Native SwiftUI client with Metal rendering |
-| **Desktop** | `apps/wavry-desktop` | Cross-platform Svelte/Tauri client (draft) |
+| **Protocol** | `crates/rift-core` | RIFT wire format and DELTA congestion control |
+| **FFI** | `crates/wavry-ffi` | C-compatible FFI with background P2P signaling support |
+| **macOS App** | `apps/macos` | Native SwiftUI client with performance-tuned VideoToolbox |
+
+---
+
+## Identity: Wavry ID
+
+Wavry uses **cryptographic identity**. Your "account" is an Ed25519 keypair.
+- **Wavry ID**: The Base64url-encoded public key.
+- **No Passwords**: Authentication is done via a single-use random challenge signed by your private key.
+- **Privacy**: The Master server never sees your private key or your media data.
 
 ---
 
@@ -112,22 +120,23 @@ DATABASE_URL="sqlite:gateway.db" cargo run
 
 ---
 
-## API Endpoints (Gateway)
+## API Endpoints (Master)
 
 | Method | Path | Description |
 |:-------|:-----|:------------|
-| POST | `/auth/register` | Create account (email, username, public_key) |
-| POST | `/auth/login` | Login, returns session token |
-| WS | `/ws` | Signaling WebSocket (BIND, OFFER, ANSWER, CANDIDATE) |
+| POST | `/v1/auth/register` | Start identity registration (returns challenge) |
+| POST | `/v1/auth/register/verify` | Prove identity with signature (returns session token) |
+| POST | `/v1/connect` | Request matchmaking for a Peer ID |
+| WS | `/ws` | Signaling WebSocket (OFFER, ANSWER, CANDIDATE) |
 
 ---
 
 ## Security
 
-- **Noise XX Handshake**: Mutual identity verification
-- **ChaCha20-Poly1305**: All UDP packets authenticated and encrypted
-- **Anti-Replay**: Sequence number window protects against replay attacks
-- **Persistent Identity**: Device keys stored locally (`Application Support/Wavry/identity.key`)
+- **Noise XX Handshake**: Mutual identity verification for every session.
+- **STUN / NAT Traversal**: Automatic public address discovery for direct P2P.
+- **ChaCha20-Poly1305**: All media traffic is authenticated and encrypted.
+- **Persistent Identity**: Secure key storage in `Application Support/Wavry/`.
 
 ---
 
@@ -135,14 +144,14 @@ DATABASE_URL="sqlite:gateway.db" cargo run
 
 | Phase | Status |
 |:------|:-------|
-| RIFT Protocol Core | ✅ Complete |
+| RIFT Protocol | ✅ Complete |
 | Noise XX Encryption | ✅ Complete |
-| macOS Native Client | ✅ Complete |
-| Gateway (Auth + Signaling) | ✅ Complete |
-| Connect via ID | ✅ Complete |
-| UDP Relay | ✅ Complete |
 | DELTA Congestion Control | ✅ Complete |
-| Windows/Linux Clients | 📋 Planned |
+| STUN / NAT Traversal | ✅ Complete |
+| Master (Identity + Signaling) | ✅ Complete |
+| macOS Screen/Video Tuning | ✅ Complete |
+| Audio Streaming | ✅ Complete |
+| Windows/Linux Clients | 📋 In Progress |
 
 ---
 
