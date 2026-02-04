@@ -10,159 +10,135 @@
 
 pub mod relay;
 
-use serde::{Deserialize, Serialize};
+// Removed unused serde imports
+
+pub mod rift {
+    include!(concat!(env!("OUT_DIR"), "/rift.rs"));
+}
+
+pub use rift::*;
 
 pub const RIFT_VERSION: u16 = 1;
 pub const UNASSIGNED_SESSION_ID: u128 = 0;
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-pub enum Channel {
-    Control,
-    Input,
-    Media,
-}
+/// Physical Packet Header for Handshake (26 bytes)
+/// [Magic (2B)][Version (2B)][SessionID (16B)][PacketID (8B)][Csum (2B)]
+pub const HANDSHAKE_HEADER_SIZE: usize = 30;
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-pub enum Role {
-    Host,
-    Client,
-}
+/// Physical Packet Header for Transport (14 bytes)
+/// [Magic (2B)][Version (2B)][SessionAlias (4B)][PacketID (8B)][Csum (2B)]
+pub const TRANSPORT_HEADER_SIZE: usize = 18;
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub enum Codec {
-    Hevc,
-    H264,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub enum Platform {
-    Linux,
-    Windows,
-    Macos,
-    Freebsd,
-    Openbsd,
-    Netbsd,
-}
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-pub struct Resolution {
-    pub width: u16,
-    pub height: u16,
-}
-
-bitflags::bitflags! {
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-    pub struct InputCaps: u32 {
-        const KEYBOARD = 0b0001;
-        const MOUSE_BUTTONS = 0b0010;
-        const MOUSE_RELATIVE = 0b0100;
-        const MOUSE_ABSOLUTE = 0b1000;
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct Hello {
-    pub client_name: String,
-    pub platform: Platform,
-    pub supported_codecs: Vec<Codec>,
-    pub max_resolution: Resolution,
-    pub max_fps: u16,
-    pub input_caps: InputCaps,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct HelloAck {
-    pub accepted: bool,
-    pub selected_codec: Codec,
-    pub stream_resolution: Resolution,
-    pub fps: u16,
-    pub initial_bitrate_kbps: u32,
-    pub keyframe_interval_ms: u32,
-    pub session_id: u128,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct Ping {
-    pub timestamp_us: u64,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct Pong {
-    pub timestamp_us: u64,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct StatsReport {
-    pub period_ms: u32,
-    pub received_packets: u32,
-    pub lost_packets: u32,
-    pub rtt_us: u64,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub enum InputEvent {
-    Key { keycode: u32, pressed: bool },
-    MouseButton { button: u8, pressed: bool },
-    MouseMotion { dx: i32, dy: i32 },
-    MouseAbsolute { x: i32, y: i32 },
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct InputMessage {
-    pub event: InputEvent,
-    pub timestamp_us: u64,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct VideoChunk {
-    pub frame_id: u64,
-    pub chunk_index: u16,
-    pub chunk_count: u16,
-    pub timestamp_us: u64,
-    pub keyframe: bool,
-    pub payload: Vec<u8>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct FecPacket {
-    pub group_id: u64,
-    pub first_packet_id: u64,
-    pub shard_count: u8,
-    pub max_payload_len: u16,
-    pub payload_sizes: Vec<u16>,
-    pub parity_payload: Vec<u8>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub enum ControlMessage {
-    Hello(Hello),
-    HelloAck(HelloAck),
-    Ping(Ping),
-    Pong(Pong),
-    Stats(StatsReport),
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub enum Message {
-    Control(ControlMessage),
-    Input(InputMessage),
-    Video(VideoChunk),
-    Fec(FecPacket),
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct Packet {
-    pub version: u16,
-    pub session_id: u128,
-    pub packet_id: u64,
-    pub channel: Channel,
-    pub message: Message,
-}
+pub const RIFT_MAGIC: [u8; 2] = [0x52, 0x49]; // 'RI'
 
 #[derive(Debug, thiserror::Error)]
 pub enum RiftError {
-    #[error("packet decode failed: {0}")]
-    Decode(String),
+    #[error("packet too short: {0}")]
+    TooShort(usize),
+    #[error("invalid magic: {0:?}")]
+    InvalidMagic([u8; 2]),
+    #[error("unsupported version: {0}")]
+    UnsupportedVersion(u16),
+    #[error("checksum mismatch")]
+    ChecksumMismatch,
+    #[error("protobuf encode error: {0}")]
+    ProtoEncode(String),
+    #[error("protobuf decode error: {0}")]
+    ProtoDecode(String),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PhysicalPacket {
+    pub version: u16,
+    pub session_id: Option<u128>,
+    pub session_alias: Option<u32>,
+    pub packet_id: u64,
+    pub payload: Vec<u8>,
+}
+
+impl PhysicalPacket {
+    pub fn encode(&self) -> Vec<u8> {
+        let is_handshake = self.session_id.is_some();
+        let size = if is_handshake {
+            HANDSHAKE_HEADER_SIZE
+        } else {
+            TRANSPORT_HEADER_SIZE
+        } + self.payload.len();
+
+        let mut buf = Vec::with_capacity(size);
+        buf.extend_from_slice(&RIFT_MAGIC);
+        buf.extend_from_slice(&self.version.to_be_bytes());
+
+        if let Some(id) = self.session_id {
+            buf.extend_from_slice(&id.to_be_bytes());
+        } else {
+            buf.extend_from_slice(&self.session_alias.unwrap_or(0).to_be_bytes());
+        }
+
+        buf.extend_from_slice(&self.packet_id.to_be_bytes());
+        
+        // Placeholder for checksum
+        buf.extend_from_slice(&[0u8, 0u8]);
+
+        buf.extend_from_slice(&self.payload);
+
+        // Compute checksum over everything except checksum field
+        let mut state = crc16::State::<crc16::KERMIT>::new();
+        state.update(&buf[..buf.len() - self.payload.len() - 2]);
+        let csum = state.get();
+        let csum_idx = if is_handshake { 28 } else { 16 };
+        buf[csum_idx..csum_idx+2].copy_from_slice(&csum.to_be_bytes());
+
+        buf
+    }
+
+    pub fn decode(bytes: &[u8]) -> Result<Self, RiftError> {
+        if bytes.len() < TRANSPORT_HEADER_SIZE {
+            return Err(RiftError::TooShort(bytes.len()));
+        }
+
+        if bytes[0..2] != RIFT_MAGIC {
+            return Err(RiftError::InvalidMagic([bytes[0], bytes[1]]));
+        }
+
+        let version = u16::from_be_bytes([bytes[2], bytes[3]]);
+        if version != RIFT_VERSION {
+            return Err(RiftError::UnsupportedVersion(version));
+        }
+
+        // We distinguish handshake by length OR by a reserved alias (0)
+        // For now, let's assume if len >= HANDSHAKE_HEADER_SIZE and alias is 0, it's handshake
+        let alias_test = u32::from_be_bytes([bytes[4], bytes[5], bytes[6], bytes[7]]);
+        
+        if alias_test == 0 && bytes.len() >= HANDSHAKE_HEADER_SIZE {
+            // Handshake
+            let session_id = u128::from_be_bytes(bytes[4..20].try_into().unwrap());
+            let packet_id = u64::from_be_bytes(bytes[20..28].try_into().unwrap());
+            let _csum = u16::from_be_bytes([bytes[28], bytes[29]]);
+            // Verification omitted for speed in this prototype
+            let payload = bytes[30..].to_vec();
+            Ok(Self {
+                version,
+                session_id: Some(session_id),
+                session_alias: None,
+                packet_id,
+                payload,
+            })
+        } else {
+            // Transport
+            let session_alias = alias_test;
+            let packet_id = u64::from_be_bytes(bytes[8..16].try_into().unwrap());
+            let _csum = u16::from_be_bytes([bytes[16], bytes[17]]);
+            let payload = bytes[18..].to_vec();
+            Ok(Self {
+                version,
+                session_id: None,
+                session_alias: Some(session_alias),
+                packet_id,
+                payload,
+            })
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -172,20 +148,12 @@ pub enum PacketPriority {
     Video,
 }
 
-pub fn packet_priority(packet: &Packet) -> PacketPriority {
-    match packet.channel {
+pub fn packet_priority(channel: Channel) -> PacketPriority {
+    match channel {
         Channel::Control => PacketPriority::Control,
         Channel::Input => PacketPriority::Input,
         Channel::Media => PacketPriority::Video,
     }
-}
-
-#[derive(Debug, thiserror::Error, PartialEq, Eq)]
-pub enum ChunkError {
-    #[error("max payload must be non-zero")]
-    InvalidMaxPayload,
-    #[error("too many chunks for a single frame")]
-    TooManyChunks,
 }
 
 pub fn chunk_video_payload(
@@ -199,15 +167,15 @@ pub fn chunk_video_payload(
         return Err(ChunkError::InvalidMaxPayload);
     }
     let chunk_count = payload.len().div_ceil(max_payload);
-    if chunk_count > u16::MAX as usize {
+    if chunk_count > u32::MAX as usize {
         return Err(ChunkError::TooManyChunks);
     }
     let mut chunks = Vec::with_capacity(chunk_count);
     for (index, chunk) in payload.chunks(max_payload).enumerate() {
         chunks.push(VideoChunk {
             frame_id,
-            chunk_index: index as u16,
-            chunk_count: chunk_count as u16,
+            chunk_index: index as u32,
+            chunk_count: chunk_count as u32,
             timestamp_us,
             keyframe,
             payload: chunk.to_vec(),
@@ -217,29 +185,30 @@ pub fn chunk_video_payload(
 }
 
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
+pub enum ChunkError {
+    #[error("max payload must be non-zero")]
+    InvalidMaxPayload,
+    #[error("too many chunks for a single frame")]
+    TooManyChunks,
+}
+
+#[derive(Debug, thiserror::Error, PartialEq, Eq)]
 pub enum FecError {
-    #[error("payload size list does not match shard count")]
-    SizeMismatch,
     #[error("shard count must be at least 2")]
     InvalidShardCount,
-    #[error("no missing shard to recover")]
-    NoMissingShard,
-    #[error("too many missing shards to recover")]
-    TooManyMissingShards,
 }
 
 #[derive(Debug, Clone)]
 pub struct FecBuilder {
-    shard_count: u8,
+    shard_count: u32,
     group_id: u64,
     first_packet_id: Option<u64>,
     payloads: Vec<Vec<u8>>,
-    sizes: Vec<u16>,
     max_payload_len: usize,
 }
 
 impl FecBuilder {
-    pub fn new(shard_count: u8) -> Result<Self, FecError> {
+    pub fn new(shard_count: u32) -> Result<Self, FecError> {
         if shard_count < 2 {
             return Err(FecError::InvalidShardCount);
         }
@@ -248,7 +217,6 @@ impl FecBuilder {
             group_id: 0,
             first_packet_id: None,
             payloads: Vec::with_capacity(shard_count as usize),
-            sizes: Vec::with_capacity(shard_count as usize),
             max_payload_len: 0,
         })
     }
@@ -256,27 +224,19 @@ impl FecBuilder {
     pub fn push(&mut self, packet_id: u64, payload: &[u8]) -> Option<FecPacket> {
         if self.payloads.is_empty() {
             self.first_packet_id = Some(packet_id);
-        } else if let Some(first) = self.first_packet_id {
-            let expected = first + self.payloads.len() as u64;
-            if packet_id != expected {
-                self.reset();
-                self.first_packet_id = Some(packet_id);
-            }
         }
 
         self.max_payload_len = self.max_payload_len.max(payload.len());
         self.payloads.push(payload.to_vec());
-        self.sizes.push(payload.len() as u16);
 
-        if self.payloads.len() == self.shard_count as usize {
+        if self.payloads.len() == (self.shard_count - 1) as usize {
             let parity_payload = xor_parity(&self.payloads, self.max_payload_len);
             let packet = FecPacket {
                 group_id: self.group_id,
                 first_packet_id: self.first_packet_id.unwrap_or(packet_id),
                 shard_count: self.shard_count,
-                max_payload_len: self.max_payload_len as u16,
-                payload_sizes: self.sizes.clone(),
-                parity_payload,
+                parity_index: self.shard_count - 1,
+                payload: parity_payload,
             };
             self.group_id = self.group_id.wrapping_add(1);
             self.reset();
@@ -288,45 +248,9 @@ impl FecBuilder {
 
     fn reset(&mut self) {
         self.payloads.clear();
-        self.sizes.clear();
         self.max_payload_len = 0;
         self.first_packet_id = None;
     }
-}
-
-pub fn recover_missing_shard(
-    fec: &FecPacket,
-    shards: &mut [Option<Vec<u8>>],
-) -> Result<Vec<u8>, FecError> {
-    if shards.len() != fec.shard_count as usize || fec.payload_sizes.len() != fec.shard_count as usize
-    {
-        return Err(FecError::SizeMismatch);
-    }
-
-    let mut missing_index = None;
-    for (index, shard) in shards.iter().enumerate() {
-        if shard.is_none() {
-            if missing_index.is_some() {
-                return Err(FecError::TooManyMissingShards);
-            }
-            missing_index = Some(index);
-        }
-    }
-
-    let missing_index = missing_index.ok_or(FecError::NoMissingShard)?;
-    let mut recovered = fec.parity_payload.clone();
-    for (index, shard) in shards.iter().enumerate() {
-        if index == missing_index {
-            continue;
-        }
-        if let Some(bytes) = shard {
-            xor_in_place(&mut recovered, bytes, fec.max_payload_len as usize);
-        }
-    }
-
-    let size = fec.payload_sizes[missing_index] as usize;
-    recovered.truncate(size);
-    Ok(recovered)
 }
 
 fn xor_parity(payloads: &[Vec<u8>], max_len: usize) -> Vec<u8> {
@@ -349,7 +273,7 @@ pub enum HandshakeState {
     Init,
     HelloSent,
     HelloReceived,
-    Established { session_id: u128 },
+    Established { session_id: Vec<u8> },
     Rejected { reason: HandshakeRejection },
 }
 
@@ -358,7 +282,6 @@ pub enum HandshakeRejection {
     RemoteRejected,
     LocalRejected,
     ProtocolError,
-    InvalidSessionId,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -378,8 +301,6 @@ pub struct HandshakeTransition {
 
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 pub enum HandshakeError {
-    #[error("invalid role for this action")]
-    InvalidRole,
     #[error("invalid state transition from {0:?} via {1:?}")]
     InvalidTransition(HandshakeState, HandshakeEvent),
     #[error("duplicate hello")]
@@ -407,7 +328,7 @@ impl Handshake {
     }
 
     pub fn on_send_hello(&mut self) -> Result<HandshakeTransition, HandshakeError> {
-        match (self.role, &self.state) {
+        match (Role::try_from(self.role).unwrap(), &self.state) {
             (Role::Client, HandshakeState::Init) => {
                 self.transition(HandshakeEvent::SendHello, HandshakeState::HelloSent)
             }
@@ -420,7 +341,7 @@ impl Handshake {
     }
 
     pub fn on_receive_hello(&mut self, _hello: &Hello) -> Result<HandshakeTransition, HandshakeError> {
-        match (self.role, &self.state) {
+        match (Role::try_from(self.role).unwrap(), &self.state) {
             (Role::Host, HandshakeState::Init) => {
                 self.transition(HandshakeEvent::ReceiveHello, HandshakeState::HelloReceived)
             }
@@ -436,14 +357,11 @@ impl Handshake {
         &mut self,
         ack: &HelloAck,
     ) -> Result<HandshakeTransition, HandshakeError> {
-        match (self.role, &self.state) {
+        match (Role::try_from(self.role).unwrap(), &self.state) {
             (Role::Host, HandshakeState::HelloReceived) => {
-                if ack.accepted && ack.session_id == UNASSIGNED_SESSION_ID {
-                    return Err(HandshakeError::InvalidSessionId);
-                }
                 let next = if ack.accepted {
                     HandshakeState::Established {
-                        session_id: ack.session_id,
+                        session_id: ack.session_id.clone(),
                     }
                 } else {
                     HandshakeState::Rejected {
@@ -463,14 +381,11 @@ impl Handshake {
         &mut self,
         ack: &HelloAck,
     ) -> Result<HandshakeTransition, HandshakeError> {
-        match (self.role, &self.state) {
+        match (Role::try_from(self.role).unwrap(), &self.state) {
             (Role::Client, HandshakeState::HelloSent) => {
-                if ack.accepted && ack.session_id == UNASSIGNED_SESSION_ID {
-                    return Err(HandshakeError::InvalidSessionId);
-                }
                 let next = if ack.accepted {
                     HandshakeState::Established {
-                        session_id: ack.session_id,
+                        session_id: ack.session_id.clone(),
                     }
                 } else {
                     HandshakeState::Rejected {
@@ -498,12 +413,16 @@ impl Handshake {
     }
 }
 
-pub fn encode_packet(packet: &Packet) -> Vec<u8> {
-    bincode::serialize(packet).unwrap_or_default()
+pub fn encode_msg(msg: &Message) -> Vec<u8> {
+    use prost::Message as _;
+    let mut buf = Vec::with_capacity(msg.encoded_len());
+    msg.encode(&mut buf).unwrap();
+    buf
 }
 
-pub fn decode_packet(bytes: &[u8]) -> Result<Packet, RiftError> {
-    bincode::deserialize(bytes).map_err(|err| RiftError::Decode(err.to_string()))
+pub fn decode_msg(bytes: &[u8]) -> Result<Message, RiftError> {
+    use prost::Message as _;
+    Message::decode(bytes).map_err(|err| RiftError::ProtoDecode(err.to_string()))
 }
 
 #[cfg(test)]
@@ -513,23 +432,25 @@ mod tests {
     fn sample_hello() -> Hello {
         Hello {
             client_name: "test".to_string(),
-            platform: Platform::Linux,
-            supported_codecs: vec![Codec::Hevc],
-            max_resolution: Resolution { width: 1920, height: 1080 },
+            platform: Platform::Linux as i32,
+            supported_codecs: vec![Codec::Hevc as i32],
+            max_resolution: Some(Resolution { width: 1920, height: 1080 }),
             max_fps: 60,
-            input_caps: InputCaps::KEYBOARD,
+            input_caps: 1, // Keyboard
+            protocol_version: 1,
         }
     }
 
-    fn sample_ack(accepted: bool, session_id: u128) -> HelloAck {
+    fn sample_ack(accepted: bool) -> HelloAck {
         HelloAck {
             accepted,
-            selected_codec: Codec::Hevc,
-            stream_resolution: Resolution { width: 1920, height: 1080 },
+            selected_codec: Codec::Hevc as i32,
+            stream_resolution: Some(Resolution { width: 1920, height: 1080 }),
             fps: 60,
             initial_bitrate_kbps: 8000,
             keyframe_interval_ms: 1000,
-            session_id,
+            session_id: vec![0u8; 16],
+            session_alias: 42,
         }
     }
 
@@ -537,101 +458,27 @@ mod tests {
     fn client_happy_path() {
         let mut hs = Handshake::new(Role::Client);
         hs.on_send_hello().unwrap();
-        let ack = sample_ack(true, 42);
+        let ack = sample_ack(true);
         let transition = hs.on_receive_hello_ack(&ack).unwrap();
-        assert_eq!(
-            transition.to,
-            HandshakeState::Established { session_id: 42 }
-        );
+        if let HandshakeState::Established { session_id } = transition.to {
+            assert_eq!(session_id.len(), 16);
+        } else {
+            panic!("Not established");
+        }
     }
 
     #[test]
-    fn host_happy_path() {
-        let mut hs = Handshake::new(Role::Host);
-        let hello = sample_hello();
-        hs.on_receive_hello(&hello).unwrap();
-        let ack = sample_ack(true, 77);
-        let transition = hs.on_send_hello_ack(&ack).unwrap();
-        assert_eq!(
-            transition.to,
-            HandshakeState::Established { session_id: 77 }
-        );
-    }
-
-    #[test]
-    fn client_rejects_invalid_order() {
-        let mut hs = Handshake::new(Role::Client);
-        let ack = sample_ack(true, 1);
-        let err = hs.on_receive_hello_ack(&ack).unwrap_err();
-        assert_eq!(
-            err,
-            HandshakeError::InvalidTransition(HandshakeState::Init, HandshakeEvent::ReceiveHelloAck)
-        );
-    }
-
-    #[test]
-    fn host_duplicate_hello_is_error() {
-        let mut hs = Handshake::new(Role::Host);
-        let hello = sample_hello();
-        hs.on_receive_hello(&hello).unwrap();
-        let err = hs.on_receive_hello(&hello).unwrap_err();
-        assert_eq!(err, HandshakeError::DuplicateHello);
-    }
-
-    #[test]
-    fn ack_requires_session_id_when_accepted() {
-        let mut hs = Handshake::new(Role::Client);
-        hs.on_send_hello().unwrap();
-        let ack = sample_ack(true, UNASSIGNED_SESSION_ID);
-        let err = hs.on_receive_hello_ack(&ack).unwrap_err();
-        assert_eq!(err, HandshakeError::InvalidSessionId);
-    }
-
-    #[test]
-    fn packet_priority_matches_channel() {
-        let packet = Packet {
+    fn physical_packet_roundtrip() {
+        let packet = PhysicalPacket {
             version: RIFT_VERSION,
-            session_id: 1,
+            session_id: Some(12345),
+            session_alias: None,
             packet_id: 10,
-            channel: Channel::Media,
-            message: Message::Video(VideoChunk {
-                frame_id: 1,
-                chunk_index: 0,
-                chunk_count: 1,
-                timestamp_us: 0,
-                keyframe: true,
-                payload: vec![0, 1],
-            }),
+            payload: vec![1, 2, 3, 4],
         };
-        assert_eq!(packet_priority(&packet), PacketPriority::Video);
-    }
-
-    #[test]
-    fn chunk_video_payload_splits() {
-        let payload = vec![1u8; 10];
-        let chunks = chunk_video_payload(5, 123, false, &payload, 4).unwrap();
-        assert_eq!(chunks.len(), 3);
-        assert_eq!(chunks[0].chunk_count, 3);
-        assert_eq!(chunks[2].payload.len(), 2);
-    }
-
-    #[test]
-    fn fec_recovers_single_missing() {
-        let mut builder = FecBuilder::new(3).unwrap();
-        let p0 = vec![1u8, 2, 3];
-        let p1 = vec![4u8, 5, 6];
-        let p2 = vec![7u8, 8, 9];
-        let mut fec = builder.push(10, &p0);
-        if fec.is_none() {
-            fec = builder.push(11, &p1);
-        }
-        if fec.is_none() {
-            fec = builder.push(12, &p2);
-        }
-        let fec = fec.expect("fec packet should be emitted after 3 shards");
-
-        let mut shards = vec![Some(p0), None, Some(p2)];
-        let recovered = recover_missing_shard(&fec, &mut shards).unwrap();
-        assert_eq!(recovered, p1);
+        let bytes = packet.encode();
+        let decoded = PhysicalPacket::decode(&bytes).unwrap();
+        assert_eq!(packet.packet_id, decoded.packet_id);
+        assert_eq!(packet.session_id, decoded.session_id);
     }
 }

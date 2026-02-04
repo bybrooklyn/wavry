@@ -6,6 +6,15 @@ Wavry Master is the central coordination service for identity, relay registratio
 
 ---
 
+## Production Endpoint
+
+The production instance of Wavry Master (Auth/Matchmaker) is available at:
+**`https://auth.wavry.dev`**
+
+Clients should default to this URL for all signaling, unless manually overridden for development.
+
+---
+
 ## Design Principles
 
 | Principle | Rationale |

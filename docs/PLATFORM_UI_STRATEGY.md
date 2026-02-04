@@ -80,10 +80,12 @@ Communicates with Rust via IPC (commands + events).
 |------------|---------|
 | **SwiftUI** | Native macOS UI |
 
-- Desktop-only
-- Local distribution (no App Store assumptions)
-- Rust core exposed via static lib or dylib
-- SwiftUI renders state and sends commands only
+- **High-Fidelity Design**: Parsec-style session-centric interface with premium dark aesthetics and glassmorphism.
+- **Sidebar Navigation**: Cleaned sidebar with essential icons (Sessions/Settings) relocated for minimalism.
+- **Responsive Layout**: Fluid UI that scales across window sizes, ensuring the Setup Wizard and Dashboard remain elegant.
+- **Interactive Targets**: Enhanced hit targets (`contentShape`) for easy selection of padded buttons and cards.
+- **Identity Integration**: Automatic hostname detection and cryptographic public key display.
+- **Rust FFI**: Orchestrated via `wavry-ffi` static/dynamic linking for control plane commands.
 
 ---
 

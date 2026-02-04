@@ -1,17 +1,18 @@
 mod host {
-    use std::{collections::HashMap, net::SocketAddr, time::SystemTime};
+    use std::{collections::HashMap, net::SocketAddr, fmt};
 
     use anyhow::{anyhow, Result};
     use clap::Parser;
     use mdns_sd::{ServiceDaemon, ServiceInfo};
     use rift_core::{
-        chunk_video_payload, decode_packet, encode_packet, Channel, Codec as RiftCodec,
-        ControlMessage, FecBuilder, Handshake, HandshakeError, HandshakeState, HelloAck, InputEvent,
-        InputMessage, Message, Packet, Ping, Pong, Role, StatsReport, UNASSIGNED_SESSION_ID,
-        RIFT_VERSION,
+        chunk_video_payload, decode_msg, encode_msg, PhysicalPacket, Codec as RiftCodec,
+        ControlMessage as ProtoControl, FecBuilder, Handshake, HandshakeError, HandshakeState, HelloAck as ProtoHelloAck, 
+        Message as ProtoMessage, Role, 
+        UNASSIGNED_SESSION_ID as CORE_UNASSIGNED_SESSION_ID, RIFT_VERSION, Hello as ProtoHello,
+        Resolution as ProtoResolution,
     };
-    use rift_crypto::connection::{handshake_type, SecureServer};
-    use wavry_media::{Codec, EncodeConfig, Resolution as MediaResolution};
+    use rift_crypto::connection::{SecureServer};
+    use wavry_media::{Codec, EncodeConfig, Resolution as MediaResolution, EncodedFrame};
     #[cfg(target_os = "linux")]
     use wavry_media::PipewireEncoder as VideoEncoder;
     #[cfg(not(target_os = "linux"))]
@@ -26,7 +27,8 @@ mod host {
     use tracing::{debug, info, warn};
 
     const MAX_DATAGRAM_SIZE: usize = 1200;
-    const FEC_SHARD_COUNT: u8 = 8;
+    const FEC_SHARD_COUNT: u32 = 8;
+    const UNASSIGNED_SESSION_ID: [u8; 16] = [0u8; 16];
 
     #[derive(Parser, Debug)]
     #[command(name = "wavry-server")]
@@ -49,6 +51,16 @@ mod host {
         Established(SecureServer),
     }
 
+    impl fmt::Debug for CryptoState {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            match self {
+                Self::Disabled => write!(f, "Disabled"),
+                Self::Handshaking(_) => write!(f, "Handshaking"),
+                Self::Established(_) => write!(f, "Established"),
+            }
+        }
+    }
+
     impl CryptoState {
         fn new(disabled: bool) -> Self {
             if disabled {
@@ -63,10 +75,35 @@ mod host {
         }
     }
 
+    #[derive(Debug)]
+    struct PeerState {
+        crypto: CryptoState,
+        handshake: Handshake,
+        session_id: Option<Vec<u8>>,
+        session_alias: u32,
+        next_packet_id: u64,
+        frame_id: u64,
+        fec_builder: FecBuilder,
+    }
+
+    impl PeerState {
+        fn new(no_encrypt: bool) -> Self {
+            Self {
+                crypto: CryptoState::new(no_encrypt),
+                handshake: Handshake::new(Role::Host),
+                session_id: None,
+                session_alias: rand::random::<u32>().max(1),
+                next_packet_id: 1,
+                frame_id: 0,
+                fec_builder: FecBuilder::new(FEC_SHARD_COUNT).unwrap(),
+            }
+        }
+    }
+
     pub async fn run() -> Result<()> {
+        let args = Args::parse();
         tracing_subscriber::fmt().with_env_filter("info").init();
 
-        let args = Args::parse();
         let socket = UdpSocket::bind(args.listen).await?;
         info!("listening on {}", args.listen);
         if args.no_encrypt {
@@ -128,53 +165,15 @@ mod host {
                     // Get or create peer state
                     let peer_state = peers.entry(peer).or_insert_with(|| PeerState::new(no_encrypt));
 
-                    // Handle based on crypto state
-                    match handle_raw_packet(&socket, peer_state, &mut active_peer, peer, raw, &mut injector).await {
-                        Ok(()) => {},
-                        Err(e) => {
-                            debug!("packet from {} dropped: {}", peer, e);
-                        }
+                    // Handle raw packet
+                    if let Err(e) = handle_raw_packet(&socket, peer_state, &mut active_peer, peer, raw, &mut injector).await {
+                        debug!("packet from {} dropped: {}", peer, e);
                     }
                 }
             }
         }
     }
 
-    #[derive(Debug)]
-    struct PeerState {
-        crypto: CryptoState,
-        handshake: Handshake,
-        session_id: Option<u128>,
-        next_packet_id: u64,
-        frame_id: u64,
-        fec_builder: FecBuilder,
-    }
-
-    // Manual Debug impl since CryptoState doesn't derive Debug
-    impl std::fmt::Debug for CryptoState {
-        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-            match self {
-                CryptoState::Disabled => write!(f, "Disabled"),
-                CryptoState::Handshaking(_) => write!(f, "Handshaking"),
-                CryptoState::Established(_) => write!(f, "Established"),
-            }
-        }
-    }
-
-    impl PeerState {
-        fn new(no_encrypt: bool) -> Self {
-            Self {
-                crypto: CryptoState::new(no_encrypt),
-                handshake: Handshake::new(Role::Host),
-                session_id: None,
-                next_packet_id: 1,
-                frame_id: 0,
-                fec_builder: FecBuilder::new(FEC_SHARD_COUNT).unwrap(),
-            }
-        }
-    }
-
-    /// Handle a raw packet, dispatching to crypto or RIFT handling
     async fn handle_raw_packet(
         socket: &UdpSocket,
         peer_state: &mut PeerState,
@@ -183,149 +182,188 @@ mod host {
         raw: &[u8],
         injector: &mut InjectorImpl,
     ) -> Result<()> {
-        if raw.is_empty() {
-            return Err(anyhow!("empty packet"));
-        }
+        let phys = PhysicalPacket::decode(raw).map_err(|e| anyhow!("RIFT decode error: {}", e))?;
 
-        // Dispatch based on crypto state and packet type
+        // Dispatch based on crypto state
         match &mut peer_state.crypto {
             CryptoState::Disabled => {
-                // No encryption, decode RIFT directly
-                let packet = decode_packet(raw)?;
-                handle_rift_packet(socket, peer_state, active_peer, peer, packet, injector).await
+                let msg = decode_msg(&phys.payload).map_err(|e| anyhow!("Proto decode error: {}", e))?;
+                handle_rift_msg(socket, peer_state, active_peer, peer, msg, injector).await
             }
             CryptoState::Handshaking(server) => {
-                // Handle crypto handshake
-                match raw[0] {
-                    handshake_type::MSG1 => {
+                if let Some(sid) = phys.session_id {
+                    if sid == 0 {
                         info!("crypto handshake msg1 from {}", peer);
-                        let response = server.process_client_hello(raw)?;
-                        socket.send_to(&response, peer).await?;
-                        Ok(())
-                    }
-                    handshake_type::MSG3 => {
-                        info!("crypto handshake msg3 from {}", peer);
-                        server.process_client_finish(raw)?;
+                        let msg2_payload = server.process_client_hello(&phys.payload)
+                            .map_err(|e| anyhow!("Noise error: {}", e))?;
                         
-                        // Transition to established
-                        // We need to take ownership, so swap with a placeholder
-                        let old_crypto = std::mem::replace(
-                            &mut peer_state.crypto,
-                            CryptoState::Disabled
-                        );
-                        if let CryptoState::Handshaking(server) = old_crypto {
-                            peer_state.crypto = CryptoState::Established(server);
-                            info!("crypto established with {}", peer);
-                        }
+                        let resp = PhysicalPacket {
+                            version: RIFT_VERSION,
+                            session_id: Some(0),
+                            session_alias: None,
+                            packet_id: 0,
+                            payload: msg2_payload,
+                        };
+                        socket.send_to(&resp.encode(), peer).await?;
                         Ok(())
+                    } else {
+                        Err(anyhow!("unexpected session_id in crypto handshake"))
                     }
-                    _ => {
-                        warn!("unexpected packet type 0x{:02x} during handshake from {}", raw[0], peer);
-                        Err(anyhow!("unexpected packet type during crypto handshake"))
+                } else if phys.session_alias.is_some() {
+                    info!("crypto handshake msg3 from {}", peer);
+                    server.process_client_finish(&phys.payload)
+                        .map_err(|e| anyhow!("Noise error: {}", e))?;
+
+                    // Transition to established
+                    let old_crypto = std::mem::replace(&mut peer_state.crypto, CryptoState::Disabled);
+                    if let CryptoState::Handshaking(server) = old_crypto {
+                        peer_state.crypto = CryptoState::Established(server);
+                        info!("crypto established with {}", peer);
                     }
+                    Ok(())
+                } else {
+                    Err(anyhow!("unexpected packet format during crypto handshake"))
                 }
             }
             CryptoState::Established(server) => {
-                // Decrypt and handle RIFT
-                if raw[0] != handshake_type::DATA && raw.len() > 8 {
-                    // Data packet: first 8 bytes are packet_id, rest is ciphertext
-                    let packet_id = u64::from_le_bytes(raw[0..8].try_into()?);
-                    let ciphertext = &raw[8..];
-                    
-                    let plaintext = server.decrypt(packet_id, ciphertext)
-                        .map_err(|e| anyhow!("decrypt failed: {}", e))?;
-                    
-                    let packet = decode_packet(&plaintext)?;
-                    handle_rift_packet(socket, peer_state, active_peer, peer, packet, injector).await
-                } else if raw[0] == handshake_type::DATA {
-                    // Explicit DATA prefix
-                    if raw.len() < 9 {
-                        return Err(anyhow!("data packet too short"));
-                    }
-                    let packet_id = u64::from_le_bytes(raw[1..9].try_into()?);
-                    let ciphertext = &raw[9..];
-                    
-                    let plaintext = server.decrypt(packet_id, ciphertext)
-                        .map_err(|e| anyhow!("decrypt failed: {}", e))?;
-                    
-                    let packet = decode_packet(&plaintext)?;
-                    handle_rift_packet(socket, peer_state, active_peer, peer, packet, injector).await
-                } else {
-                    // Could be raw RIFT packet for backwards compat?
-                    warn!("unexpected format from established peer {}", peer);
-                    Err(anyhow!("unexpected packet format"))
-                }
+                let plaintext = server.decrypt(phys.packet_id, &phys.payload)
+                    .map_err(|e| anyhow!("Decrypt failed: {}", e))?;
+
+                let msg = decode_msg(&plaintext).map_err(|e| anyhow!("Proto decode error: {}", e))?;
+                handle_rift_msg(socket, peer_state, active_peer, peer, msg, injector).await
             }
         }
     }
 
-    /// Handle a decoded RIFT packet
-    async fn handle_rift_packet(
+    async fn handle_rift_msg(
         socket: &UdpSocket,
         peer_state: &mut PeerState,
         active_peer: &mut Option<SocketAddr>,
         peer: SocketAddr,
-        packet: Packet,
+        msg: ProtoMessage,
         injector: &mut InjectorImpl,
     ) -> Result<()> {
-        if packet.version != RIFT_VERSION {
-            return Err(anyhow!("version mismatch"));
-        }
+        use rift_core::message::Content;
 
-        if let Err(reason) = validate_channel_message(&packet) {
-            return Err(anyhow!("invalid packet: {}", reason));
-        }
+        let content = msg.content.ok_or_else(|| anyhow!("empty message content"))?;
+        match content {
+            Content::Control(ctrl) => {
+                let ctrl_content = ctrl.content.ok_or_else(|| anyhow!("empty control content"))?;
+                match ctrl_content {
+                    rift_core::control_message::Content::Hello(hello) => {
+                        if !peer_state.crypto.is_established() {
+                            return Err(anyhow!("crypto required before RIFT hello"));
+                        }
 
-        match packet.channel {
-            Channel::Control => {
-                handle_control(socket, peer_state, active_peer, peer, packet).await
-            }
-            Channel::Input => {
-                if !validate_established_rift(peer_state, packet.session_id) {
-                    return Err(anyhow!("input before established"));
+                        if active_peer.is_some() && *active_peer != Some(peer) {
+                            // Already busy
+                            let ack = ProtoHelloAck {
+                                accepted: false,
+                                selected_codec: 0,
+                                stream_resolution: None,
+                                fps: 0,
+                                initial_bitrate_kbps: 0,
+                                keyframe_interval_ms: 0,
+                                session_id: UNASSIGNED_SESSION_ID.to_vec(),
+                                session_alias: 0,
+                            };
+                            send_rift_msg(socket, peer_state, peer, ProtoMessage {
+                                content: Some(Content::Control(ProtoControl {
+                                    content: Some(rift_core::control_message::Content::HelloAck(ack)),
+                                })),
+                            }).await?;
+                            return Ok(());
+                        }
+
+                        info!("RIFT hello from {}", hello.client_name);
+                        peer_state.handshake.on_receive_hello(&hello).map_err(|e| anyhow!("Handshake error: {}", e))?;
+
+                        let session_id = rand::random::<[u8; 16]>().to_vec();
+                        peer_state.session_id = Some(session_id.clone());
+                        peer_state.frame_id = 0;
+
+                        let ack = ProtoHelloAck {
+                            accepted: true,
+                            selected_codec: RiftCodec::Hevc as i32,
+                            stream_resolution: Some(ProtoResolution { width: 1280, height: 720 }),
+                            fps: 60,
+                            initial_bitrate_kbps: 20_000,
+                            keyframe_interval_ms: 1000,
+                            session_id: session_id.clone(),
+                            session_alias: peer_state.session_alias,
+                        };
+
+                        peer_state.handshake.on_send_hello_ack(&ack).map_err(|e| anyhow!("Handshake error: {}", e))?;
+                        *active_peer = Some(peer);
+
+                        send_rift_msg(socket, peer_state, peer, ProtoMessage {
+                            content: Some(Content::Control(ProtoControl {
+                                content: Some(rift_core::control_message::Content::HelloAck(ack)),
+                            })),
+                        }).await?;
+                        info!("session established with {}: {}", peer, hex::encode(&session_id));
+                    }
+                    rift_core::control_message::Content::Ping(ping) => {
+                        let pong = rift_core::Pong { timestamp_us: ping.timestamp_us };
+                        send_rift_msg(socket, peer_state, peer, ProtoMessage {
+                            content: Some(Content::Control(ProtoControl {
+                                content: Some(rift_core::control_message::Content::Pong(pong)),
+                            })),
+                        }).await?;
+                    }
+                    rift_core::control_message::Content::Stats(report) => {
+                        info!("stats from {}: rtt={}ms", peer, report.rtt_us / 1000);
+                    }
+                    _ => {}
                 }
-                if let Message::Input(input) = packet.message {
-                    apply_input(injector, input)?;
+            }
+            Content::Input(input_msg) => {
+                if let Some(event) = input_msg.event {
+                    handle_input_event(injector, event)?;
                 }
-                Ok(())
             }
-            Channel::Media => {
-                // Host does not consume media
-                Ok(())
-            }
+            _ => {}
         }
+        Ok(())
     }
 
-    /// Send a RIFT packet, encrypting if crypto is established
-    async fn send_packet(
+    fn handle_input_event(injector: &mut InjectorImpl, event: rift_core::input_message::Event) -> Result<()> {
+        use rift_core::input_message::Event;
+        match event {
+            Event::Key(k) => injector.key(k.keycode, k.pressed)?,
+            Event::MouseButton(m) => injector.mouse_button(m.button as u8, m.pressed)?,
+            Event::MouseMove(m) => injector.mouse_motion(m.x as i32, m.y as i32)?,
+            _ => {} // Handle scroll/absolute if needed
+        }
+        Ok(())
+    }
+
+    async fn send_rift_msg(
         socket: &UdpSocket,
         peer_state: &mut PeerState,
         peer: SocketAddr,
-        packet: &Packet,
+        msg: ProtoMessage,
     ) -> Result<()> {
-        let encoded = encode_packet(packet);
-        
-        match &mut peer_state.crypto {
-            CryptoState::Disabled => {
-                socket.send_to(&encoded, peer).await?;
-            }
-            CryptoState::Established(server) => {
-                let (packet_id, ciphertext) = server.encrypt(&encoded)
-                    .map_err(|e| anyhow!("encrypt failed: {}", e))?;
-                
-                // Format: [8 bytes packet_id] [ciphertext]
-                let mut buf = Vec::with_capacity(8 + ciphertext.len());
-                buf.extend_from_slice(&packet_id.to_le_bytes());
-                buf.extend_from_slice(&ciphertext);
-                
-                socket.send_to(&buf, peer).await?;
-            }
-            CryptoState::Handshaking(_) => {
-                // Can't send RIFT packets during handshake
-                return Err(anyhow!("cannot send during crypto handshake"));
-            }
-        }
-        
+        let plaintext = encode_msg(&msg);
+        let packet_id = peer_state.next_packet_id;
+        peer_state.next_packet_id = peer_state.next_packet_id.wrapping_add(1);
+
+        let payload = match &mut peer_state.crypto {
+            CryptoState::Disabled => plaintext,
+            CryptoState::Established(server) => server.encrypt(packet_id, &plaintext)
+                .map_err(|e| anyhow!("Encrypt failed: {}", e))?,
+            _ => return Err(anyhow!("cannot send RIFT msg during handshake")),
+        };
+
+        let phys = PhysicalPacket {
+            version: RIFT_VERSION,
+            session_id: None,
+            session_alias: Some(peer_state.session_alias),
+            packet_id,
+            payload,
+        };
+
+        socket.send_to(&phys.encode(), peer).await?;
         Ok(())
     }
 
@@ -333,267 +371,50 @@ mod host {
         socket: &UdpSocket,
         peer: SocketAddr,
         peer_state: &mut PeerState,
-        frame: wavry_media::EncodedFrame,
+        frame: EncodedFrame,
     ) -> Result<()> {
-        let max_payload = calculate_max_payload(peer_state)?;
         let chunks = chunk_video_payload(
             peer_state.frame_id,
             frame.timestamp_us,
             frame.keyframe,
             &frame.data,
-            max_payload
-        )?;
-        
+            MAX_DATAGRAM_SIZE,
+        ).map_err(|e| anyhow!("Chunking error: {}", e))?;
         peer_state.frame_id = peer_state.frame_id.wrapping_add(1);
 
-        let chunk_count = chunks.len();
-        for (i, chunk) in chunks.into_iter().enumerate() {
-            let packet = Packet {
-                version: RIFT_VERSION,
-                session_id: peer_state.session_id.unwrap(),
-                packet_id: next_packet_id(peer_state),
-                channel: Channel::Media,
-                message: Message::Video(chunk),
+        for chunk in chunks {
+            let msg = ProtoMessage {
+                content: Some(rift_core::message::Content::Media(rift_core::MediaMessage {
+                    content: Some(rift_core::media_message::Content::Video(chunk)),
+                })),
             };
-            
-            if let Err(e) = send_packet(socket, peer_state, peer, &packet).await {
-                 debug!("failed to send video chunk {}/{}: {}", i + 1, chunk_count, e);
-            }
+            send_rift_msg(socket, peer_state, peer, msg).await?;
         }
         Ok(())
     }
 
-    fn calculate_max_payload(peer_state: &PeerState) -> Result<usize> {
-        let dummy = Packet {
-            version: RIFT_VERSION,
-            session_id: peer_state
-                .session_id
-                .ok_or_else(|| anyhow!("missing session"))?,
-            packet_id: 0,
-            channel: Channel::Media,
-            message: Message::Video(rift_core::VideoChunk {
-                frame_id: 0,
-                chunk_index: 0,
-                chunk_count: 1,
-                timestamp_us: 0,
-                keyframe: false,
-                payload: Vec::new(),
-            }),
-        };
-        let overhead = encode_packet(&dummy).len();
-        
-        // Account for crypto overhead (8 byte packet_id + 16 byte tag)
-        let crypto_overhead = match &peer_state.crypto {
-            CryptoState::Established(_) => 24,
-            _ => 0,
-        };
-        
-        let max_payload = MAX_DATAGRAM_SIZE.saturating_sub(overhead + crypto_overhead);
-        if max_payload == 0 {
-            Err(anyhow!("max payload too small for packet header"))
-        } else {
-            Ok(max_payload)
-        }
-    }
-
-    async fn handle_control(
-        socket: &UdpSocket,
-        peer_state: &mut PeerState,
-        active_peer: &mut Option<SocketAddr>,
-        peer: SocketAddr,
-        packet: Packet,
-    ) -> Result<()> {
-        match packet.message {
-            Message::Control(ControlMessage::Hello(_hello)) => {
-                // Reject if crypto required but not established
-                if !peer_state.crypto.is_established() {
-                    warn!("RIFT hello before crypto established from {}", peer);
-                    return Err(anyhow!("crypto handshake required first"));
-                }
-
-                if active_peer.is_some() && *active_peer != Some(peer) {
-                    let ack = HelloAck {
-                        accepted: false,
-                        selected_codec: RiftCodec::Hevc,
-                        stream_resolution: rift_core::Resolution { width: 0, height: 0 },
-                        fps: 0,
-                        initial_bitrate_kbps: 0,
-                        keyframe_interval_ms: 0,
-                        session_id: UNASSIGNED_SESSION_ID,
-                    };
-                    let response = Packet {
-                        version: RIFT_VERSION,
-                        session_id: UNASSIGNED_SESSION_ID,
-                        packet_id: next_packet_id(peer_state),
-                        channel: Channel::Control,
-                        message: Message::Control(ControlMessage::HelloAck(ack)),
-                    };
-                    send_packet(socket, peer_state, peer, &response).await?;
-                    return Ok(());
-                }
-
-                info!("RIFT hello from {}", peer);
-                if packet.session_id != UNASSIGNED_SESSION_ID {
-                    warn!(
-                        "hello from {} had non-zero session_id: {}",
-                        peer, packet.session_id
-                    );
-                }
-                if let Err(err) = peer_state.handshake.on_receive_hello(&_hello) {
-                    warn!("invalid hello from {}: {}", peer, format_handshake_error(err));
-                    return Ok(());
-                }
-                let session_id = generate_session_id(peer);
-                peer_state.session_id = Some(session_id);
-                peer_state.frame_id = 0;
-                peer_state.fec_builder = FecBuilder::new(FEC_SHARD_COUNT).unwrap();
-
-                let ack = HelloAck {
-                    accepted: true,
-                    selected_codec: RiftCodec::Hevc,
-                    stream_resolution: rift_core::Resolution {
-                        width: 1280,
-                        height: 720,
-                    },
-                    fps: 60,
-                    initial_bitrate_kbps: 20_000,
-                    keyframe_interval_ms: 1000,
-                    session_id,
-                };
-                let response = Packet {
-                    version: RIFT_VERSION,
-                    session_id,
-                    packet_id: next_packet_id(peer_state),
-                    channel: Channel::Control,
-                    message: Message::Control(ControlMessage::HelloAck(ack)),
-                };
-                send_packet(socket, peer_state, peer, &response).await?;
-                *active_peer = Some(peer);
-                info!("session established with {}: {}", peer, session_id);
-            }
-            Message::Control(ControlMessage::Ping(Ping { timestamp_us })) => {
-                let session_id = packet.session_id;
-                if session_id == UNASSIGNED_SESSION_ID {
-                    warn!("ping without session_id from {}", peer);
-                } else if let Some(expected) = peer_state.session_id {
-                    if expected != session_id {
-                        warn!(
-                            "ping session_id mismatch from {}: expected {}, got {}",
-                            peer, expected, session_id
-                        );
-                        return Ok(());
-                    }
-                } else {
-                    warn!("ping before session established from {}", peer);
-                    return Ok(());
-                }
-                let pong = Packet {
-                    version: RIFT_VERSION,
-                    session_id,
-                    packet_id: next_packet_id(peer_state),
-                    channel: Channel::Control,
-                    message: Message::Control(ControlMessage::Pong(Pong { timestamp_us })),
-                };
-                send_packet(socket, peer_state, peer, &pong).await?;
-            }
-            Message::Control(ControlMessage::Stats(report)) => {
-                log_stats(peer, report);
-            }
-            other => {
-                info!("control message from {}: {:?}", peer, other);
-            }
-        }
-        Ok(())
-    }
-
-    fn log_stats(peer: SocketAddr, report: StatsReport) {
-        info!(
-            "stats from {}: rtt_us={} received={} lost={} period_ms={}",
-            peer, report.rtt_us, report.received_packets, report.lost_packets, report.period_ms
-        );
-    }
-
-    fn apply_input(injector: &mut InjectorImpl, input: InputMessage) -> Result<()> {
-        match input.event {
-            InputEvent::Key { keycode, pressed } => injector.key(keycode, pressed),
-            InputEvent::MouseButton { button, pressed } => injector.mouse_button(button, pressed),
-            InputEvent::MouseMotion { dx, dy } => injector.mouse_motion(dx, dy),
-            InputEvent::MouseAbsolute { x, y } => injector.mouse_absolute(x, y),
-        }
-    }
-
-    fn validate_channel_message(packet: &Packet) -> Result<(), &'static str> {
-        match (&packet.channel, &packet.message) {
-            (Channel::Control, Message::Control(_)) => Ok(()),
-            (Channel::Input, Message::Input(_)) => Ok(()),
-            (Channel::Media, Message::Video(_)) => Ok(()),
-            (Channel::Media, Message::Fec(_)) => Ok(()),
-            _ => Err("channel/message mismatch"),
-        }
-    }
-
-    fn validate_established_rift(
-        peer_state: &PeerState,
-        session_id: u128,
-    ) -> bool {
-        if session_id == UNASSIGNED_SESSION_ID {
-            return false;
-        }
-        matches!(peer_state.handshake.state(), HandshakeState::Established { .. })
-            && peer_state.session_id == Some(session_id)
+    fn advertise_mdns(listen_addr: SocketAddr) -> Result<ServiceDaemon> {
+        let mdns = ServiceDaemon::new()?;
+        let service_info = ServiceInfo::new(
+            "_wavry._udp.local.",
+            "wavry-host",
+            "wavry.local.",
+            listen_addr.ip().to_string(),
+            listen_addr.port(),
+            &[("v", "1")][..],
+        )?.enable_addr_auto();
+        mdns.register(service_info)?;
+        Ok(mdns)
     }
 
     fn format_handshake_error(err: HandshakeError) -> String {
-        match err {
-            HandshakeError::InvalidRole => "invalid role".to_string(),
-            HandshakeError::InvalidTransition(state, event) => {
-                format!("invalid transition from {state:?} via {event:?}")
-            }
-            HandshakeError::DuplicateHello => "duplicate hello".to_string(),
-            HandshakeError::InvalidSessionId => "invalid session id".to_string(),
-        }
-    }
-
-    fn next_packet_id(peer_state: &mut PeerState) -> u64 {
-        let id = peer_state.next_packet_id;
-        peer_state.next_packet_id = peer_state.next_packet_id.wrapping_add(1);
-        id
-    }
-
-    fn advertise_mdns(listen: SocketAddr) -> Result<ServiceDaemon> {
-        let daemon = ServiceDaemon::new()?;
-        let service_type = "_wavry._udp.local.";
-        let instance_name = "wavry-server";
-        let host_name = "wavry-server.local.";
-        let properties = [("rift_version", "0.0.1"), ("codec", "hevc")];
-        let service_info = ServiceInfo::new(
-            service_type,
-            instance_name,
-            host_name,
-            "",
-            listen.port(),
-            &properties[..],
-        )?
-        .enable_addr_auto();
-        daemon.register(service_info)?;
-        Ok(daemon)
-    }
-
-    fn generate_session_id(peer: SocketAddr) -> u128 {
-        let now = SystemTime::now()
-            .duration_since(SystemTime::UNIX_EPOCH)
-            .map(|d| d.as_nanos())
-            .unwrap_or(1);
-        let addr_hash = peer.ip().to_string().bytes().fold(0u128, |acc, b| {
-            acc.wrapping_mul(257).wrapping_add(b as u128)
-        });
-        (now << 32) ^ (addr_hash << 1) ^ (peer.port() as u128)
+        err.to_string()
     }
 }
 
-
-
-#[tokio::main]
-async fn main() -> anyhow::Result<()> {
-    host::run().await
+fn main() -> anyhow::Result<()> {
+    tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()?
+        .block_on(host::run())
 }

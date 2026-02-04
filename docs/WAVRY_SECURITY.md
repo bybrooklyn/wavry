@@ -134,7 +134,11 @@ let mut noise = builder
     .build_responder()?;
 ```
 
-### 3.3 Relay Blindness Guarantee
+### 3.3 Implementation Status
+
+The Noise XX handshake (Msg1-3) has been verified end-to-end between `wavry-server` and `wavry-client`. The implementation uses `Noise_XX_25519_ChaChaPoly_BLAKE2s` to secure all Control, Input, and Media channels.
+
+### 3.4 Relay Blindness Guarantee
 
 | Layer | What Relay Sees | What Relay Cannot See |
 |-------|-----------------|----------------------|

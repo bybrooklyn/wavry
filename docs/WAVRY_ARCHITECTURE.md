@@ -1,10 +1,10 @@
-# Wavry — Architecture (Step Two)
+# Wavry — Architecture
 
 Wavry is a latency-first remote desktop and game streaming system. This
 architecture exists to preserve input feel, frame pacing, and deterministic
 behavior at all times.
 
-Step Two is Linux-only (Wayland-first).
+Wavry is now cross-platform (Linux + macOS) and features end-to-end encryption.
 Protocol details live in `docs/RIFT_SPEC_V1.md`.
 
 ---
@@ -27,25 +27,28 @@ Protocol details live in `docs/RIFT_SPEC_V1.md`.
 
 ---
 
-## Modular Layout (Step Two)
+## Modular Layout
 
 Wavry is split into discrete subsystems to avoid hidden coupling:
 
-- `Capture`: PipeWire + xdg-desktop-portal (restore tokens).
-- `Encode`: GPU encoder abstraction (HEVC primary, H.264 fallback).
+- `Capture`: 
+    - Linux: PipeWire + xdg-desktop-portal.
+    - macOS: ScreenCaptureKit (High-performance API).
+- `Encode`: GPU encoder abstraction.
+    - Linux: VA-API (Hevc/H.264).
+    - macOS: VideoToolbox (Hardware HEVC/H.264).
 - `Packetize`: RIFT framing + scheduling + prioritization.
-- `Transport`: UDP (RIFT) over LAN.
-- `Decode`: hardware decode + low-latency pipelines.
-- `Present`: compositor-aware presentation (mailbox/immediate).
-- `Input`: raw input capture and injection.
-- `UI`: minimal control plane (connect/host), non-blocking.
+- `Transport`: UDP (RIFT) with Encrypted Tunneling.
+- `Decode`: Hardware decode + low-latency pipelines.
+    - macOS: VideoToolbox + AVSampleBufferDisplayLayer.
+- `Present`: Compositor-aware presentation (mailbox/immediate).
+- `Input`: Raw input capture and injection.
+    - macOS: CoreGraphics (CGEvent) injection.
+- `UI`: Native control plane.
+    - macOS: SwiftUI (Session-centric, responsive).
+    - Linux/Windows: Tauri + SvelteKit.
 - `Discovery`: mDNS service advertisement and browsing.
-
-Capture note:
-- Step Two uses a CPU fallback path while DMA-BUF zero-copy wiring is in progress.
-
-Encode note:
-- Step Two uses GStreamer VA-API encoders by default; NVENC support is planned.
+- `Signaling`: Master Server (`auth.wavry.dev`) for global discovery.
 
 ---
 
@@ -67,12 +70,12 @@ Input travels in the reverse direction and must never wait on video.
 
 ---
 
-## Transport Strategy (Step Two)
+## Transport & Security
 
-- Direct UDP over LAN only.
-- No ICE/STUN/TURN.
-- No encryption.
-- Basic XOR FEC on media packets.
+- Direct UDP over LAN with UPnP support for automatic port forwarding.
+- **End-to-End Encryption**: Mandatory Noise-based (RIFT Msg1-3) handshake.
+- Media packets are encrypted via secure transport keys established during handshake.
+- Basic XOR FEC on media packets for error recovery.
 
 ---
 
@@ -85,11 +88,6 @@ Input travels in the reverse direction and must never wait on video.
 - Optional on-screen overlay (FPS, bitrate, latency).
 - Packet loss and FEC recovery counters.
 
-## Dependency Notes
-
-- GStreamer (LGPL) is used for capture/encode/decode in Step Two.
-- Review licensing implications for future dual-licensing plans.
-
 ---
 
 ## Scope Notes
@@ -99,8 +97,6 @@ Input travels in the reverse direction and must never wait on video.
 - Audio is deferred.
 - Multi-monitor and virtual displays are deferred.
 - VR is explicitly out of scope.
-- Relays, auth, ICE, and UPnP are out of scope for Step Two.
-- End-to-end encryption (Noise/snow) is mandatory for production but not implemented in Step Two.
 
 ## Testing
 

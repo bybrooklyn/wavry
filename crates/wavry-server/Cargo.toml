@@ -16,3 +16,5 @@ rift-crypto = { path = "../../crates/rift-crypto" }
 wavry-common = { path = "../../crates/wavry-common" }
 wavry-media = { path = "../../crates/wavry-media" }
 wavry-platform = { path = "../../crates/wavry-platform" }
+rand.workspace = true
+hex = "0.4.3"

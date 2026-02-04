@@ -77,6 +77,28 @@ pub trait CapabilityProbe: Send + Sync {
     fn supported_decoders(&self) -> Result<Vec<Codec>>;
 }
 
+pub trait Renderer: Send {
+    fn render(&mut self, payload: &[u8], timestamp_us: u64) -> Result<()>;
+}
+
+// Input Types abstraction (simplified for now)
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MouseButton { Left, Right, Middle }
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum InputEvent {
+    MouseMove { x: f32, y: f32 }, // Normalized 0..1
+    MouseDown { button: MouseButton },
+    MouseUp { button: MouseButton },
+    KeyDown { key_code: u32 }, // Platform specific for now (Mac: CGKeyCode)
+    KeyUp { key_code: u32 },
+    Scroll { dx: f32, dy: f32 },
+}
+
+pub trait InputInjector: Send {
+    fn inject(&mut self, event: InputEvent) -> Result<()>;
+}
+
 pub struct NullProbe;
 
 impl CapabilityProbe for NullProbe {
@@ -100,5 +122,14 @@ pub use dummy::{DummyEncoder, DummyRenderer};
 
 #[cfg(target_os = "macos")]
 mod mac_screen_encoder;
+mod mac_video_renderer;
+
 #[cfg(target_os = "macos")]
 pub use mac_screen_encoder::MacScreenEncoder;
+#[cfg(target_os = "macos")]
+pub use mac_video_renderer::MacVideoRenderer;
+
+#[cfg(target_os = "macos")]
+mod mac_input_injector;
+#[cfg(target_os = "macos")]
+pub use mac_input_injector::MacInputInjector;

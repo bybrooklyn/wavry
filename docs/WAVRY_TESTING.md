@@ -1,54 +1,70 @@
-# Wavry — Step Two Testing
+# Wavry — Testing
 
-This document defines a reproducible test setup for Step Two.
+This document defines reproducible test setups for validating Wavry's performance and security across platforms.
 
 ---
 
-## Hardware
+## Hardware Support
 
-- Linux host (Wayland) with PipeWire and xdg-desktop-portal.
-- Linux client on the same LAN.
-- Wired Ethernet preferred; Wi-Fi for secondary tests.
+- **Linux Host**: Wayland with PipeWire and xdg-desktop-portal.
+- **macOS Host**: Apple Silicon preferred, ScreenCaptureKit access required.
+- **Client**: Any supported platform on the same LAN or reachable via relay.
+- **Wired Connection**: Heavily preferred for baseline metrics; Wi-Fi for secondary stability tests.
 
 ---
 
 ## Software Prerequisites
 
-- PipeWire + xdg-desktop-portal running.
-- GStreamer plugins for VA-API (or NVENC if available).
-- uinput access on host.
-- evdev access on client.
-- Avahi/mDNS working on LAN.
-- Root or udev rules may be required for uinput/evdev.
+- **macOS**: Xcode build tools, permission for Screen Recording.
+- **Linux**: PipeWire + GStreamer plugins (VA-API/NVENC).
+- **Network**: mDNS (Avahi/Bonjour) enabled for local discovery.
+- **Credentials**: Valid identity keys (generated on first run or via `wavry-cli`).
 
 ---
 
-## Runbook
+## Runbook: macOS Native UI
 
-1. Start host:
-   - `cargo run -p wavry-server`
-2. Start client:
-   - `cargo run -p wavry-client`
-3. Confirm discovery:
-   - Client should auto-connect via mDNS.
-4. Confirm video:
-   - Frame display should start immediately after HELLO_ACK.
-5. Confirm input:
-   - Mouse/keyboard events should affect the host.
+1. **Launch App**:
+   - `./scripts/run-interactive.sh`
+2. **Setup**:
+   - Complete the Setup Wizard (Display Name + Connectivity Mode).
+3. **Connectivity**:
+   - Use the **Sessions** tab to host or find a peer.
+4. **Settings Verification**:
+   - Toggle **Automatic Hostname** in Account tab.
+   - Verify **Public Key** appears in settings.
+
+---
+
+## Runbook: Encrypted Handshake Verification
+
+To verify the Noise-based secure transport without a GUI:
+
+1. **Build Components**:
+   - `cargo build -p wavry-server -p wavry-client`
+2. **Start Server**:
+   - `./target/debug/wavry-server --listen 127.0.0.1:5000`
+3. **Start Client**:
+   - `./target/debug/wavry-client --connect 127.0.0.1:5000`
+4. **Check Logs**:
+   - Look for `crypto established` and `Msg3 received`.
+   - Verify `Session established` log appears on both ends.
 
 ---
 
 ## Metrics to Capture
 
-- RTT from `RIFT_PING`/`RIFT_PONG`.
-- Packet loss from `RIFT_STATS`.
-- Frame pacing stability (visual + logs).
-- Motion-to-photon latency using a high-speed camera (target < 25 ms).
+- **RTT**: Measured via RIFT Control channel (Ping/Pong).
+- **Jitter**: Tracked in depacketization buffers.
+- **ENC Overhead**: Measure throughput with and without encryption.
+- **Handshake Latency**: Target < 50ms for secure establishment on LAN.
+- **Input Responsiveness**: CGEvent injection latency on macOS.
 
 ---
 
 ## Failure Checks
 
-- No freezes under packet loss (video should degrade).
-- Encoder must not stall capture (drop frames instead of queueing).
-- Input must remain responsive even with video loss.
+- **Handshake Timeout**: Encryption must fail loudly if handshake stalls.
+- **Version Mismatch**: RIFT version must match or connection is rejected.
+- **Identity Spree**: Multiple connection attempts with invalid keys must be blocked.
+- **Degradation**: Video should drop frames under loss, but input must never lag.

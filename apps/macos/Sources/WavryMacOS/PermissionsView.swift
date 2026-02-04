@@ -4,54 +4,69 @@ struct PermissionsView: View {
     @ObservedObject var appState: AppState
     
     var body: some View {
-        VStack(spacing: 30) {
-            Image(systemName: "lock.shield")
-                .font(.system(size: 50))
-                .foregroundColor(.blue)
+        VStack(spacing: 0) {
+            // Icon
+            Image(systemName: "lock.shield.fill")
+                .font(.system(size: 72))
+                .foregroundStyle(.blue)
+                .padding(.bottom, 24)
+                .padding(.top, 60)
             
             Text("Permissions Required")
-                .font(.title2)
+                .font(.largeTitle)
                 .fontWeight(.bold)
+                .padding(.bottom, 12)
             
-            Text("Wavry needs Screen Recording and Accessibility permissions to stream your desktop.")
+            Text("Wavry needs access to screen recording to capture your desktop.\nGranting permission allows sending video to your other devices.")
                 .multilineTextAlignment(.center)
                 .foregroundColor(.secondary)
+                .font(.body)
+                .padding(.horizontal, 60)
+                .padding(.bottom, 40)
             
-            VStack(alignment: .leading, spacing: 15) {
-                PermissionRow(title: "Screen Recording", icon: "display", isGranted: false)
-                PermissionRow(title: "Accessibility", icon: "hand.point.up.left", isGranted: false)
-            }
-            .padding()
-            .background(Color.gray.opacity(0.1))
-            .cornerRadius(10)
-            
-            Button("Grant Permissions") {
-                // Mock granting
-                withAnimation {
-                    appState.hasPermissions = true
+            // Permission Status Item
+            HStack {
+                Image(systemName: "display")
+                    .font(.title2)
+                    .frame(width: 40)
+                    .foregroundColor(.secondary)
+                
+                VStack(alignment: .leading) {
+                    Text("Screen Recording")
+                        .font(.headline)
+                    Text(appState.hasPermissions ? "Access Granted" : "Access Denied / Not Determined")
+                        .font(.caption)
+                        .foregroundColor(appState.hasPermissions ? .green : .secondary)
+                }
+                Spacer()
+                
+                if appState.hasPermissions {
+                    Image(systemName: "checkmark.circle.fill")
+                        .foregroundColor(.green)
+                        .font(.title2)
+                } else {
+                    Button("Open Settings") {
+                        appState.requestPermissions()
+                    }
                 }
             }
-            .buttonStyle(.borderedProminent)
-            .controlSize(.large)
-        }
-        .padding(40)
-        .frame(width: 500)
-    }
-}
-
-struct PermissionRow: View {
-    let title: String
-    let icon: String
-    let isGranted: Bool
-    
-    var body: some View {
-        HStack {
-            Image(systemName: icon)
-                .frame(width: 24)
-            Text(title)
+            .padding()
+            .background(Color(nsColor: .controlBackgroundColor))
+            .cornerRadius(12)
+            .padding(.horizontal, 50)
+            
             Spacer()
-            Image(systemName: isGranted ? "checkmark.circle.fill" : "circle")
-                .foregroundColor(isGranted ? .green : .gray)
+            
+            if !appState.hasPermissions {
+                HStack {
+                    Image(systemName: "info.circle")
+                    Text("You may need to restart the app after granting permissions.")
+                }
+                .font(.caption)
+                .foregroundColor(.secondary)
+                .padding(.bottom, 40)
+            }
         }
+        .frame(width: 600, height: 500)
     }
 }

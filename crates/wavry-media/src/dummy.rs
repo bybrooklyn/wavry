@@ -43,10 +43,10 @@ impl DummyRenderer {
     pub fn new(_config: DecodeConfig) -> Result<Self> {
         Ok(Self)
     }
+}
 
-    pub fn push(&mut self, _data: &[u8], _timestamp_us: u64) -> Result<()> {
-        // Just log (or do nothing)
-        // tracing::debug!("Rendered frame: {} bytes @ {} us", data.len(), timestamp_us);
+impl crate::Renderer for DummyRenderer {
+    fn render(&mut self, _data: &[u8], _timestamp_us: u64) -> Result<()> {
         Ok(())
     }
 }

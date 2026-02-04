@@ -25,7 +25,6 @@ async fn test_encrypted_handshake_over_udp() {
 
         // Receive msg1
         let (len, peer) = server_socket.recv_from(&mut buf).await.unwrap();
-        assert_eq!(buf[0], handshake_type::MSG1);
         
         // Process and send msg2
         let msg2 = server.process_client_hello(&buf[..len]).unwrap();
@@ -33,7 +32,6 @@ async fn test_encrypted_handshake_over_udp() {
 
         // Receive msg3
         let (len, _peer) = server_socket.recv_from(&mut buf).await.unwrap();
-        assert_eq!(buf[0], handshake_type::MSG3);
         server.process_client_finish(&buf[..len]).unwrap();
 
         assert!(server.is_established());
@@ -47,7 +45,8 @@ async fn test_encrypted_handshake_over_udp() {
         assert_eq!(&plaintext, b"Hello from client!");
 
         // Send encrypted response
-        let (packet_id, ciphertext) = server.encrypt(b"Hello from server!").unwrap();
+        let packet_id = 42u64;
+        let ciphertext = server.encrypt(packet_id, b"Hello from server!").unwrap();
         let mut response = Vec::new();
         response.extend_from_slice(&packet_id.to_le_bytes());
         response.extend_from_slice(&ciphertext);
@@ -69,7 +68,6 @@ async fn test_encrypted_handshake_over_udp() {
         .await
         .unwrap()
         .unwrap();
-    assert_eq!(buf[0], handshake_type::MSG2);
 
     // Process msg2 and send msg3
     let msg3 = client.process_server_response(&buf[..len]).unwrap();
@@ -78,7 +76,8 @@ async fn test_encrypted_handshake_over_udp() {
     assert!(client.is_established());
 
     // Send encrypted data
-    let (packet_id, ciphertext) = client.encrypt(b"Hello from client!").unwrap();
+    let packet_id = 100u64;
+    let ciphertext = client.encrypt(packet_id, b"Hello from client!").unwrap();
     let mut packet = Vec::new();
     packet.extend_from_slice(&packet_id.to_le_bytes());
     packet.extend_from_slice(&ciphertext);
@@ -118,8 +117,8 @@ async fn test_encrypted_packet_sequence() {
     // Send multiple packets from client to server
     for i in 0..10 {
         let msg = format!("Message {}", i);
-        let (packet_id, ciphertext) = client.encrypt(msg.as_bytes()).unwrap();
-        assert_eq!(packet_id, i as u64);
+        let packet_id = i as u64;
+        let ciphertext = client.encrypt(packet_id, msg.as_bytes()).unwrap();
         
         let decrypted = server.decrypt(packet_id, &ciphertext).unwrap();
         assert_eq!(decrypted, msg.as_bytes());
@@ -128,8 +127,8 @@ async fn test_encrypted_packet_sequence() {
     // Send multiple packets from server to client
     for i in 0..10 {
         let msg = format!("Response {}", i);
-        let (packet_id, ciphertext) = server.encrypt(msg.as_bytes()).unwrap();
-        assert_eq!(packet_id, i as u64);
+        let packet_id = i as u64;
+        let ciphertext = server.encrypt(packet_id, msg.as_bytes()).unwrap();
         
         let decrypted = client.decrypt(packet_id, &ciphertext).unwrap();
         assert_eq!(decrypted, msg.as_bytes());
@@ -149,12 +148,12 @@ async fn test_out_of_order_decryption() {
     server.process_client_finish(&msg3).unwrap();
 
     // Encrypt three packets
-    let (id0, ct0) = client.encrypt(b"packet 0").unwrap();
-    let (id1, ct1) = client.encrypt(b"packet 1").unwrap();
-    let (id2, ct2) = client.encrypt(b"packet 2").unwrap();
+    let ct0 = client.encrypt(0, b"packet 0").unwrap();
+    let ct1 = client.encrypt(1, b"packet 1").unwrap();
+    let ct2 = client.encrypt(2, b"packet 2").unwrap();
 
     // Decrypt out of order
-    assert_eq!(server.decrypt(id2, &ct2).unwrap(), b"packet 2");
-    assert_eq!(server.decrypt(id0, &ct0).unwrap(), b"packet 0");
-    assert_eq!(server.decrypt(id1, &ct1).unwrap(), b"packet 1");
+    assert_eq!(server.decrypt(2, &ct2).unwrap(), b"packet 2");
+    assert_eq!(server.decrypt(0, &ct0).unwrap(), b"packet 0");
+    assert_eq!(server.decrypt(1, &ct1).unwrap(), b"packet 1");
 }

@@ -7,11 +7,15 @@ description = "Core RIFT protocol types, framing, and constants"
 
 [dependencies]
 anyhow.workspace = true
-bincode.workspace = true
 bitflags.workspace = true
 serde.workspace = true
 thiserror.workspace = true
 uuid.workspace = true
+prost = "0.13"
+crc16 = "0.4"
+
+[build-dependencies]
+prost-build = "0.13"
 
 [dev-dependencies]
 rand = "0.8"

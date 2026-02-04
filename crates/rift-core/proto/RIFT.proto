@@ -1,0 +1,169 @@
+syntax = "proto3";
+
+package rift;
+
+enum Channel {
+    CONTROL = 0;
+    INPUT = 1;
+    MEDIA = 2;
+}
+
+enum Role {
+    HOST = 0;
+    CLIENT = 1;
+}
+
+enum Codec {
+    HEVC = 0;
+    H264 = 1;
+    AV1 = 2;
+}
+
+enum Platform {
+    LINUX = 0;
+    WINDOWS = 1;
+    MACOS = 2;
+    ANDROID = 3;
+    QUEST = 4;
+}
+
+message Resolution {
+    uint32 width = 1;
+    uint32 height = 2;
+}
+
+// ========================
+// Control Messages
+// ========================
+
+message Hello {
+    string client_name = 1;
+    Platform platform = 2;
+    repeated Codec supported_codecs = 3;
+    Resolution max_resolution = 4;
+    uint32 max_fps = 5;
+    uint32 input_caps = 6; // Bitflags
+    uint32 protocol_version = 7;
+}
+
+message HelloAck {
+    bool accepted = 1;
+    Codec selected_codec = 2;
+    Resolution stream_resolution = 3;
+    uint32 fps = 4;
+    uint32 initial_bitrate_kbps = 5;
+    uint32 keyframe_interval_ms = 6;
+    bytes session_id = 7; // 16 bytes UUID
+    uint32 session_alias = 8; // 4 bytes for optimized transport
+}
+
+message Ping {
+    uint64 timestamp_us = 1;
+}
+
+message Pong {
+    uint64 timestamp_us = 1;
+}
+
+message StatsReport {
+    uint32 period_ms = 1;
+    uint32 received_packets = 2;
+    uint32 lost_packets = 3;
+    uint64 rtt_us = 4;
+    uint32 jitter_us = 5;
+}
+
+message CongestionControl {
+    uint32 target_bitrate_kbps = 1;
+    uint32 target_fps = 2;
+}
+
+message ReferenceInvalidation {
+    uint64 last_valid_frame_id = 1;
+}
+
+message ControlMessage {
+    oneof content {
+        Hello hello = 1;
+        HelloAck hello_ack = 2;
+        Ping ping = 3;
+        Pong pong = 4;
+        StatsReport stats = 5;
+        CongestionControl congestion = 6;
+        ReferenceInvalidation rfi = 7;
+    }
+}
+
+// ========================
+// Input Messages
+// ========================
+
+message MouseMove {
+    float x = 1;
+    float y = 2;
+}
+
+message MouseButton {
+    uint32 button = 1;
+    bool pressed = 2;
+}
+
+message Key {
+    uint32 keycode = 1;
+    bool pressed = 2;
+}
+
+message Scroll {
+    float dx = 1;
+    float dy = 2;
+}
+
+message InputMessage {
+    uint64 timestamp_us = 1;
+    oneof event {
+        MouseMove mouse_move = 2;
+        MouseButton mouse_button = 3;
+        Key key = 4;
+        Scroll scroll = 5;
+    }
+}
+
+// ========================
+// Media Messages
+// ========================
+
+message VideoChunk {
+    uint64 frame_id = 1;
+    uint32 chunk_index = 2;
+    uint32 chunk_count = 3;
+    uint64 timestamp_us = 4;
+    bool keyframe = 5;
+    bytes payload = 6;
+}
+
+message FecPacket {
+    uint64 group_id = 1;
+    uint64 first_packet_id = 2;
+    uint32 shard_count = 3;
+    uint32 parity_index = 4; // For Reed-Solomon
+    bytes payload = 5;
+}
+
+message MediaMessage {
+    oneof content {
+        VideoChunk video = 1;
+        FecPacket fec = 2;
+    }
+}
+
+// ========================
+// Top-Level Message
+// ========================
+
+message Message {
+    oneof content {
+        ControlMessage control = 1;
+        InputMessage input = 2;
+        MediaMessage media = 3;
+    }
+}

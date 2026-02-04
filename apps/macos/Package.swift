@@ -21,6 +21,10 @@ let package = Package(
             name: "WavryMacOS",
             dependencies: ["Clibwavry"],
             linkerSettings: [
+                .linkedFramework("VideoToolbox"),
+                .linkedFramework("CoreMedia"),
+                .linkedFramework("CoreVideo"),
+                .linkedFramework("CoreFoundation"),
                 .unsafeFlags([
                     "-L../../target/debug",
                     "-lwavry_ffi"

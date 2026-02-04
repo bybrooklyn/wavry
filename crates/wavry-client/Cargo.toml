@@ -14,6 +14,8 @@ tracing-subscriber.workspace = true
 rift-core = { path = "../../crates/rift-core" }
 rift-crypto = { path = "../../crates/rift-crypto" }
 wavry-media = { path = "../../crates/wavry-media" }
+rand.workspace = true
+hex = "0.4.3"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 evdev = "0.12"

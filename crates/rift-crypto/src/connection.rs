@@ -124,34 +124,19 @@ impl SecureClient {
     /// Returns bytes to send to the server.
     pub fn start_handshake(&mut self) -> Result<Vec<u8>, ConnectionError> {
         let initiator = self.initiator.as_mut().ok_or(ConnectionError::NotEstablished)?;
-        
         let msg = initiator.write_message_1()?;
         self.state = ClientHandshakeState::SentMsg1;
-
-        // Prepend message type
-        let mut packet = Vec::with_capacity(1 + msg.len());
-        packet.push(handshake_type::MSG1);
-        packet.extend_from_slice(&msg);
-
-        Ok(packet)
+        Ok(msg)
     }
 
     /// Process server response (message 2) and generate message 3.
     ///
     /// Returns bytes to send to complete the handshake.
     pub fn process_server_response(&mut self, data: &[u8]) -> Result<Vec<u8>, ConnectionError> {
-        if data.is_empty() {
-            return Err(ConnectionError::InvalidPacket);
-        }
-
-        if data[0] != handshake_type::MSG2 {
-            return Err(ConnectionError::InvalidPacket);
-        }
-
         let initiator = self.initiator.as_mut().ok_or(ConnectionError::NotEstablished)?;
         
         // Read message 2
-        let _payload = initiator.read_message_2(&data[1..])?;
+        let _payload = initiator.read_message_2(data)?;
         self.state = ClientHandshakeState::ReceivedMsg2;
 
         // Write message 3 and transition to transport
@@ -161,19 +146,11 @@ impl SecureClient {
         let initiator = self.initiator.take().ok_or(ConnectionError::NotEstablished)?;
         let session = initiator.into_session()?;
 
-        // Get remote public key for logging/verification
-        let _remote_static = session.remote_static();
-
         // Create cipher from established session (client = initiator)
         self.cipher = Some(PacketCipher::from_session(session, true)?);
         self.state = ClientHandshakeState::Complete;
 
-        // Return message 3
-        let mut packet = Vec::with_capacity(1 + msg3.len());
-        packet.push(handshake_type::MSG3);
-        packet.extend_from_slice(&msg3);
-
-        Ok(packet)
+        Ok(msg3)
     }
 
     /// Check if handshake is complete.
@@ -182,11 +159,9 @@ impl SecureClient {
     }
 
     /// Encrypt a packet for sending.
-    ///
-    /// Returns (packet_id, encrypted_data).
-    pub fn encrypt(&mut self, plaintext: &[u8]) -> Result<(u64, Vec<u8>), ConnectionError> {
+    pub fn encrypt(&mut self, packet_id: u64, plaintext: &[u8]) -> Result<Vec<u8>, ConnectionError> {
         let cipher = self.cipher.as_mut().ok_or(ConnectionError::NotEstablished)?;
-        cipher.encrypt(plaintext)
+        cipher.encrypt(packet_id, plaintext)
     }
 
     /// Decrypt a received packet.
@@ -258,44 +233,24 @@ impl SecureServer {
     ///
     /// Returns bytes to send back to client.
     pub fn process_client_hello(&mut self, data: &[u8]) -> Result<Vec<u8>, ConnectionError> {
-        if data.is_empty() {
-            return Err(ConnectionError::InvalidPacket);
-        }
-
-        if data[0] != handshake_type::MSG1 {
-            return Err(ConnectionError::InvalidPacket);
-        }
-
         let responder = self.responder.as_mut().ok_or(ConnectionError::NotEstablished)?;
 
         // Read message 1
-        let _payload = responder.read_message_1(&data[1..])?;
+        let _payload = responder.read_message_1(data)?;
 
         // Write message 2
         let msg2 = responder.write_message_2(&[])?;
         self.state = ServerHandshakeState::SentMsg2;
 
-        let mut packet = Vec::with_capacity(1 + msg2.len());
-        packet.push(handshake_type::MSG2);
-        packet.extend_from_slice(&msg2);
-
-        Ok(packet)
+        Ok(msg2)
     }
 
     /// Process client message 3 to complete handshake.
     pub fn process_client_finish(&mut self, data: &[u8]) -> Result<(), ConnectionError> {
-        if data.is_empty() {
-            return Err(ConnectionError::InvalidPacket);
-        }
-
-        if data[0] != handshake_type::MSG3 {
-            return Err(ConnectionError::InvalidPacket);
-        }
-
         let responder = self.responder.as_mut().ok_or(ConnectionError::NotEstablished)?;
 
         // Read message 3 and transition
-        let _payload = responder.read_message_3(&data[1..])?;
+        let _payload = responder.read_message_3(data)?;
 
         // Extract session and create cipher (server = responder)
         let responder = self.responder.take().ok_or(ConnectionError::NotEstablished)?;
@@ -313,9 +268,9 @@ impl SecureServer {
     }
 
     /// Encrypt a packet for sending.
-    pub fn encrypt(&mut self, plaintext: &[u8]) -> Result<(u64, Vec<u8>), ConnectionError> {
+    pub fn encrypt(&mut self, packet_id: u64, plaintext: &[u8]) -> Result<Vec<u8>, ConnectionError> {
         let cipher = self.cipher.as_mut().ok_or(ConnectionError::NotEstablished)?;
-        cipher.encrypt(plaintext)
+        cipher.encrypt(packet_id, plaintext)
     }
 
     /// Decrypt a received packet.
@@ -336,16 +291,10 @@ impl Default for SecureServer {
     }
 }
 
-/// Packet-level cipher using ChaCha20-Poly1305 with explicit nonces.
-///
-/// This allows decryption of out-of-order packets (unlike Noise transport).
-struct PacketCipher {
-    /// Cipher for encrypting outgoing packets (we are "initiator" or "responder")
+/// AES-GCM or ChaCha20-Poly1305 based packet cipher.
+pub struct PacketCipher {
     send_cipher: ChaCha20Poly1305,
-    /// Cipher for decrypting incoming packets
     recv_cipher: ChaCha20Poly1305,
-    /// Next packet ID for sending
-    next_packet_id: u64,
 }
 
 impl PacketCipher {
@@ -383,30 +332,25 @@ impl PacketCipher {
             (key_r2i, key_i2r) // Responder sends with R2I key, receives with I2R key
         };
 
-        let send_cipher = ChaCha20Poly1305::new_from_slice(&send_key)
-            .map_err(|e| ConnectionError::EncryptionFailed(e.to_string()))?;
-        let recv_cipher = ChaCha20Poly1305::new_from_slice(&recv_key)
-            .map_err(|e| ConnectionError::EncryptionFailed(e.to_string()))?;
-
-        Ok(Self {
-            send_cipher,
-            recv_cipher,
-            next_packet_id: 0,
-        })
+        Ok(Self::new(&send_key, &recv_key))
     }
 
-    /// Encrypt plaintext with an auto-incrementing nonce.
-    fn encrypt(&mut self, plaintext: &[u8]) -> Result<(u64, Vec<u8>), ConnectionError> {
-        let packet_id = self.next_packet_id;
-        self.next_packet_id = self.next_packet_id.wrapping_add(1);
+    pub fn new(send_key: &[u8; 32], recv_key: &[u8; 32]) -> Self {
+        Self {
+            send_cipher: ChaCha20Poly1305::new(send_key.into()),
+            recv_cipher: ChaCha20Poly1305::new(recv_key.into()),
+        }
+    }
 
+    /// Encrypt plaintext with the given packet_id as nonce.
+    pub fn encrypt(&mut self, packet_id: u64, plaintext: &[u8]) -> Result<Vec<u8>, ConnectionError> {
         let nonce = packet_id_to_nonce(packet_id);
 
         let ciphertext = self.send_cipher
             .encrypt(&nonce, plaintext)
             .map_err(|e| ConnectionError::EncryptionFailed(e.to_string()))?;
 
-        Ok((packet_id, ciphertext))
+        Ok(ciphertext)
     }
 
     /// Decrypt ciphertext with the given packet_id as nonce.
@@ -438,15 +382,12 @@ mod tests {
 
         // Client sends message 1
         let msg1 = client.start_handshake().unwrap();
-        assert_eq!(msg1[0], handshake_type::MSG1);
 
         // Server processes message 1, sends message 2
         let msg2 = server.process_client_hello(&msg1).unwrap();
-        assert_eq!(msg2[0], handshake_type::MSG2);
 
         // Client processes message 2, sends message 3
         let msg3 = client.process_server_response(&msg2).unwrap();
-        assert_eq!(msg3[0], handshake_type::MSG3);
 
         // Server processes message 3
         server.process_client_finish(&msg3).unwrap();
@@ -469,35 +410,9 @@ mod tests {
 
         // Client sends encrypted message
         let plaintext = b"Hello, secure server!";
-        let (packet_id, ciphertext) = client.encrypt(plaintext).unwrap();
+        let ciphertext = client.encrypt(0, plaintext).unwrap();
 
-        // Note: Due to key derivation asymmetry, client and server
-        // have different send/recv keys. This test verifies the
-        // encryption/decryption flow works for each side independently.
-        
-        // Test client can decrypt its own encrypted message
-        // (This is a simplified test - in practice client→server
-        // encryption would be decrypted by server with reverse keys)
-    }
-
-    #[test]
-    fn test_packet_ids_increment() {
-        let mut client = SecureClient::new().unwrap();
-        let mut server = SecureServer::new().unwrap();
-
-        // Complete handshake
-        let msg1 = client.start_handshake().unwrap();
-        let msg2 = server.process_client_hello(&msg1).unwrap();
-        let msg3 = client.process_server_response(&msg2).unwrap();
-        server.process_client_finish(&msg3).unwrap();
-
-        // Encrypt multiple messages
-        let (id1, _) = client.encrypt(b"msg1").unwrap();
-        let (id2, _) = client.encrypt(b"msg2").unwrap();
-        let (id3, _) = client.encrypt(b"msg3").unwrap();
-
-        assert_eq!(id1, 0);
-        assert_eq!(id2, 1);
-        assert_eq!(id3, 2);
+        let decrypted = server.decrypt(0, &ciphertext).unwrap();
+        assert_eq!(decrypted, plaintext);
     }
 }

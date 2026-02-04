@@ -15,3 +15,4 @@ env_logger = "0.10"
 
 # Internal dependencies
 wavry-common = { path = "../wavry-common" }
+wavry-media = { version = "0.0.1", path = "../wavry-media" }

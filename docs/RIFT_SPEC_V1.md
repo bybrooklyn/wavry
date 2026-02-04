@@ -1,192 +1,155 @@
-# RIFT Spec v0.0.1
+# RIFT Protocol Specification v0.1.0
 
-**Status:** Experimental and unstable. Expect breaking changes.
-
-**Change Discipline:** This spec evolves in lockstep with code. Any behavioral
-change must be documented here immediately.
+**Status:** Current stable baseline for development.
+**Change Discipline:** This document is the source of truth. Changes to protocol behavior must be updated here.
 
 ---
 
-## Channel Types
+## 1. Overview
 
-A session consists of three logical channels:
+RIFT (Real-time Interactive Frame Transport) is a high-performance, low-latency UDP protocol designed for remote desktop and game streaming. It emphasizes minimal overhead, strong encryption, and flexible error correction.
 
-1. **Control**
-   - Reliable
-   - Handshake, configuration, keepalive, reporting
-
-2. **Input**
-   - Low-latency
-   - Unreliable allowed
-   - Always prioritized
-
-3. **Media**
-   - Unreliable
-   - Frame-paced
-   - Drop frames on loss
-
-Priority order: Control > Input > Media.
+A RIFT session consists of three logical planes:
+1.  **Secure Plane**: Noise-based encryption establishmemt.
+2.  **Physical Plane**: UDP framing, checksums, and session multiplexing.
+3.  **Logical Plane**: Protobuf-encoded control, input, and media messages.
 
 ---
 
-## Packet Encoding (v0.0.1 Implementation)
+## 2. Physical Plane (Framing)
 
-The current implementation uses a single UDP socket and serializes packets with
-`bincode` (v1). Each datagram is a full `RIFT_PACKET` encoded structure; there is
-no additional length prefix beyond the UDP datagram boundary.
+All RIFT traffic travels over UDP. Each datagram starts with a Physical Header.
 
-### RIFT_PACKET
+### 2.1 Header Formats
 
-Fields:
-- version: u16 (currently `1`)
-- session_id: u128
-- packet_id: u64 (monotonic per session)
-- channel: enum { control, input, media }
-- message: union (control | input | video | fec)
+RIFT uses two header formats: **Handshake** (large ID) and **Transport** (compact alias).
 
-Notes:
-- The host generates `session_id` and includes it in `RIFT_HELLO_ACK`.
-- All packets **after** `RIFT_HELLO_ACK` must include the assigned `session_id`.
-- Packets **before** `RIFT_HELLO_ACK` must use `session_id = 0`.
-- `RIFT_HELLO_ACK` packets must use the assigned `session_id` in both the packet
-  header and the ack body; they must match.
-- Packets must use the appropriate priority order (Control > Input > Media)
-  when scheduled for send.
-- `packet_id` is global per session; FEC groups only include contiguous media
-  packets and reset on gaps or interleaved control traffic.
+#### Handshake Header (30 bytes)
+Used during initial connection establishment.
+| Offset | Size | Field | Description |
+| :--- | :--- | :--- | :--- |
+| 0 | 2 | Magic | `0x52 0x49` ("RI") |
+| 2 | 2 | Version | `0x00 0x01` |
+| 4 | 16 | Session ID | 128-bit unique session identifier |
+| 20 | 8 | Packet ID | Monotonic 64-bit counter |
+| 28 | 2 | Checksum | CRC16-KERMIT over bytes [0..28] |
 
----
+#### Transport Header (18 bytes)
+Used for all traffic after the session is established.
+| Offset | Size | Field | Description |
+| :--- | :--- | :--- | :--- |
+| 0 | 2 | Magic | `0x52 0x49` ("RI") |
+| 2 | 2 | Version | `0x00 0x01` |
+| 4 | 4 | Session Alias | 32-bit compact session identifier |
+| 8 | 8 | Packet ID | Monotonic 64-bit counter |
+| 16 | 2 | Checksum | CRC16-KERMIT over bytes [0..16] |
 
-## Handshake
+**Note on Detection:** A receiver distinguishes these by the value at offset 4. If the first 4 bytes of the ID space are zero AND the total length is at least 30 bytes, it is treated as a Handshake Header.
 
-### Client → Host: RIFT_HELLO
-
-Fields:
-- client_name: string
-- platform: enum { linux, windows, macos, freebsd, openbsd, netbsd }
-- supported_codecs: list { hevc, h264 }
-- max_resolution: (u16 width, u16 height)
-- max_fps: u16
-- input_caps: bitflags
+### 2.2 Integrity
+All packets are protected by a **CRC16-KERMIT** checksum. The checksum is calculated over the header (excluding the checksum field itself) and verified by the receiver. Packets with mismatched checksums MUST be dropped.
 
 ---
 
-### Host → Client: RIFT_HELLO_ACK
+## 3. Secure Transport (Noise)
 
-Fields:
-- accepted: bool
-- selected_codec: enum { hevc, h264 }
-- stream_resolution: (u16 width, u16 height)
-- fps: u16
-- initial_bitrate_kbps: u32
-- keyframe_interval_ms: u32
-- session_id: u128 (host-generated; non-zero when accepted)
+Before the RIFT logical handshake occurs, peers MUST establish an encrypted session using the **Noise Protocol Framework**.
 
-Streaming begins immediately after ACK.
+### 3.1 Handshake Pattern
+RIFT uses the **Noise_XX_25519_ChaChaPoly_BLAKE2b** pattern by default:
+- **XX**: Full 3-way handshake with mutual identity exchange.
+- **IK**: (Proposed) 0-RTT resumption for re-connections.
 
-### Handshake Rules (v0.0.1)
+### 3.2 Key Rotation
+Packet IDs are 64-bit, providing ample headroom. However, keys SHOULD be rotated if the `packet_id` wraps or after 24 hours of continuous streaming.
 
-- Client must send `RIFT_HELLO` before receiving `RIFT_HELLO_ACK`.
-- Host must receive `RIFT_HELLO` before sending `RIFT_HELLO_ACK`.
-- Duplicate `RIFT_HELLO` messages are protocol errors.
-- `RIFT_HELLO_ACK.accepted = true` requires a non-zero `session_id`.
-- `RIFT_HELLO_ACK.accepted = false` indicates rejection; session is not established.
-- `RIFT_HELLO` and `RIFT_HELLO_ACK` must be sent on the Control channel.
-- Packets must have matching `channel` and `message` types.
-- Peers must reject or ignore packets that violate ordering, have mismatched
-  `session_id`, or send non-control traffic before session establishment.
+### 3.3 Protocol Wrapping
+Noise handshake messages (MSG1, MSG2, MSG3) are transmitted as the **payload** of Physical Packets.
+- MSG1/MSG2 typically use the **Handshake Header**.
+- MSG3/Transport typically use the **Transport Header**.
 
 ---
 
-## Video Messages
+## 4. Logical Plane (Protobuf)
 
-### RIFT_VIDEO_CHUNK
+Once the encryption is established, all logical messages are Protobuf v3 encoded.
 
-Fields:
-- frame_id: u64
-- chunk_index: u16
-- chunk_count: u16
-- timestamp_us: u64
-- keyframe: bool
-- payload: bytes (encoded video chunk)
+### 4.1 Message Structure
+The top-level `Message` contains a `oneof` content field:
+- **Control**: Session management (Hello, Ping, Stats).
+- **Input**: User interaction (Keyboard, Mouse, Gamepad).
+- **Media**: Stream data (Video chunks, FEC).
 
-Rules:
-- Encoded frames may be split into multiple chunks.
-- The receiver must reassemble chunks by `frame_id`.
-- If a frame is incomplete past a small deadline (implementation-defined), drop it.
-- No retransmission.
-- No reordering beyond reassembly.
+### 4.2 Logical Message Types
 
----
+#### Control Messages
+- **Hello**: Client capabilities and preferences.
+- **HelloAck**: Host accepted parameters and session identifiers.
+- **Ping/Pong**: Keepalives and RTT measurement.
+- **StatsReport**: Loss data for congestion control.
+- **CongestionControl**: Host signals to adjust bitrate/FPS.
+- **ReferenceInvalidation (RFI)**: Client signals the last successfully rendered `frame_id`. The host encoder SHOULD use this frame as a reference for future P-frames to recover from loss without a full I-frame.
 
-## FEC Messages (Basic XOR)
+#### Input Messages
+- **MouseButton**: 32-bit button ID and pressed state.
+- **Key**: 32-bit keycode and pressed state.
+- **MouseMove**: Normalized `0.0` to `1.0` float coordinates.
+- **Scroll**: Horizontal and vertical scroll offsets.
 
-### RIFT_FEC
-
-Fields:
-- group_id: u64
-- first_packet_id: u64
-- shard_count: u8 (number of data packets)
-- max_payload_len: u16
-- payload_sizes: list<u16> (length = shard_count)
-- parity_payload: bytes (XOR parity over padded payloads)
-
-Rules:
-- One parity packet covers a contiguous group of `shard_count` media packets.
-- This recovers **at most one** lost packet per group.
-- If more than one packet is missing, the group is unrecoverable.
-- FEC packets are sent on the Media channel.
-- Parity is computed over the full encoded media packet bytes (header + payload).
-- Step Two uses XOR parity; `leopard-rs` is planned for production-grade FEC.
+#### Media Messages
+- **VideoChunk**: Segmented encoded video data.
+- **FecPacket**: Parity data for sequence-based error recovery.
 
 ---
 
-## Input Messages
+## 5. Media Handling
 
-### RIFT_INPUT
+### 5.1 Video Chunking
+Large video frames are split into `VideoChunk` messages.
+- `chunk_index` / `chunk_count` facilitate reassembly.
+- `frame_id` groups chunks.
+- Chunks for a single frame SHOULD be sent in rapid succession.
 
-Supported events:
-- Keyboard press/release (keycode: u32)
-- Mouse button press/release (button: u8)
-- Relative mouse motion (dx, dy)
-- Optional absolute mouse motion (x, y)
-
-Fields:
-- event: enum (typed fields per event)
-- timestamp_us: u64
-
----
-
-## Keepalive & Reporting
-
-- Client sends RIFT_PING every 500 ms
-- Host replies with RIFT_PONG
-- RTT logged for diagnostics only
-
-### RIFT_STATS
-
-Fields:
-- period_ms: u32
-- received_packets: u32
-- lost_packets: u32
-- rtt_us: u64
-
-Rules:
-- Stats are sent on the Control channel.
-- Loss is computed over the last period.
+### 5.2 Forward Error Correction (FEC)
+RIFT uses an interleaved XOR-based FEC by default.
+- A `FecPacket` contains a parity block for a group of `N` media packets.
+- **Proposed**: Migration to Reed-Solomon (Leopard) for multi-packet recovery.
 
 ---
 
-## Latency Rules
+## 6. Future Roadmap & Improvements
 
-- Never buffer more than one frame
-- Drop frames instead of delaying
-- Input must not wait on video
-- Frame pacing is mandatory
+The following features are planned for v0.2.0 and beyond.
 
----
+### 6.1 RIFT-CC (Congestion Control)
+A delay-based congestion control algorithm (inspired by BBR and GCC) to:
+- Dynamically adjust `initial_bitrate_kbps`.
+- Adjust FEC redundancy ratio based on packet loss.
+- Signal `target_fps` to the encoder.
 
-## Versioning
+### 6.2 Zero-RTT Resumption
+Using Noise PSK (Pre-Shared Key) or Session Tickets to eliminate the 3-packet handshake overhead on reconnection.
 
-This document describes RIFT v0.0.1 (experimental).
-Backward compatibility is not guaranteed.
+### 6.3 PMTU Discovery
+Dynamic path MTU discovery to find the largest possible datagram size without fragmentation, maximizing throughput.
+
+### 6.4 Zero-Copy Media Framing
+Optimizing the `PhysicalPacket` -> `VideoChunk` path to avoid intermediate buffer allocations. This involves using a specialized "Tail-Header" for media packets where Protobuf metadata is appended after the raw NAL units.
+
+### 6.5 Audio Synchronization
+Implementation of Opus-based audio channels with Lip-Sync timestamps locked to `frame_id`.
+
+### 6.6 Z-Frame Padding (Pipe Warming)
+Optional low-priority "Zero Frames" sent during idle periods to keep NAT mappings active and prevent ISP "sleep" states from inducing first-packet jitter.
+
+### 6.7 Header Bitfields
+Optimizing the `PhysicalPacket` header to use bitfields for `Option` flags (e.g., `has_alias`, `is_encrypted`), saving several bytes per packet.
+
+### 6.8 Multi-Link & Mobility
+Support for seamless session migration between network interfaces (e.g., Wi-Fi to 5G) using a signed "Session Rebind" message.
+
+### 6.9 Tiled Streaming
+Parallelizing high-resolution streams (4K/8K) by splitting frames into tiles, each with independent FEC and timestamps, allowing for distributed decoding.
+
+### 6.10 Hybrid QUIC Support
+Exploring the use of standard QUIC as a parallel transport specifically for the **Control** and **Input** channels, leveraging its mature congestion control and reliability, while keeping `RIFT-UDP` for high-throughput Media.
