@@ -1,38 +1,43 @@
-# Rust
-*.rs linguist-language=Rust
-Cargo.toml linguist-language=TOML
+# Handle line endings automatically
+* text=auto
+
+# Ensure LF for source files (cross-platform consistency)
+*.rs text eol=lf
+*.toml text eol=lf
+*.proto text eol=lf
+*.md text eol=lf
+*.sh text eol=lf
+*.js text eol=lf
+*.ts text eol=lf
+*.svelte text eol=lf
+*.css text eol=lf
+*.html text eol=lf
+*.json text eol=lf
+
+# Binary files
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.pdf binary
+*.mov binary
+*.mp4 binary
+
+# Linguist overrides
+# Mark generated and lockfiles so they don't clutter diffs/stats
 Cargo.lock linguist-generated=true
-
-# Web / Svelte
-*.svelte linguist-language=Svelte
-*.ts linguist-language=TypeScript
-*.js linguist-language=JavaScript
-*.css linguist-language=CSS
-*.html linguist-language=HTML
-*.json linguist-language=JSON
-
-# Build & Dependencies (Ignored)
-target/ linguist-generated=true
-**/target/ linguist-generated=true
-node_modules/ linguist-generated=true
-**/node_modules/ linguist-generated=true
-dist/ linguist-generated=true
-**/dist/ linguist-generated=true
-out/ linguist-generated=true
-**/out/ linguist-generated=true
-build/ linguist-generated=true
-**/build/ linguist-generated=true
-.svelte-kit/ linguist-generated=true
-**/.svelte-kit/ linguist-generated=true
-
-# Lockfiles
-bun.lock linguist-generated=true
-bun.lockb linguist-generated=true
-yarn.lock linguist-generated=true
 package-lock.json linguist-generated=true
+bun.lockb linguist-generated=true
 pnpm-lock.yaml linguist-generated=true
 
+# Mark build artifacts if they ever leak into the tree
+/target/ linguist-generated=true
+**/node_modules/ linguist-generated=true
+**/dist/ linguist-generated=true
+**/build/ linguist-generated=true
+.svelte-kit/ linguist-generated=true
+
 # Documentation
-*.md linguist-documentation=true
-LICENSE linguist-documentation=true
 docs/ linguist-documentation=true
+LICENSE linguist-documentation=true
