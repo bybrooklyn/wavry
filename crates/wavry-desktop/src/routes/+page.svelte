@@ -1,156 +1,202 @@
 <script lang="ts">
-  import { invoke } from "@tauri-apps/api/core";
+  import SidebarIcon from "$lib/components/SidebarIcon.svelte";
+  import HostCard from "$lib/components/HostCard.svelte";
+  import { appState } from "$lib/appState.svelte";
 
-  let name = $state("");
-  let greetMsg = $state("");
-
-  async function greet(event: Event) {
-    event.preventDefault();
-    // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
-    greetMsg = await invoke("greet", { name });
-  }
+  let activeTab = $state("sessions");
 </script>
 
-<main class="container">
-  <h1>Welcome to Tauri + Svelte</h1>
+<div class="content-view">
+  <!-- 1. Icon Sidebar -->
+  <aside class="sidebar">
+    <div class="top-icons">
+      <SidebarIcon
+        icon="tabSessions"
+        active={activeTab === "sessions"}
+        onclick={() => (activeTab = "sessions")}
+      />
+    </div>
 
-  <div class="row">
-    <a href="https://vite.dev" target="_blank">
-      <img src="/vite.svg" class="logo vite" alt="Vite Logo" />
-    </a>
-    <a href="https://tauri.app" target="_blank">
-      <img src="/tauri.svg" class="logo tauri" alt="Tauri Logo" />
-    </a>
-    <a href="https://svelte.dev" target="_blank">
-      <img src="/svelte.svg" class="logo svelte-kit" alt="SvelteKit Logo" />
-    </a>
-  </div>
-  <p>Click on the Tauri, Vite, and SvelteKit logos to learn more.</p>
+    <div class="spacer"></div>
 
-  <form class="row" onsubmit={greet}>
-    <input id="greet-input" placeholder="Enter a name..." bind:value={name} />
-    <button type="submit">Greet</button>
-  </form>
-  <p>{greetMsg}</p>
-</main>
+    <SidebarIcon
+      icon="tabSettings"
+      active={activeTab === "settings"}
+      onclick={() => (activeTab = "settings")}
+    />
+  </aside>
+
+  <!-- 2. Main Content Area -->
+  <main class="main-content">
+    <header class="top-bar">
+      <div class="user-badge">
+        <span class="status-dot"></span>
+        <span class="username">{appState.effectiveDisplayName}</span>
+      </div>
+    </header>
+
+    <div class="tab-content">
+      {#if activeTab === "sessions"}
+        <section class="sessions-view">
+          <div class="header">
+            <h1>Sessions</h1>
+            <p>Manage your local host and active connections.</p>
+          </div>
+
+          <div class="scroll-area">
+            <div class="section">
+              <span class="section-label">LOCAL HOST</span>
+              <div class="card-container">
+                <HostCard {appState} />
+              </div>
+            </div>
+
+            <div class="section">
+              <span class="section-label">ACTIVE SESSIONS</span>
+              <div class="placeholder-box">
+                <span class="p-icon">🚫</span>
+                <span class="p-text">No active sessions</span>
+              </div>
+            </div>
+          </div>
+        </section>
+      {:else}
+        <section class="settings-placeholder">
+          <h1>Settings</h1>
+          <p>
+            Settings implementation matches tokens. Use tab buttons to switch
+            views.
+          </p>
+        </section>
+      {/if}
+    </div>
+  </main>
+</div>
 
 <style>
-.logo.vite:hover {
-  filter: drop-shadow(0 0 2em #747bff);
-}
-
-.logo.svelte-kit:hover {
-  filter: drop-shadow(0 0 2em #ff3e00);
-}
-
-:root {
-  font-family: Inter, Avenir, Helvetica, Arial, sans-serif;
-  font-size: 16px;
-  line-height: 24px;
-  font-weight: 400;
-
-  color: #0f0f0f;
-  background-color: #f6f6f6;
-
-  font-synthesis: none;
-  text-rendering: optimizeLegibility;
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
-  -webkit-text-size-adjust: 100%;
-}
-
-.container {
-  margin: 0;
-  padding-top: 10vh;
-  display: flex;
-  flex-direction: column;
-  justify-content: center;
-  text-align: center;
-}
-
-.logo {
-  height: 6em;
-  padding: 1.5em;
-  will-change: filter;
-  transition: 0.75s;
-}
-
-.logo.tauri:hover {
-  filter: drop-shadow(0 0 2em #24c8db);
-}
-
-.row {
-  display: flex;
-  justify-content: center;
-}
-
-a {
-  font-weight: 500;
-  color: #646cff;
-  text-decoration: inherit;
-}
-
-a:hover {
-  color: #535bf2;
-}
-
-h1 {
-  text-align: center;
-}
-
-input,
-button {
-  border-radius: 8px;
-  border: 1px solid transparent;
-  padding: 0.6em 1.2em;
-  font-size: 1em;
-  font-weight: 500;
-  font-family: inherit;
-  color: #0f0f0f;
-  background-color: #ffffff;
-  transition: border-color 0.25s;
-  box-shadow: 0 2px 2px rgba(0, 0, 0, 0.2);
-}
-
-button {
-  cursor: pointer;
-}
-
-button:hover {
-  border-color: #396cd8;
-}
-button:active {
-  border-color: #396cd8;
-  background-color: #e8e8e8;
-}
-
-input,
-button {
-  outline: none;
-}
-
-#greet-input {
-  margin-right: 5px;
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    color: #f6f6f6;
-    background-color: #2f2f2f;
+  .content-view {
+    display: flex;
+    height: 100vh;
+    width: 100vw;
   }
 
-  a:hover {
-    color: #24c8db;
+  .sidebar {
+    width: 60px;
+    background-color: var(--colors-bg-sidebar);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: var(--spacing-xl) 0;
+    gap: var(--spacing-xl);
   }
 
-  input,
-  button {
-    color: #ffffff;
-    background-color: #0f0f0f98;
+  .spacer {
+    flex: 1;
   }
-  button:active {
-    background-color: #0f0f0f69;
-  }
-}
 
+  .main-content {
+    flex: 1;
+    background-color: var(--colors-bg-base);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  .top-bar {
+    display: flex;
+    justify-content: flex-end;
+    padding: var(--spacing-xl) var(--spacing-xxl) 0;
+  }
+
+  .user-badge {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px;
+    background-color: var(--colors-bg-elevation3);
+    border-radius: var(--radius-md);
+    cursor: pointer;
+  }
+
+  .status-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background-color: var(--colors-accent-success);
+  }
+
+  .username {
+    font-size: var(--font-size-caption);
+    font-weight: var(--font-weight-bold);
+    color: var(--colors-text-primary);
+  }
+
+  .tab-content {
+    flex: 1;
+    overflow-y: auto;
+  }
+
+  .sessions-view .header {
+    padding: var(--spacing-xl) var(--spacing-xxl) var(--spacing-xxl);
+  }
+
+  .sessions-view h1 {
+    font-size: var(--font-size-titleMd);
+    font-weight: var(--font-weight-light);
+    color: var(--colors-text-primary);
+    margin-bottom: 5px;
+  }
+
+  .sessions-view p {
+    font-size: var(--font-size-body);
+    color: var(--colors-text-secondary);
+  }
+
+  .scroll-area {
+    display: flex;
+    flex-direction: column;
+    gap: var(--spacing-xxl);
+    padding-bottom: var(--spacing-xxl);
+  }
+
+  .section label,
+  .section .section-label {
+    display: block;
+    font-size: var(--font-size-caption);
+    font-weight: var(--font-weight-bold);
+    color: var(--colors-text-secondary);
+    padding: 0 var(--spacing-xxl);
+    margin-bottom: 10px;
+  }
+
+  .card-container {
+    padding: 0 var(--spacing-xxl);
+  }
+
+  .placeholder-box {
+    margin: 0 var(--spacing-xxl);
+    height: 120px;
+    background-color: var(--colors-bg-elevation1);
+    border-radius: var(--radius-md);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 12px;
+  }
+
+  .p-icon {
+    font-size: 30px;
+    opacity: 0.3;
+  }
+
+  .p-text {
+    font-size: var(--font-size-body);
+    color: var(--colors-text-secondary);
+    opacity: 0.5;
+  }
+
+  .settings-placeholder {
+    padding: var(--spacing-xxl);
+  }
 </style>

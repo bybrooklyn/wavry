@@ -1,0 +1,17 @@
+{
+    "icons": {
+        "tabSessions": "desktopcomputer",
+        "tabSettings": "gearshape.fill",
+        "copy": "doc.on.doc",
+        "identity": "person.circle.fill",
+        "success": "checkmark.circle.fill",
+        "noSessions": "network.slash",
+        "hostDefault": "macpro.gen3.fill",
+        "connectivityService": "cloud.fill",
+        "connectivityDirect": "network",
+        "connectivityCustom": "server.rack",
+        "permissions": "lock.shield.fill",
+        "screenRecording": "display",
+        "info": "info.circle"
+    }
+}

@@ -19,11 +19,11 @@ struct SettingsView: View {
                     .font(.body)
                     .foregroundColor(.gray)
             }
-            .padding(.horizontal, 30)
-            .padding(.top, 20)
+            .padding(.horizontal, .themeSpacing.xxl)
+            .padding(.top, .themeSpacing.xl)
             
             // Sub-tabs
-            HStack(spacing: 20) {
+            HStack(spacing: .themeSpacing.xl) {
                 SettingsTabButton(title: "Client", active: activeSettingsTab == .client) { activeSettingsTab = .client }
                 SettingsTabButton(title: "Host", active: activeSettingsTab == .host) { activeSettingsTab = .host }
                 SettingsTabButton(title: "Network", active: activeSettingsTab == .network) { activeSettingsTab = .network }
@@ -34,11 +34,11 @@ struct SettingsView: View {
                     .font(.caption2)
                     .foregroundColor(.gray.opacity(0.5))
             }
-            .padding(.horizontal, 30)
-            .padding(.top, 20)
-            .padding(.bottom, 10)
+            .padding(.horizontal, .themeSpacing.xxl)
+            .padding(.top, .themeSpacing.xl)
+            .padding(.bottom, .themeSpacing.sm)
             
-            Divider().background(Color.white.opacity(0.1)).padding(.horizontal, 30)
+            Divider().background(Color.borderSubtle).padding(.horizontal, .themeSpacing.xxl)
             
             // Content
             ScrollView {
@@ -51,7 +51,7 @@ struct SettingsView: View {
                     case .account: accountSettings
                     }
                 }
-                .padding(30)
+                .padding(.themeSpacing.xxl)
             }
             
             // Footer Action
@@ -62,15 +62,15 @@ struct SettingsView: View {
                 }) {
                     Text("Apply Changes")
                         .fontWeight(.bold)
-                        .padding(.horizontal, 30)
-                        .padding(.vertical, 10)
-                        .background(Color.blue)
+                        .padding(.horizontal, .themeSpacing.xxl)
+                        .padding(.vertical, .themeSpacing.sm)
+                        .background(Color.accentPrimary)
                         .foregroundColor(.white)
-                        .cornerRadius(6)
+                        .cornerRadius(.themeRadius.md)
                 }
                 .buttonStyle(.plain)
             }
-            .padding(20)
+            .padding(.themeSpacing.xl)
             .background(Color(white: 0.1))
         }
     }
@@ -100,7 +100,7 @@ struct SettingsView: View {
         VStack(alignment: .leading, spacing: 20) {
             SettingsSectionHeader(title: "Hosting")
             SettingsRow(label: "Hosting Enabled", sublabel: "Allow connections to this computer.", control: Toggle("", isOn: .constant(true)).labelsHidden())
-            SettingsRow(label: "Host Name", sublabel: "Identifies your computer to others.", control: TextField("Mac", text: $appState.displayName).textFieldStyle(.plain).padding(6).background(Color(white: 0.15)).cornerRadius(4).frame(width: 200))
+            SettingsRow(label: "Host Name", sublabel: "Identifies your computer to others.", control: TextField("Mac", text: $appState.displayName).textFieldStyle(.plain).padding(6).background(Color.bgElevation1).cornerRadius(.themeRadius.sm).frame(width: 200))
             
             SettingsSectionHeader(title: "Streaming")
             SettingsRow(label: "Resolution", sublabel: "Target resolution for host capture.", control: Picker("", selection: $appState.resolution) {
@@ -124,8 +124,8 @@ struct SettingsView: View {
     var networkSettings: some View {
         VStack(alignment: .leading, spacing: 20) {
             SettingsSectionHeader(title: "Ports")
-            SettingsRow(label: "Client Port", sublabel: "UDP port used for client traffic.", control: TextField("0", value: $appState.clientPort, formatter: NumberFormatter()).textFieldStyle(.plain).padding(6).background(Color(white: 0.15)).cornerRadius(4).frame(width: 80))
-            SettingsRow(label: "Host Start Port", sublabel: "Starting port for host listeners.", control: TextField("0", value: $appState.hostStartPort, formatter: NumberFormatter()).textFieldStyle(.plain).padding(6).background(Color(white: 0.15)).cornerRadius(4).frame(width: 80))
+            SettingsRow(label: "Client Port", sublabel: "UDP port used for client traffic.", control: TextField("0", value: $appState.clientPort, formatter: NumberFormatter()).textFieldStyle(.plain).padding(6).background(Color.bgElevation1).cornerRadius(.themeRadius.sm).frame(width: 80))
+            SettingsRow(label: "Host Start Port", sublabel: "Starting port for host listeners.", control: TextField("0", value: $appState.hostStartPort, formatter: NumberFormatter()).textFieldStyle(.plain).padding(6).background(Color.bgElevation1).cornerRadius(.themeRadius.sm).frame(width: 80))
             
             SettingsSectionHeader(title: "Discovery")
             SettingsRow(label: "UPnP", sublabel: "Enable automatic port forwarding.", control: Toggle("", isOn: $appState.upnpEnabled).labelsHidden())
@@ -145,7 +145,7 @@ struct SettingsView: View {
             SettingsRow(label: "Public Key", sublabel: "Cryptographic device fingerprint.", control: HostKeyView(key: appState.publicKey))
             
             SettingsSectionHeader(title: "Infrastructure")
-            SettingsRow(label: "Auth Server", sublabel: "Wavry Master Server for signaling.", control: TextField("URL", text: $appState.authServer).textFieldStyle(.plain).padding(6).background(Color(white: 0.15)).cornerRadius(4).frame(width: 250))
+            SettingsRow(label: "Auth Server", sublabel: "Wavry Master Server for signaling.", control: TextField("URL", text: $appState.authServer).textFieldStyle(.plain).padding(6).background(Color.bgElevation1).cornerRadius(.themeRadius.sm).frame(width: 250))
             
             Button("Hard Reset Application") {
                 appState.resetSetup()
@@ -165,8 +165,8 @@ struct SettingsSectionHeader: View {
         Text(title.uppercased())
             .font(.caption)
             .fontWeight(.bold)
-            .foregroundColor(.blue.opacity(0.8))
-            .padding(.top, 10)
+            .foregroundColor(.accentPrimary.opacity(0.8))
+            .padding(.top, .themeSpacing.sm)
     }
 }
 
@@ -180,19 +180,19 @@ struct SettingsRow<Control: View>: View {
             VStack(alignment: .leading, spacing: 4) {
                 Text(label)
                     .font(.body)
-                    .foregroundColor(.white)
+                    .foregroundColor(.textPrimary)
                 Text(sublabel)
                     .font(.caption)
-                    .foregroundColor(.gray)
+                    .foregroundColor(.textSecondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             
             control
         }
-        .padding(12)
+        .padding(.themeSpacing.md)
         .background(Color.white.opacity(0.02))
-        .cornerRadius(8)
+        .cornerRadius(.themeRadius.lg)
         .contentShape(Rectangle()) // Makes the whole area clickable for focus
     }
 }
@@ -208,10 +208,10 @@ struct SettingsTabButton: View {
                 Text(title)
                     .font(.subheadline)
                     .fontWeight(active ? .bold : .regular)
-                    .foregroundColor(active ? .blue : .gray)
+                    .foregroundColor(active ? .accentPrimary : .textSecondary)
                 
                 Rectangle()
-                    .fill(active ? Color.blue : Color.clear)
+                    .fill(active ? Color.accentPrimary : Color.clear)
                     .frame(height: 2)
             }
             .contentShape(Rectangle())
@@ -226,7 +226,7 @@ struct HostKeyView: View {
         HStack {
             Text(key.prefix(8) + "..." + key.suffix(8))
                 .font(.system(.caption, design: .monospaced))
-                .foregroundColor(.gray)
+                .foregroundColor(.textSecondary)
             Button(action: {
                 #if os(macOS)
                 NSPasteboard.general.clearContents()
@@ -235,7 +235,7 @@ struct HostKeyView: View {
             }) {
                 Image(systemName: "doc.on.doc")
                     .font(.caption)
-                    .foregroundColor(.blue)
+                    .foregroundColor(.accentPrimary)
             }
             .buttonStyle(.plain)
         }

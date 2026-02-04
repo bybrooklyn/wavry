@@ -1,6 +1,7 @@
+#![allow(dead_code)]
 use anyhow::{Result};
 use crate::{InputEvent, MouseButton};
-use std::ptr::{null, null_mut};
+use std::ptr::null;
 use std::ffi::c_void;
 
 // Manual struct defs to avoid import issues

@@ -6,9 +6,8 @@ mod host {
     use mdns_sd::{ServiceDaemon, ServiceInfo};
     use rift_core::{
         chunk_video_payload, decode_msg, encode_msg, PhysicalPacket, Codec as RiftCodec,
-        ControlMessage as ProtoControl, FecBuilder, Handshake, HandshakeError, HandshakeState, HelloAck as ProtoHelloAck, 
-        Message as ProtoMessage, Role, 
-        UNASSIGNED_SESSION_ID as CORE_UNASSIGNED_SESSION_ID, RIFT_VERSION, Hello as ProtoHello,
+        ControlMessage as ProtoControl, FecBuilder, Handshake, HelloAck as ProtoHelloAck, 
+        Message as ProtoMessage, Role, RIFT_VERSION,
         Resolution as ProtoResolution,
     };
     use rift_crypto::connection::{SecureServer};
@@ -83,6 +82,7 @@ mod host {
         session_alias: u32,
         next_packet_id: u64,
         frame_id: u64,
+        #[allow(dead_code)]
         fec_builder: FecBuilder,
     }
 
@@ -407,9 +407,7 @@ mod host {
         Ok(mdns)
     }
 
-    fn format_handshake_error(err: HandshakeError) -> String {
-        err.to_string()
-    }
+
 }
 
 fn main() -> anyhow::Result<()> {

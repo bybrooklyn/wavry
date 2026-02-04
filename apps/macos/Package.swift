@@ -20,6 +20,9 @@ let package = Package(
         .executableTarget(
             name: "WavryMacOS",
             dependencies: ["Clibwavry"],
+            resources: [
+                .process("Resources")
+            ],
             linkerSettings: [
                 .linkedFramework("VideoToolbox"),
                 .linkedFramework("CoreMedia"),

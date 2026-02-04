@@ -1,4 +1,5 @@
-use std::ffi::{c_char, CStr};
+#![allow(clippy::missing_safety_doc)]
+use std::ffi::c_char;
 
 #[no_mangle]
 pub extern "C" fn wavry_init() {
@@ -6,6 +7,8 @@ pub extern "C" fn wavry_init() {
     log::info!("Wavry Core (FFI) Initialized 🚀");
 }
 
+/// # Safety
+/// Returns a static null-terminated string pointer. Caller must not free.
 #[no_mangle]
 pub unsafe extern "C" fn wavry_version() -> *const c_char {
     static VERSION: &str = concat!(env!("CARGO_PKG_VERSION"), "\0");

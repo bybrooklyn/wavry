@@ -1,15 +1,14 @@
 import SwiftUI
 
-enum SidebarTab {
-    case sessions
-    case settings
-}
-
 struct ContentView: View {
     @ObservedObject var appState: AppState
-    @State private var showUserDetail = false
-    @State private var activeTab: SidebarTab = .sessions
-    @State private var joinPeerID: String = ""
+    @State private var activeTab: Tab = .sessions
+    @State private var showingUserDetail = false
+    
+    enum Tab {
+        case sessions
+        case settings
+    }
     
     var body: some View {
         if !appState.hasPermissions {
@@ -17,49 +16,50 @@ struct ContentView: View {
         } else {
             HStack(spacing: 0) {
                 // 1. Icon Sidebar (Left)
-                VStack(spacing: 20) {
-                    Button(action: { activeTab = .sessions }) {
-                        SidebarIcon(icon: "desktopcomputer", active: activeTab == .sessions)
-                    }.buttonStyle(.plain)
+                VStack(spacing: .themeSpacing.xl) {
+                    SidebarIcon(icon: .tabSessions, active: activeTab == .sessions) {
+                        activeTab = .sessions
+                    }
                     
                     Spacer()
                     
-                    // Settings at Bottom
-                    Button(action: { activeTab = .settings }) {
-                        SidebarIcon(icon: "gearshape.fill", active: activeTab == .settings)
-                    }.buttonStyle(.plain)
+                    SidebarIcon(icon: .tabSettings, active: activeTab == .settings) {
+                        activeTab = .settings
+                    }
                 }
-                .padding(.vertical, 20)
+                .padding(.vertical, .themeSpacing.xl)
                 .frame(width: 60)
-                .background(Color(red: 0.1, green: 0.1, blue: 0.1))
+                .background(Color.bgSidebar)
                 
                 // 2. Main Content Area
                 ZStack {
-                    Color(red: 0.13, green: 0.13, blue: 0.13).ignoresSafeArea()
+                    Color.bgBase.ignoresSafeArea()
                     
                     VStack(alignment: .leading, spacing: 0) {
                         // Top Bar (User Identity)
                         HStack {
                             Spacer()
-                            Button(action: { showUserDetail.toggle() }) {
+                            Button(action: { showingUserDetail.toggle() }) {
                                 HStack(spacing: 8) {
-                                    Circle().fill(Color.green).frame(width: 8, height: 8)
+                                    Circle()
+                                        .fill(Color.accentSuccess)
+                                        .frame(width: 8, height: 8)
                                     Text(appState.effectiveDisplayName)
                                         .font(.caption)
                                         .fontWeight(.bold)
                                         .foregroundColor(.white)
                                 }
                                 .padding(8)
-                                .background(Color(white: 0.2))
-                                .cornerRadius(6)
+                                .background(Color.bgElevation3)
+                                .cornerRadius(.themeRadius.md)
                             }
                             .buttonStyle(.plain)
-                            .popover(isPresented: $showUserDetail, arrowEdge: .bottom) {
+                            .popover(isPresented: $showingUserDetail, arrowEdge: .bottom) {
                                 UserDetailView(appState: appState)
                             }
                         }
-                        .padding(.horizontal, 30)
-                        .padding(.top, 20)
+                        .padding(.horizontal, .themeSpacing.xxl)
+                        .padding(.top, .themeSpacing.xl)
                         
                         // Dynamic Content
                         Group {
@@ -74,7 +74,7 @@ struct ContentView: View {
                 }
             }
             .frame(minWidth: 800, maxWidth: .infinity, minHeight: 600, maxHeight: .infinity)
-            .colorScheme(.dark)
+            .preferredColorScheme(.dark)
         }
     }
 }
@@ -82,83 +82,56 @@ struct ContentView: View {
 struct SessionsView: View {
     @ObservedObject var appState: AppState
     
+    
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
+        VStack(alignment: .leading, spacing: .themeSpacing.xxl) {
             // Header
-            VStack(alignment: .leading, spacing: 5) {
+            VStack(alignment: .leading, spacing: 4) {
                 Text("Sessions")
                     .font(.system(size: 32, weight: .light))
-                    .foregroundColor(.white)
+                    .foregroundColor(.textPrimary)
                 Text("Manage your local host and active connections.")
                     .font(.body)
-                    .foregroundColor(.gray)
+                    .foregroundColor(.textSecondary)
             }
-            .padding(.horizontal, 30)
-            .padding(.top, 20)
-            .padding(.bottom, 30)
+            .padding(.horizontal, .themeSpacing.xxl)
+            .padding(.top, .themeSpacing.xl)
             
-            // Scrollable Content
             ScrollView {
-                VStack(alignment: .leading, spacing: 30) {
-                    
-                    // Local Host Section
-                    VStack(alignment: .leading, spacing: 10) {
+                VStack(alignment: .leading, spacing: .themeSpacing.xxl) {
+                    // Local Host
+                    VStack(alignment: .leading, spacing: .themeSpacing.sm) {
                         Text("LOCAL HOST")
                             .font(.caption)
                             .fontWeight(.bold)
-                            .foregroundColor(.gray)
-                            .padding(.horizontal, 30)
-                        
+                            .foregroundColor(.textSecondary)
                         HostCard(appState: appState)
-                            .padding(.horizontal, 30)
                     }
+                    .padding(.horizontal, .themeSpacing.xxl)
                     
-                    // Active Sessions Section
-                    VStack(alignment: .leading, spacing: 10) {
+                    // Active Sessions
+                    VStack(alignment: .leading, spacing: .themeSpacing.sm) {
                         Text("ACTIVE SESSIONS")
                             .font(.caption)
                             .fontWeight(.bold)
-                            .foregroundColor(.gray)
-                            .padding(.horizontal, 30)
+                            .foregroundColor(.textSecondary)
                         
-                        // Placeholder for Active Sessions
-                        HStack {
-                            Spacer()
-                            VStack(spacing: 12) {
-                                Image(systemName: "network.slash")
-                                    .font(.system(size: 30))
-                                    .foregroundColor(.gray.opacity(0.3))
-                                Text("No active sessions")
-                                    .font(.body)
-                                    .foregroundColor(.gray.opacity(0.5))
-                            }
-                            Spacer()
+                        VStack {
+                            WavryIcon(name: .noSessions, size: 30, color: .textSecondary.opacity(0.3))
+                            Text("No active sessions")
+                                .font(.body)
+                                .foregroundColor(.textSecondary)
+                                .opacity(0.5)
                         }
+                        .frame(maxWidth: .infinity)
                         .frame(height: 120)
-                        .background(Color(white: 0.15))
-                        .cornerRadius(6)
-                        .padding(.horizontal, 30)
+                        .background(Color.bgElevation1)
+                        .cornerRadius(.themeRadius.md)
                     }
-                    
-                    Spacer()
+                    .padding(.horizontal, .themeSpacing.xxl)
                 }
             }
         }
-    }
-}
-
-struct SidebarIcon: View {
-    let icon: String
-    let active: Bool
-    
-    var body: some View {
-        Image(systemName: icon)
-            .font(.system(size: 20))
-            .foregroundColor(active ? .blue : .gray)
-            .frame(width: 40, height: 40)
-            .background(active ? Color.blue.opacity(0.1) : Color.clear)
-            .cornerRadius(8)
-            .contentShape(Rectangle())
     }
 }
 
@@ -167,69 +140,104 @@ struct HostCard: View {
     
     var body: some View {
         VStack(spacing: 0) {
-            // Preview / Status Area
+            // Preview / Thumbnail
             ZStack {
-                Color(white: 0.18)
-                
+                Color.bgElevation2
                 if appState.isConnected {
-                    VideoView(layer: appState.videoLayer)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    // Live indicator
+                    VStack {
+                        Spacer()
+                        HStack {
+                            HStack(spacing: 6) {
+                                Circle()
+                                    .fill(Color.accentSuccess)
+                                    .frame(width: 6, height: 6)
+                                Text("LIVE")
+                                    .font(.caption2)
+                                    .fontWeight(.bold)
+                                    .foregroundColor(.accentSuccess)
+                            }
+                            .padding(8)
+                            Spacer()
+                        }
+                    }
                 } else {
-                    Image(systemName: "macpro.gen3.fill")
-                        .font(.system(size: 60))
-                        .foregroundColor(.gray.opacity(0.5))
+                    WavryIcon(name: .hostDefault, size: 60, color: .textSecondary.opacity(0.5))
                 }
                 
                 if appState.isConnected {
                     VStack {
                         Spacer()
                         HStack {
-                            Circle().fill(Color.green).frame(width: 6, height: 6)
-                            Text("LIVE")
-                                .font(.caption2)
-                                .fontWeight(.bold)
-                                .foregroundColor(.green)
+                            HStack(spacing: 6) {
+                                Circle()
+                                    .fill(Color.accentSuccess)
+                                    .frame(width: 6, height: 6)
+                                Text("LIVE")
+                                    .font(.caption2)
+                                    .fontWeight(.bold)
+                                    .foregroundColor(.accentSuccess)
+                            }
+                            .padding(8)
                             Spacer()
                         }
-                        .padding(8)
                     }
                 }
             }
             .frame(height: 200)
             
-            HStack(alignment: .center) {
+            // Info Row
+            HStack {
                 VStack(alignment: .leading, spacing: 4) {
                     Text(appState.effectiveDisplayName)
                         .font(.headline)
-                        .foregroundColor(.white)
+                        .foregroundColor(.textPrimary)
                     Text(appState.connectivityMode.displayName)
                         .font(.caption)
-                        .foregroundColor(.gray)
+                        .foregroundColor(.textSecondary)
                 }
-                
                 Spacer()
-                
                 Button(action: {
-                    if appState.isConnected { appState.disconnect() }
-                    else { appState.connect() }
+                    if appState.isConnected {
+                        appState.disconnect()
+                    } else {
+                        appState.connect()
+                    }
                 }) {
                     Text(appState.isConnected ? "Stop Hosting" : "Start Session")
                         .fontWeight(.bold)
-                        .padding(.horizontal, 20)
+                        .padding(.horizontal, .themeSpacing.xl)
                         .padding(.vertical, 8)
-                        .background(appState.isConnected ? Color.red : Color.blue)
+                        .background(appState.isConnected ? Color.accentDanger : Color.accentPrimary)
                         .foregroundColor(.white)
-                        .cornerRadius(4)
+                        .cornerRadius(.themeRadius.sm)
                 }
                 .buttonStyle(.plain)
             }
-            .padding(16)
-            .background(Color(white: 0.15))
+            .padding(.themeSpacing.lg)
         }
-        .cornerRadius(6)
+        .background(Color.bgElevation1)
+        .cornerRadius(.themeRadius.md)
         .overlay(
-            RoundedRectangle(cornerRadius: 6)
+            RoundedRectangle(cornerRadius: .themeRadius.md)
                 .stroke(Color.black.opacity(0.5), lineWidth: 1)
         )
     }
 }
+
+struct SidebarIcon: View {
+    let icon: WavryIconName
+    let active: Bool
+    let action: () -> Void
+    
+    var body: some View {
+        Button(action: action) {
+            WavryIcon(name: icon, size: 20, color: active ? .accentPrimary : .textSecondary)
+                .frame(width: 40, height: 40)
+                .background(active ? Color.accentPrimary.opacity(0.1) : Color.clear)
+                .cornerRadius(.themeRadius.lg)
+        }
+        .buttonStyle(.plain)
+    }
+}
+

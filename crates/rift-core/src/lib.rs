@@ -329,7 +329,7 @@ impl Handshake {
     }
 
     pub fn on_send_hello(&mut self) -> Result<HandshakeTransition, HandshakeError> {
-        match (Role::try_from(self.role).unwrap(), &self.state) {
+        match (self.role, &self.state) {
             (Role::Client, HandshakeState::Init) => {
                 self.transition(HandshakeEvent::SendHello, HandshakeState::HelloSent)
             }
@@ -342,7 +342,7 @@ impl Handshake {
     }
 
     pub fn on_receive_hello(&mut self, _hello: &Hello) -> Result<HandshakeTransition, HandshakeError> {
-        match (Role::try_from(self.role).unwrap(), &self.state) {
+        match (self.role, &self.state) {
             (Role::Host, HandshakeState::Init) => {
                 self.transition(HandshakeEvent::ReceiveHello, HandshakeState::HelloReceived)
             }
@@ -358,7 +358,7 @@ impl Handshake {
         &mut self,
         ack: &HelloAck,
     ) -> Result<HandshakeTransition, HandshakeError> {
-        match (Role::try_from(self.role).unwrap(), &self.state) {
+        match (self.role, &self.state) {
             (Role::Host, HandshakeState::HelloReceived) => {
                 let next = if ack.accepted {
                     HandshakeState::Established {
@@ -382,7 +382,7 @@ impl Handshake {
         &mut self,
         ack: &HelloAck,
     ) -> Result<HandshakeTransition, HandshakeError> {
-        match (Role::try_from(self.role).unwrap(), &self.state) {
+        match (self.role, &self.state) {
             (Role::Client, HandshakeState::HelloSent) => {
                 let next = if ack.accepted {
                     HandshakeState::Established {

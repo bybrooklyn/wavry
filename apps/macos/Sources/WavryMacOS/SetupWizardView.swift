@@ -9,12 +9,12 @@ struct SetupWizardView: View {
     var body: some View {
         ZStack {
             // Background - matching ContentView exactly
-            Color(red: 0.13, green: 0.13, blue: 0.13).ignoresSafeArea()
+            Color.bgBase.ignoresSafeArea()
             
             VStack {
                 Spacer()
                 
-                VStack(spacing: 40) {
+                VStack(spacing: .themeSpacing.xxxl) {
                     if step == 1 {
                         identityView
                     } else {
@@ -22,29 +22,29 @@ struct SetupWizardView: View {
                     }
                 }
                 .frame(maxWidth: 600) // Constrain content for better scaling
-                .padding(40)
-                .background(Color(white: 0.1).opacity(0.5))
-                .cornerRadius(24)
+                .padding(.themeSpacing.xxxl)
+                .background(Color.bgModal)
+                .cornerRadius(.themeRadius.xxl)
                 .overlay(
-                    RoundedRectangle(cornerRadius: 24)
+                    RoundedRectangle(cornerRadius: .themeRadius.xxl)
                         .stroke(Color.white.opacity(0.05), lineWidth: 1)
                 )
                 
                 Spacer()
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .padding(40)
+            .padding(.themeSpacing.xxxl)
         }
         .preferredColorScheme(.dark)
     }
     
     // Step 1: Identity
     var identityView: some View {
-        VStack(spacing: 32) {
-            VStack(spacing: 12) {
+        VStack(spacing: .themeSpacing.xxl) {
+            VStack(spacing: .themeSpacing.md) {
                 Image(systemName: "person.circle.fill")
                     .font(.system(size: 64))
-                    .foregroundColor(.blue)
+                    .foregroundColor(.accentPrimary)
                 
                 Text("Set Your Local Host Name")
                     .font(.system(size: 32, weight: .light))
@@ -56,16 +56,16 @@ struct SetupWizardView: View {
                     .multilineTextAlignment(.center)
             }
             
-            VStack(alignment: .leading, spacing: 8) {
+            VStack(alignment: .leading, spacing: .themeSpacing.sm) {
                 TextField("e.g. My MacPro", text: $displayName)
                     .textFieldStyle(PlainTextFieldStyle())
-                    .padding(16)
-                    .background(Color(white: 0.15))
-                    .cornerRadius(12)
-                    .font(.system(size: 18))
+                    .padding(.themeSpacing.lg)
+                    .background(Color.bgElevation1)
+                    .cornerRadius(.themeRadius.xl)
+                    .font(.system(size: .themeSpacing.xl)) // Using 20 as roughly 18
                     .overlay(
-                        RoundedRectangle(cornerRadius: 12)
-                            .stroke(Color.white.opacity(0.1), lineWidth: 1)
+                        RoundedRectangle(cornerRadius: .themeRadius.xl)
+                            .stroke(Color.borderInput, lineWidth: 1)
                     )
             }
             
@@ -75,10 +75,10 @@ struct SetupWizardView: View {
                 Text("Continue")
                     .fontWeight(.bold)
                     .frame(maxWidth: .infinity)
-                    .padding(.vertical, 16)
-                    .background(displayName.isEmpty ? Color.gray.opacity(0.2) : Color.blue)
-                    .foregroundColor(displayName.isEmpty ? .gray : .white)
-                    .cornerRadius(12)
+                    .padding(.vertical, .themeSpacing.lg)
+                    .background(displayName.isEmpty ? Color.textSecondary.opacity(0.2) : Color.accentPrimary)
+                    .foregroundColor(displayName.isEmpty ? .textSecondary : .white)
+                    .cornerRadius(.themeRadius.xl)
             }
             .buttonStyle(.plain)
             .disabled(displayName.isEmpty)
@@ -87,8 +87,8 @@ struct SetupWizardView: View {
     
     // Step 2: Connectivity Mode
     var connectivityView: some View {
-        VStack(spacing: 32) {
-            VStack(spacing: 12) {
+        VStack(spacing: .themeSpacing.xxl) {
+            VStack(spacing: .themeSpacing.md) {
                 Text("Choose Connectivity")
                     .font(.system(size: 32, weight: .light))
                     .foregroundColor(.white)
@@ -98,7 +98,7 @@ struct SetupWizardView: View {
                     .foregroundColor(.gray)
             }
             
-            VStack(spacing: 16) {
+            VStack(spacing: .themeSpacing.lg) {
                 ModeOptionCard(
                     title: "Wavry Service",
                     description: "Global discovery via Wavry's secure signaling network.",
@@ -116,16 +116,16 @@ struct SetupWizardView: View {
                 )
             }
             
-            HStack(spacing: 16) {
+            HStack(spacing: .themeSpacing.lg) {
                 Button(action: {
                     withAnimation { step = 1 }
                 }) {
                     Text("Back")
                         .fontWeight(.semibold)
                         .padding(.vertical, 14)
-                        .padding(.horizontal, 30)
-                        .background(Color(white: 0.2))
-                        .cornerRadius(12)
+                        .padding(.horizontal, .themeSpacing.xxl)
+                        .background(Color.bgElevation3)
+                        .cornerRadius(.themeRadius.xl)
                 }
                 .buttonStyle(.plain)
                 
@@ -136,9 +136,9 @@ struct SetupWizardView: View {
                         .fontWeight(.bold)
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 14)
-                        .background(Color.blue)
+                        .background(Color.accentPrimary)
                         .foregroundColor(.white)
-                        .cornerRadius(12)
+                        .cornerRadius(.themeRadius.xl)
                 }
                 .buttonStyle(.plain)
             }
@@ -155,13 +155,13 @@ struct ModeOptionCard: View {
     
     var body: some View {
         Button(action: onSelect) {
-            HStack(spacing: 20) {
+            HStack(spacing: .themeSpacing.xl) {
                 Image(systemName: icon)
                     .font(.system(size: 24))
-                    .foregroundColor(isSelected ? .blue : .gray)
+                    .foregroundColor(isSelected ? .accentPrimary : .textSecondary)
                     .frame(width: 50, height: 50)
-                    .background(isSelected ? Color.blue.opacity(0.1) : Color(white: 0.15))
-                    .cornerRadius(10)
+                    .background(isSelected ? Color.accentPrimary.opacity(0.1) : Color.bgElevation1)
+                    .cornerRadius(.themeRadius.md)
                 
                 VStack(alignment: .leading, spacing: 4) {
                     Text(title)
@@ -177,15 +177,15 @@ struct ModeOptionCard: View {
                 
                 if isSelected {
                     Image(systemName: "checkmark.circle.fill")
-                        .foregroundColor(.blue)
+                        .foregroundColor(.accentPrimary)
                 }
             }
-            .padding(16)
-            .background(Color(white: 0.15).opacity(isSelected ? 1.0 : 0.5))
-            .cornerRadius(12)
+            .padding(.themeSpacing.lg)
+            .background(Color.bgElevation1.opacity(isSelected ? 1.0 : 0.5))
+            .cornerRadius(.themeRadius.xl)
             .overlay(
-                RoundedRectangle(cornerRadius: 12)
-                    .stroke(isSelected ? Color.blue : Color.clear, lineWidth: 1)
+                RoundedRectangle(cornerRadius: .themeRadius.xl)
+                    .stroke(isSelected ? Color.accentPrimary : Color.clear, lineWidth: 1)
             )
             .contentShape(Rectangle())
         }

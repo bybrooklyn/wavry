@@ -18,9 +18,9 @@ mod client {
     use mdns_sd::{ServiceDaemon, ServiceEvent};
     use rift_core::{
         decode_msg, encode_msg, PhysicalPacket, Codec as RiftCodec, ControlMessage as ProtoControl,
-        FecPacket as ProtoFecPacket, Handshake, HandshakeError, InputMessage as ProtoInputMessage, 
-        Message as ProtoMessage, Role, Hello as ProtoHello, HelloAck as ProtoHelloAck, Ping as ProtoPing, 
-        StatsReport as ProtoStatsReport, Resolution as ProtoResolution, UNASSIGNED_SESSION_ID, RIFT_VERSION,
+        FecPacket as ProtoFecPacket, Handshake, InputMessage as ProtoInputMessage, 
+        Message as ProtoMessage, Role, Hello as ProtoHello, Ping as ProtoPing, 
+        StatsReport as ProtoStatsReport, Resolution as ProtoResolution, RIFT_VERSION,
     };
     use rift_crypto::connection::{SecureClient};
     use wavry_media::{Codec, DecodeConfig, Resolution as MediaResolution, Renderer};
@@ -154,7 +154,7 @@ mod client {
         }
 
         // Now perform RIFT handshake
-        let mut handshake = Handshake::new(Role::Client);
+        let _ = Handshake::new(Role::Client);
         let hello = ProtoHello {
             client_name: args.name,
             platform: rift_core::Platform::Linux as i32,
@@ -184,7 +184,7 @@ mod client {
         let mut ping_interval = time::interval(Duration::from_millis(500));
         let mut stats_interval = time::interval(Duration::from_millis(1000));
         
-        let mut session_id: Option<Vec<u8>> = None;
+        let mut _session_id: Option<Vec<u8>> = None;
         let mut session_alias: Option<u32> = None;
 
         let mut last_packet_id: Option<u64> = None;
@@ -194,7 +194,7 @@ mod client {
 
         let mut renderer: Option<VideoRenderer> = None;
         let mut frames = FrameAssembler::new(FRAME_TIMEOUT_US);
-        let mut fec_cache = FecCache::new();
+        let _fec_cache = FecCache::new();
 
         loop {
             tokio::select! {
@@ -296,7 +296,7 @@ mod client {
                                             continue;
                                         }
                                         info!("session established with {}", peer);
-                                        session_id = Some(ack.session_id.clone());
+                                        _session_id = Some(ack.session_id.clone());
                                         session_alias = Some(ack.session_alias);
                                         
                                         if let Some(res) = ack.stream_resolution {
@@ -320,16 +320,11 @@ mod client {
                             }
                         }
                         rift_core::message::Content::Media(media) => {
-                            if let Some(media_content) = media.content {
-                                match media_content {
-                                    rift_core::media_message::Content::Video(chunk) => {
-                                        if let Some(frame) = frames.push(chunk) {
-                                            if let Some(r) = renderer.as_mut() {
-                                                r.render(&frame.data, frame.timestamp_us)?;
-                                            }
-                                        }
+                            if let Some(rift_core::media_message::Content::Video(chunk)) = media.content {
+                                if let Some(frame) = frames.push(chunk) {
+                                    if let Some(r) = renderer.as_mut() {
+                                        r.render(&frame.data, frame.timestamp_us)?;
                                     }
-                                    _ => {}
                                 }
                             }
                         }

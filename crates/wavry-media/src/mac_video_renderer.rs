@@ -1,3 +1,4 @@
+#![allow(dead_code, unused_imports, unused_variables, deprecated)]
 use anyhow::{anyhow, Result};
 use objc2_video_toolbox::{VTDecompressionSession, VTDecompressionOutputCallbackRecord, VTDecompressionSessionCreate, VTDecodeInfoFlags};
 use objc2_core_media::{CMSampleBuffer, CMVideoFormatDescription, CMTime};
@@ -6,9 +7,8 @@ use objc2::rc::Retained;
 use objc2::runtime::{AnyObject};
 use objc2::{msg_send};
 use std::ffi::{c_void};
-use std::ptr::{NonNull, null, null_mut};
+use std::ptr::NonNull;
 use core::ffi::c_int;
-use std::ffi::c_long;
 
 type OSStatus = i32;
 
@@ -149,7 +149,7 @@ impl MacVideoRenderer {
 }
 
 impl crate::Renderer for MacVideoRenderer {
-    fn render(&mut self, payload: &[u8], timestamp_us: u64) -> Result<()> {
+    fn render(&mut self, payload: &[u8], _timestamp_us: u64) -> Result<()> {
         // Simple NALU parsing: Check for SPS/PPS (Type 7 and 8)
         // H.264 NALU header: lower 5 bits of first byte.
         // Assuming Annex B (start codes) or length-prefixed? 
@@ -157,7 +157,7 @@ impl crate::Renderer for MacVideoRenderer {
         // Let's assume we get one NALU per payload for simplicity, or a contiguous block.
         // If the payload starts with SPS, we re-initialize.
         
-        if payload.len() > 0 {
+        if !payload.is_empty() {
             let nal_type = payload[0] & 0x1F;
             if nal_type == 7 { // SPS
                 // We assume PPS follows immediately or in next packet. To simplify, we should buffer.

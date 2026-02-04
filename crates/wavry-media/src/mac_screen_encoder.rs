@@ -1,4 +1,4 @@
-#![allow(dead_code, unused_variables)]
+#![allow(dead_code, unused_variables, deprecated, clippy::arc_with_non_send_sync)]
 use anyhow::{anyhow, Result};
 use crate::{EncodeConfig, EncodedFrame};
 use tokio::sync::{mpsc, oneshot};
@@ -52,7 +52,6 @@ struct OutputHandlerIvars {
 
 // Define OutputHandler
 #[cfg(target_os = "macos")]
-#[cfg(target_os = "macos")]
 define_class!(
     #[unsafe(super(NSObject))]
     #[name = "WavryOutputHandler"]
@@ -98,8 +97,6 @@ define_class!(
     }
 );
 
-// Output callback
-#[cfg(target_os = "macos")]
 // Output callback
 #[cfg(target_os = "macos")]
 pub unsafe extern "C-unwind" fn compression_callback(
@@ -155,7 +152,7 @@ async fn get_shareable_content() -> Result<Retained<SCShareableContent>> {
     
     // Block signature: (SCShareableContent *content, NSError *error) -> void
     let block = RcBlock::new(move |content: *mut SCShareableContent, error: *mut NSError| {
-        if let Some(mut tx_guard) = tx.lock().ok() {
+        if let Ok(mut tx_guard) = tx.lock() {
             if let Some(tx) = tx_guard.take() {
                 if !error.is_null() {
                      let _ = tx.send(Err(anyhow::anyhow!("SCK Error")));
@@ -175,7 +172,6 @@ async fn get_shareable_content() -> Result<Retained<SCShareableContent>> {
     rx.await.map_err(|e| anyhow::anyhow!("SCK CanceledOrFailed: {}", e))?
 }
 
-#[cfg(target_os = "macos")]
 #[cfg(target_os = "macos")]
 fn create_compression_session(
     width: i32,
@@ -309,7 +305,7 @@ use dispatch2::DispatchObject;
             None
         ) };
         
-        let queue = dispatch2::Queue::new("com.wavry.screen-encoder", None);
+        let queue = dispatch2::DispatchQueue::new("com.wavry.screen-encoder", None);
         let queue_ptr = queue.as_raw().as_ptr(); 
         // Cast to AnyObject for msg_send
         let queue_obj = unsafe { &*(queue_ptr as *const objc2::runtime::AnyObject) };
@@ -335,7 +331,7 @@ use dispatch2::DispatchObject;
         let tx_start = std::sync::Arc::new(std::sync::Mutex::new(Some(tx_start)));
 
         let completion_handler = RcBlock::new(move |error: *mut NSError| {
-             if let Some(mut g) = tx_start.lock().ok() {
+             if let Ok(mut g) = tx_start.lock() {
                  if let Some(tx) = g.take() {
                      if !error.is_null() {
                          let _ = tx.send(Err(anyhow!("Start capture failed")));
