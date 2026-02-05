@@ -20,8 +20,8 @@ Wavry is a modular system composed of several specialized crates.
 
 ```mermaid
 graph TD
-    Client[Client (macOS/Linux/Windows)]
-    Host[Host (Windows/Linux/macOS)]
+    Client["Client (macOS/Linux/Windows)"]
+    Host["Host (Windows/Linux/macOS)"]
     Gateway[Wavry Gateway]
     Relay[Blind Relay]
     STUN[STUN Server]
