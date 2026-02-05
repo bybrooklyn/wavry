@@ -122,44 +122,52 @@ Large video frames are split into `VideoChunk` messages.
 - Chunks for a single frame SHOULD be sent in rapid succession.
 
 ### 5.2 Forward Error Correction (FEC)
-RIFT uses an interleaved XOR-based FEC by default.
-- A `FecPacket` contains a parity block for a group of `N` media packets.
-- **Proposed**: Migration to Reed-Solomon (Leopard) for multi-packet recovery.
+RIFT uses an interleaved XOR-based FEC.
+- **Group Size**: Typically 18 fragments (16 data + 2 parity) or dynamic based on network stats.
+- **Payload**: Contains a parity block derived from XOR operations on group members.
+- **Recovery**: Enables reconstruction of single-packet gaps per group without retransmission.
 
 ---
 
-## 6. Future Roadmap & Improvements
+## 6. Implementation Modules
+
+### 6.1 DELTA Congestion Control
+DELTA is a delay-oriented congestion controller designed for real-time interactive streams.
+- **Metric**: Uses queuing delay slope trends to transition between state states (Stable, Rising, Congested).
+- **Adaptivity**: Automatically scales slope noise floor (epsilon) based on measured jitter.
+- **Enforcement**: Regulates bitrate to resolve congestion before packet loss triggers.
+
+### 6.2 NAT Traversal
+- **STUN**: Used to discover reflexive public addresses.
+- **P2P Branch**: Attempt simultaneous UDP hole punching before falling back to relay.
+
+## 7. Future Roadmap & Improvements
 
 The following features are under consideration for v0.2.0 and beyond.
 
-### 6.1 DELTA Congestion Control [Planned]
-Wavry uses the **DELTA** (Differential Latency Estimation and Tuning Algorithm) for congestion control. DELTA is a delay-based, trend-driven algorithm optimized for ultra-low latency. 
-
-For full technical details, see the [DELTA Spec](DELTA_CC_SPEC.md).
-
-### 6.2 Zero-RTT Resumption [Planned]
+### 7.1 Zero-RTT Resumption [Planned]
 Using Noise PSK (Pre-Shared Key) or Session Tickets to eliminate the 3-packet handshake overhead on reconnection.
 
-### 6.3 PMTU Discovery [Exploratory]
+### 7.2 PMTU Discovery [Exploratory]
 Dynamic path MTU discovery to find the largest possible datagram size without fragmentation, maximizing throughput.
 
-### 6.4 Zero-Copy Media Framing [Experimental]
+### 7.3 Zero-Copy Media Framing [Experimental]
 Optimizing the `PhysicalPacket` -> `VideoChunk` path to avoid intermediate buffer allocations. This involves using a specialized "Tail-Header" for media packets where Protobuf metadata is appended after the raw NAL units.
 
-### 6.5 Audio Synchronization [Planned]
+### 7.4 Audio Synchronization [Planned]
 Implementation of Opus-based audio channels with Lip-Sync timestamps locked to `frame_id`.
 
-### 6.6 Z-Frame Padding (Pipe Warming) [Experimental]
+### 7.5 Z-Frame Padding (Pipe Warming) [Experimental]
 Optional low-priority "Zero Frames" sent during idle periods to keep NAT mappings active and prevent ISP "sleep" states from inducing first-packet jitter.
 
-### 6.7 Header Bitfields [Experimental]
+### 7.6 Header Bitfields [Experimental]
 Optimizing the `PhysicalPacket` header to use bitfields for `Option` flags (e.g., `has_alias`, `is_encrypted`), saving several bytes per packet.
 
-### 6.8 Multi-Link & Mobility [Planned]
+### 7.7 Multi-Link & Mobility [Planned]
 Support for seamless session migration between network interfaces (e.g., Wi-Fi to 5G) using a signed "Session Rebind" message.
 
-### 6.9 Tiled Streaming [Exploratory]
+### 7.8 Tiled Streaming [Exploratory]
 Parallelizing high-resolution streams (4K/8K) by splitting frames into tiles, each with independent FEC and timestamps, allowing for distributed decoding.
 
-### 6.10 Hybrid QUIC Support [Exploratory]
+### 7.9 Hybrid QUIC Support [Exploratory]
 Exploring the use of standard QUIC as a parallel transport specifically for the **Control** and **Input** channels, leveraging its mature congestion control and reliability, while keeping `RIFT-UDP` for high-throughput Media.

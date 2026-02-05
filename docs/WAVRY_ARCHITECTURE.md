@@ -1,32 +1,29 @@
 # Wavry — Architecture
 
-Wavry is a latency-first remote desktop and game streaming system. This
-architecture exists to preserve input feel, frame pacing, and deterministic
-behavior at all times.
+Wavry is a low-latency remote desktop and game streaming platform. This architecture is designed to prioritize input responsiveness, frame pacing, and deterministic performance.
 
-Wavry is cross-platform (Linux + macOS) and features end-to-end encryption.
-Protocol details live in `docs/RIFT_SPEC_V1.md`.
+Wavry is cross-platform (Windows, Linux, macOS) and implements end-to-end encryption. Protocol details are specified in `docs/RIFT_SPEC_V1.md`.
 
 ---
 
-## Naming
+## Terminology
 
 - User-facing brand: **Wavry**
 - Protocol: **RIFT** (Remote Interactive Frame Transport)
-- Gateway: `wavry-gateway` (Auth + Signaling + Relay)
+- Gateway: `wavry-gateway` (Signaling + Coordination)
 - Client Libraries: `wavry-client`, `wavry-ffi`
-- Native Apps: `apps/macos`, `apps/wavry-desktop`
+- Native Apps: `apps/macos`, `crates/wavry-desktop`
 - Config/env prefix: `WAVRY_`
 
 ---
 
-## Principles (Non-Negotiable)
+## Principles
 
-- Latency beats features.
-- Dropped frames are better than delayed frames.
-- Input is always prioritized over video.
-- Deterministic behavior; no opaque heuristics.
-- Everything is measurable and debuggable.
+- Latency is the primary priority.
+- Frame dropping is preferred over frame queuing.
+- Input processing is prioritized over video data.
+- Deterministic behavior with transparent control logic.
+- Comprehensive telemetry for performance tuning.
 
 ---
 
@@ -36,121 +33,109 @@ Protocol details live in `docs/RIFT_SPEC_V1.md`.
 
 | Crate | Purpose |
 |:------|:--------|
-| `rift-core` | RIFT wire format, protobuf messages, framing |
-| `rift-crypto` | Noise XX handshake, ChaCha20-Poly1305 encryption |
-| `wavry-client` | Networking, session management, signaling client |
-| `wavry-media` | Hardware-accelerated codecs (VideoToolbox, QSV, NVENC) |
-| `wavry-ffi` | C-compatible FFI for native clients |
+| `rift-core` | RIFT wire format, Protobuf definitions, and DELTA congestion control. |
+| `rift-crypto` | Noise XX handshake and ChaCha20-Poly1305 encryption. |
+| `wavry-client` | Session management, signaling client, and RTT tracking. |
+| `wavry-media` | Hardware-accelerated capture and encoding abstractions. |
+| `wavry-ffi` | C-compatible interface for foreign language integrations. |
 
 ### Infrastructure
 
 | Component | Purpose |
 |:----------|:--------|
-| `wavry-gateway` | Legacy/Reference implementation (Auth + Signaling + Relay) |
-| `wavry-master` | Production Coordination Server: Identity, Signaling, Relay Registry |
-| `wavry-relay` | Blind UDP Forwarder with Ed25519 Lease Validation |
+| `wavry-gateway` | Signaling gateway for peer discovery and SDP routing. |
+| `wavry-relay` | Blind UDP packet forwarder with PASETO lease validation. |
 
 ### Applications
 
-| App | Platform | Tech Stack |
-|:----|:---------|:-----------|
-| `apps/macos` | macOS | SwiftUI + Metal + VideoToolbox |
-| `apps/wavry-desktop` | Cross-platform | Tauri + SvelteKit |
+| App | Platform | Stack |
+|:----|:---------|:------|
+| `apps/macos` | macOS | Swift + Metal + ScreenCaptureKit |
+| `crates/wavry-desktop` | Windows / Linux | Tauri + Rust + Media Foundation / PipeWire |
 
 ---
 
 ## Connectivity Modes
 
-### LAN Only Mode
-- **Zero external dependencies** — fully offline
-- mDNS discovery (`_wavry._udp.local.`)
-- Direct UDP connection
-- Identity key stored locally, never uploaded
+### LAN Mode
+- mDNS discovery (`_wavry._udp.local.`).
+- Direct UDP socket binding.
+- Local identity storage with no external dependencies.
 
-### Cloud Mode
-- Account registration (email + username + public_key)
-- WebSocket signaling for OFFER/ANSWER exchange
-- UDP relay fallback for NAT traversal
-- Self-hostable Gateway
+### Global Mode
+- Identity registration via Wavry Gateway.
+- WebSocket-based signaling for handshake coordination.
+- UDP hole punching and relay fallback for NAT traversal.
 
 ---
 
-## Data Flow (Host → Client)
+## Data Pipeline (Host → Client)
 
-```
-Capture → Encode → Packetize → Transport → Depacketize → Decode → Present
-```
+1. **Capture**: System-native capture (GDI/WGC, PipeWire, SCKit).
+2. **Encode**: Hardware-accelerated H.264/HEVC/AV1.
+3. **Packetize**: RIFT framing with sequence numbers and group IDs.
+4. **Transport**: Encrypted UDP with congestion control and FEC.
+5. **Depacketize**: Reordering and FEC recovery.
+6. **Decode**: Hardware-accelerated decoding.
+7. **Present**: Low-latency presentation (DirectX/DXGI, AVSampleBufferDisplayLayer).
 
-Input travels in the reverse direction and must never wait on video.
+Input travels in the reverse direction on a high-priority path.
 
 ---
 
-## Subsystem Details
+## Subsystems
 
-### Capture
-- **Linux**: PipeWire + xdg-desktop-portal
-- **macOS**: ScreenCaptureKit (Hardware-accelerated)
+### Capture and Encode
+- **Windows**: Windows Graphics Capture (WGC) + Media Foundation.
+- **Linux**: PipeWire + VA-API.
+- **macOS**: ScreenCaptureKit + VideoToolbox.
 
-### Encode
-- **Linux**: VA-API (H.264/HEVC)
-- **macOS**: VideoToolbox (Hardware H.264/HEVC)
-- Abstraction in `wavry-media` via `Encoder` trait
+### Transport and Security
+- **Protocol**: RIFT over UDP.
+- **Encryption**: ChaCha20-Poly1305 authenticated encryption.
+- **Congestion Control**: DELTA (Delay-based).
+- **Error Correction**: XOR-based Forward Error Correction (FEC).
 
-### Transport
-- UDP with RIFT framing
-- ChaCha20-Poly1305 authenticated encryption
-- XOR-based FEC for packet loss recovery
-
-### Decode
-- **macOS**: VideoToolbox + AVSampleBufferDisplayLayer
-- Mailbox presentation for lowest latency
-
-### Input Injection
-- **macOS**: CoreGraphics (CGEvent) for mouse/keyboard
-
-### Discovery
-- mDNS for LAN discovery
-- Gateway for global "Connect via ID"
-
-### Signaling (Gateway)
-- WebSocket protocol: `BIND`, `OFFER`, `ANSWER`, `CANDIDATE`
-- Routes by username (not email)
-- Auto-reply to OFFER when hosting
+### Decoder and Renderer
+- **Windows**: Media Foundation + DXGI surfaces.
+- **macOS**: VideoToolbox + AVSampleBufferDisplayLayer.
+- Mailbox presentation to prevent queuing delay.
 
 ---
 
 ## Security Model
 
-1. **Noise XX Handshake**: Mutual identity verification
-2. **Persistent Device Keys**: Stored in `Application Support/Wavry/identity.key`
-3. **Packet Encryption**: All UDP packets encrypted with ChaCha20-Poly1305
-4. **Anti-Replay**: Sequence number window protection
-5. **Session Tokens**: JWT-style tokens with expiry for API auth
+1. **Identity**: Ed25519 keypairs for mutual authentication.
+2. **Handshake**: Noise XX protocol for ephemeral session key derivation.
+3. **Lease Validation**: Relay access requires PASETO tokens signed by an authorized gateway.
+4. **Encryption**: All application data is end-to-end encrypted.
+5. **Anti-Replay**: Sequence window tracking for all authenticated packets.
 
 ---
 
-## Observability
+## Telemetry and Observability
 
-- Frame timing logs (capture/encode/decode/present)
-- Input latency measurements
-- Network RTT and jitter tracking
-- Packet loss and FEC recovery counters
-- On-screen overlay (FPS, bitrate, latency)
+- Real-time RTT and jitter statistics.
+- Frame capture, encode, and decode timing.
+- FEC recovery and packet loss metrics.
+- Bitrate and FPS adaptation logs from the DELTA controller.
 
 ---
 
-## Scope Notes
+## Feature Roadmap
 
 | Feature | Status |
 |:--------|:-------|
-| Audio | Deferred |
-| Multi-monitor | Deferred |
-| Drawing tablet | Deferred |
-| Gamepad | Planned |
-| VR | Out of scope |
+| Windows Support | Complete |
+| Audio Capture | Complete |
+| DELTA Tuning | Complete |
+| FEC Implementation | Complete |
+| Gamepad Support | Planned |
+| macOS Client | In Development |
 
 ---
 
-## Testing
+## Documentation
 
-See `docs/WAVRY_TESTING.md` for the test plan and metrics.
+- [RIFT Protocol Specification](RIFT_SPEC_V1.md)
+- [Congestion Control (DELTA)](DELTA_CC_SPEC.md)
