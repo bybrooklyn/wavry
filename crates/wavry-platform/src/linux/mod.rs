@@ -3,10 +3,14 @@ use std::os::fd::{AsRawFd, OwnedFd};
 use std::path::{Path, PathBuf};
 
 use anyhow::{anyhow, Context, Result};
-use ashpd::desktop::screencast::{CursorMode, PersistMode, Screencast, SourceType};
+use ashpd::desktop::{
+    screencast::{CursorMode, Screencast, SourceType},
+    PersistMode,
+};
 use evdev::{
     uinput::VirtualDevice,
     uinput::VirtualDeviceBuilder,
+    UinputAbsSetup,
     AbsInfo,
     AbsoluteAxisType,
     AttributeSet,
@@ -26,6 +30,7 @@ use crate::{FrameCapturer, InputInjector};
 
 pub struct PipewireCapturer {
     _fd: OwnedFd,
+    #[allow(dead_code)]
     pipeline: gst::Pipeline,
     appsink: gst_app::AppSink,
 }
@@ -102,17 +107,16 @@ impl UinputInjector {
         rel_axes.insert(RelativeAxisType::REL_X);
         rel_axes.insert(RelativeAxisType::REL_Y);
 
-        let mut builder = VirtualDeviceBuilder::new()?;
-        builder.name("wavry-uinput")?;
-        builder.with_keys(&keys)?;
-        builder.with_relative_axes(&rel_axes)?;
+        let abs_x = AbsInfo::new(0, 65535, 0, 0, 0, 0);
+        let abs_y = AbsInfo::new(0, 65535, 0, 0, 0, 0);
 
-        let abs_x = AbsInfo::new(0, 65535, 0, 0, 0);
-        let abs_y = AbsInfo::new(0, 65535, 0, 0, 0);
-        builder.with_absolute_axis(AbsoluteAxisType::ABS_X, abs_x)?;
-        builder.with_absolute_axis(AbsoluteAxisType::ABS_Y, abs_y)?;
-
-        let device = builder.build()?;
+        let device = VirtualDeviceBuilder::new()?
+            .name("wavry-uinput")
+            .with_keys(&keys)?
+            .with_relative_axes(&rel_axes)?
+            .with_absolute_axis(&UinputAbsSetup::new(AbsoluteAxisType::ABS_X, abs_x))?
+            .with_absolute_axis(&UinputAbsSetup::new(AbsoluteAxisType::ABS_Y, abs_y))?
+            .build()?;
         Ok(Self { device })
     }
 
@@ -133,7 +137,7 @@ impl UinputInjector {
 impl InputInjector for UinputInjector {
     fn key(&mut self, keycode: u32, pressed: bool) -> Result<()> {
         let value = if pressed { 1 } else { 0 };
-        self.emit(InputEvent::new(EventType::KEY, keycode, value))?;
+        self.emit(InputEvent::new(EventType::KEY, keycode.try_into().unwrap(), value))?;
         self.sync()
     }
 
@@ -174,7 +178,7 @@ async fn open_portal_stream() -> Result<(OwnedFd, u32)> {
         .select_sources(
             &session,
             CursorMode::Metadata,
-            SourceType::Monitor,
+            SourceType::Monitor.into(),
             false,
             restore_token.as_deref(),
             PersistMode::ExplicitlyRevoked,

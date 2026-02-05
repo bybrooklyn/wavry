@@ -99,7 +99,7 @@ We use **Ed25519** for all identity operations.
 
 ### Quick Build (All Components)
 ```bash
-git clone https://github.com/wavry/wavry.git
+git clone https://github.com/bybrooklyn/wavry.git
 cd wavry
 cargo build --release --workspace
 ```

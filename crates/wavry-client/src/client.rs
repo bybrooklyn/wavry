@@ -541,11 +541,11 @@ fn spawn_input_threads(input_tx: mpsc::Sender<ProtoInputMessage>) -> Result<()> 
     }
 
     if let Some(mut mouse) = mouse {
-        let tx = input_tx;
+        let _tx = input_tx;
         thread::spawn(move || {
             loop {
                 if let Ok(events) = mouse.fetch_events() {
-                    for event in events {
+                    for _event in events {
                         // ... simple mouse handling ...
                     }
                 }

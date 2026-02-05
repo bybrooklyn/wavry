@@ -215,10 +215,11 @@ async fn connect_via_id(target_username: String) -> Result<String, String> {
 #[cfg(target_os = "linux")]
 #[tauri::command]
 async fn start_host(port: u16) -> Result<String, String> {
-    use wavry_media::{Codec, EncodeConfig, Resolution, PipewireEncoder};
+    use wavry_media::{Codec, EncodeConfig, Resolution, PipewireEncoder, PipewireAudioCapturer};
     use std::net::UdpSocket;
     use std::thread;
     use wavry_client::signaling::{SignalingClient, SignalMessage};
+    use bytes::Bytes;
 
     // Check if already hosting
     {
@@ -315,7 +316,7 @@ async fn start_host(port: u16) -> Result<String, String> {
                             session_id: None,
                             session_alias: None,
                             packet_id: 0, // Simplified
-                            payload: rift_core::encode_msg(&msg),
+                            payload: Bytes::from(rift_core::encode_msg(&msg)),
                         };
 
                         let _ = socket_audio.send_to(&phys.encode(), addr);
@@ -365,7 +366,7 @@ async fn start_host(port: u16) -> Result<String, String> {
             config.fps as u32
         );
         
-        let mut last_cc_update = std::time::Instant::now();
+        let _last_cc_update = std::time::Instant::now();
 
         loop {
             if stop_rx.try_recv().is_ok() { 
@@ -389,7 +390,7 @@ async fn start_host(port: u16) -> Result<String, String> {
                 }
 
                 // Handle incoming control/stats for CC
-                if let Ok(phys) = rift_core::PhysicalPacket::decode(&buf[..len]) {
+                if let Ok(phys) = rift_core::PhysicalPacket::decode(Bytes::copy_from_slice(&buf[..len])) {
                     if let Ok(msg) = rift_core::decode_msg(&phys.payload) {
                         if let Some(rift_core::message::Content::Control(ctrl)) = msg.content {
                             if let Some(rift_core::control_message::Content::Stats(stats)) = ctrl.content {
@@ -451,7 +452,7 @@ async fn start_host(port: u16) -> Result<String, String> {
                             session_id: None,
                             session_alias: None, // Fill if needed for signaling
                             packet_id: 0, // Simplified for now
-                            payload: rift_core::encode_msg(&msg),
+                            payload: Bytes::from(rift_core::encode_msg(&msg)),
                         };
 
                         let _ = socket.send_to(&phys.encode(), addr);
@@ -467,10 +468,25 @@ async fn start_host(port: u16) -> Result<String, String> {
     Ok(format!("Hosting on port {}", port))
 }
 
-#[cfg(not(target_os = "linux"))]
+// macOS hosting - uses MacScreenEncoder
+#[cfg(target_os = "macos")]
+#[tauri::command]
+async fn start_host(port: u16) -> Result<String, String> {
+    // For now, macOS hosting in the desktop app is not fully implemented
+    // The FFI layer (`wavry-ffi`) has the macOS hosting implementation
+    // This stub allows compilation and returns an informative message
+    Err(format!(
+        "macOS hosting via Tauri desktop is not yet implemented. \
+         Use the native Swift app or port wavry-ffi's run_host to here. \
+         Port {} saved.", port
+    ))
+}
+
+// Windows hosting - stub
+#[cfg(target_os = "windows")]
 #[tauri::command]
 async fn start_host(_port: u16) -> Result<String, String> {
-    Err("Hosting only supported on Linux in desktop app".into())
+    Err("Windows hosting is not yet implemented".into())
 }
 
 #[tauri::command]

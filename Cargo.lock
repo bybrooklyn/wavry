@@ -7188,6 +7188,7 @@ name = "wavry-desktop"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "bytes",
  "jsonwebtoken",
  "log",
  "reqwest 0.12.28",

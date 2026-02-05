@@ -1,14 +1,14 @@
-# Maintainer: Wavry Contributors <https://github.com/wavry/wavry>
+# Maintainer: Wavry Contributors <https://github.com/bybrooklyn/wavry>
 pkgname=wavry-desktop
 pkgver=0.1.0
 pkgrel=1
 pkgdesc="Ultra-low latency remote streaming platform (Desktop Client)"
 arch=('x86_64' 'aarch64')
-url="https://github.com/wavry/wavry"
+url="https://github.com/bybrooklyn/wavry"
 license=('AGPL-3.0-only')
 depends=('webkit2gtk-4.1' 'gtk3' 'libappindicator-gtk3' 'librsvg' 'libvpx' 'opus')
 makedepends=('rust' 'cargo' 'nodejs' 'npm' 'pkg-config' 'python' 'git')
-source=("git+https://github.com/wavry/wavry.git")
+source=("git+https://github.com/bybrooklyn/wavry.git")
 sha256sums=('SKIP')
 
 build() {

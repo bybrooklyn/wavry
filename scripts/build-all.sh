@@ -4,6 +4,8 @@ set -e
 # Wavry Unified Build Script
 # Handles building Master Server, Desktop (Tauri), and Native macOS apps.
 
+export PATH="$HOME/.bun/bin:$PATH"
+
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 DIST_DIR="$REPO_ROOT/dist"

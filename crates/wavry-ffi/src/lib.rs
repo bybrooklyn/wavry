@@ -5,7 +5,21 @@ use std::sync::{Arc, Mutex};
 use once_cell::sync::Lazy;
 use tokio::runtime::Runtime;
 
-use wavry_media::{MacVideoRenderer, MacInputInjector, InputInjector, InputEvent};
+#[cfg(target_os = "macos")]
+use wavry_media::{MacVideoRenderer, MacInputInjector};
+#[cfg(not(target_os = "macos"))]
+use wavry_media::DummyRenderer as MacVideoRenderer;
+
+// Stub for Linux input injector if needed, or use a dummy
+#[cfg(not(target_os = "macos"))]
+pub struct MacInputInjector; 
+#[cfg(not(target_os = "macos"))]
+impl MacInputInjector {
+    pub fn new(_w: u32, _h: u32) -> Self { Self }
+    pub fn inject(&mut self, _e: InputEvent) -> anyhow::Result<()> { Ok(()) }
+}
+
+use wavry_media::InputEvent;
 
 mod session;
 use session::{SessionHandle, SessionStats, run_host, run_client};
@@ -28,6 +42,7 @@ static SESSION: Mutex<Option<SessionHandle>> = Mutex::new(None);
 static VIDEO_RENDERER: Lazy<Arc<Mutex<Option<Box<MacVideoRenderer>>>>> = Lazy::new(|| {
     Arc::new(Mutex::new(None))
 });
+#[allow(dead_code)]
 static INPUT_INJECTOR: Lazy<Arc<Mutex<Option<MacInputInjector>>>> = Lazy::new(|| {
     Arc::new(Mutex::new(None))
 });
@@ -227,22 +242,31 @@ pub unsafe extern "C" fn wavry_get_stats(out: *mut WavryStats) -> i32 {
 #[no_mangle]
 pub extern "C" fn wavry_init_renderer(layer_ptr: *mut std::ffi::c_void) -> i32 {
     log::info!("FFI: Init renderer with ptr {:?}", layer_ptr);
-    match MacVideoRenderer::new(layer_ptr) {
-        Ok(renderer) => {
-            let mut guard = VIDEO_RENDERER.lock().unwrap();
-            *guard = Some(Box::new(renderer));
-            log::info!("FFI: Renderer initialized successfully");
-            0
+    #[cfg(target_os = "macos")]
+    {
+        match MacVideoRenderer::new(layer_ptr) {
+            Ok(renderer) => {
+                let mut guard = VIDEO_RENDERER.lock().unwrap();
+                *guard = Some(Box::new(renderer));
+                log::info!("FFI: Renderer initialized successfully");
+                0
+            }
+            Err(e) => {
+                log::error!("Failed to init renderer: {}", e);
+                -1
+            }
         }
-        Err(e) => {
-            log::error!("Failed to init renderer: {}", e);
-            -1
-        }
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        log::error!("FFI: Renderer init not supported on this platform via FFI");
+        -1
     }
 }
 
 #[no_mangle]
 pub extern "C" fn wavry_init_injector(width: u32, height: u32) -> i32 {
+    #![allow(unused_variables)]
     #[cfg(target_os = "macos")]
     {
         let injector = MacInputInjector::new(width, height);

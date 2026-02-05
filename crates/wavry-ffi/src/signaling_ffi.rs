@@ -24,6 +24,7 @@ pub static SIGNALING: Lazy<SignalingState> = Lazy::new(|| SignalingState {
 });
 
 /// Called from session.rs when hosting starts
+#[allow(dead_code)]
 pub fn set_hosting(port: u16) {
     SIGNALING.is_hosting.store(true, Ordering::SeqCst);
     *SIGNALING.host_port.lock().unwrap() = port;
@@ -31,6 +32,7 @@ pub fn set_hosting(port: u16) {
 }
 
 /// Called from session.rs when hosting stops
+#[allow(dead_code)]
 pub fn clear_hosting() {
     SIGNALING.is_hosting.store(false, Ordering::SeqCst);
     info!("Signaling: Hosting disabled");

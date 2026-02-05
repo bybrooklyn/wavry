@@ -1,6 +1,7 @@
 // #![forbid(unsafe_code)]
 
 use anyhow::Result;
+#[cfg(unix)]
 use std::os::fd::OwnedFd;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -18,6 +19,7 @@ pub enum FrameFormat {
 #[derive(Debug)]
 pub enum FrameData {
     Cpu { bytes: Vec<u8>, stride: u32 },
+    #[cfg(unix)]
     Dmabuf {
         fd: OwnedFd,
         stride: u32,
@@ -122,6 +124,7 @@ pub use dummy::{DummyEncoder, DummyRenderer};
 
 #[cfg(target_os = "macos")]
 mod mac_screen_encoder;
+#[cfg(target_os = "macos")]
 mod mac_video_renderer;
 
 #[cfg(target_os = "macos")]
@@ -133,3 +136,9 @@ pub use mac_video_renderer::MacVideoRenderer;
 mod mac_input_injector;
 #[cfg(target_os = "macos")]
 pub use mac_input_injector::MacInputInjector;
+
+#[cfg(target_os = "windows")]
+mod windows;
+
+#[cfg(target_os = "windows")]
+pub use windows::{WindowsEncoder, WindowsRenderer, WindowsAudioRenderer, WindowsAudioCapturer};

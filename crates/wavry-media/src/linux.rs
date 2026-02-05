@@ -1,17 +1,22 @@
 use std::fs;
 use std::os::fd::{AsRawFd, OwnedFd};
 use std::path::{Path, PathBuf};
+use std::str::FromStr;
 
 use anyhow::{anyhow, Context, Result};
-use ashpd::desktop::screencast::{CursorMode, PersistMode, Screencast, SourceType};
+use ashpd::desktop::{
+    screencast::{CursorMode, Screencast, SourceType},
+    PersistMode,
+};
 use gstreamer as gst;
 use gstreamer::prelude::*;
 use gstreamer_app as gst_app;
 
-use crate::{Codec, DecodeConfig, EncodedFrame, EncodeConfig};
+use crate::{Codec, DecodeConfig, EncodedFrame, EncodeConfig, Renderer};
 
 pub struct PipewireEncoder {
     _fd: OwnedFd,
+    #[allow(dead_code)]
     pipeline: gst::Pipeline,
     appsink: gst_app::AppSink,
     encoder_element: gst::Element,
@@ -109,6 +114,7 @@ impl PipewireEncoder {
 }
 
 pub struct GstVideoRenderer {
+    #[allow(dead_code)]
     pipeline: gst::Pipeline,
     appsrc: gst_app::AppSrc,
 }
@@ -154,7 +160,9 @@ impl GstVideoRenderer {
         let mut buffer = gst::Buffer::with_size(payload.len())?;
         {
             let buffer = buffer.get_mut().ok_or_else(|| anyhow!("buffer mut failed"))?;
-            buffer.copy_from_slice(0, payload)?;
+            buffer
+                .copy_from_slice(0, payload)
+                .map_err(|copied| anyhow!("failed to copy buffer slice, copied {} bytes", copied))?;
             buffer.set_pts(gst::ClockTime::from_nseconds(timestamp_us * 1_000));
         }
         self.appsrc.push_buffer(buffer)?;
@@ -162,8 +170,15 @@ impl GstVideoRenderer {
     }
 }
 
+impl Renderer for GstVideoRenderer {
+    fn render(&mut self, payload: &[u8], timestamp_us: u64) -> Result<()> {
+        self.push(payload, timestamp_us)
+    }
+}
+
 pub struct PipewireAudioCapturer {
     _fd: OwnedFd,
+    #[allow(dead_code)]
     pipeline: gst::Pipeline,
     appsink: gst_app::AppSink,
 }
@@ -274,7 +289,7 @@ async fn open_audio_portal_stream() -> Result<(OwnedFd, u32)> {
         .select_sources(
             &session,
             CursorMode::Hidden,
-            SourceType::Virtual, // Virtual source for system audio capture
+            SourceType::Virtual.into(), // Virtual source for system audio capture
             true, // Enable audio
             None,
             PersistMode::DoNot,
@@ -299,7 +314,7 @@ async fn open_portal_stream() -> Result<(OwnedFd, u32)> {
         .select_sources(
             &session,
             CursorMode::Metadata,
-            SourceType::Monitor,
+            SourceType::Monitor.into(),
             false,
             restore_token.as_deref(),
             PersistMode::ExplicitlyRevoked,
