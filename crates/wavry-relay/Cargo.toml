@@ -14,10 +14,12 @@ tracing-subscriber.workspace = true
 uuid.workspace = true
 chrono.workspace = true
 thiserror.workspace = true
-serde.workspace = true
-reqwest.workspace = true
+serde = { workspace = true }
+serde_json = { workspace = true }
+reqwest = { workspace = true }
 ed25519-dalek.workspace = true
 hex.workspace = true
+pasetors = { workspace = true }
 
 rift-core = { path = "../rift-core" }
 rift-crypto = { path = "../rift-crypto" }

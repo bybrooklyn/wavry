@@ -24,7 +24,13 @@ pub enum SignalMessage {
     // Auth
     Bind { token: String },
     
-    // Signaling
+    // RIFT-v1 SDP Exchange
+    #[serde(rename = "OFFER_RIFT")]
+    OfferRift { target_username: String, hello_base64: String },
+    #[serde(rename = "ANSWER_RIFT")]
+    AnswerRift { target_username: String, ack_base64: String },
+
+    // Legacy / WebRTC Signaling
     Offer { target_username: String, sdp: String },
     Answer { target_username: String, sdp: String },
     Candidate { target_username: String, candidate: String },
@@ -33,7 +39,7 @@ pub enum SignalMessage {
     #[serde(rename = "REQUEST_RELAY")]
     RequestRelay { target_username: String },
     #[serde(rename = "RELAY_CREDENTIALS")]
-    RelayCredentials { token: String, addr: String },
+    RelayCredentials { token: String, addr: String, session_id: Uuid },
     
     // Errors / Status
     Error { message: String },
@@ -117,6 +123,16 @@ async fn handle_socket(
                         }
                     }
                 },
+                SignalMessage::OfferRift { target_username, hello_base64 } => {
+                    if let Some(src) = &authenticated_username {
+                        relay_message(&connections, &target_username, SignalMessage::OfferRift { target_username: src.clone(), hello_base64 }).await;
+                    }
+                },
+                SignalMessage::AnswerRift { target_username, ack_base64 } => {
+                    if let Some(src) = &authenticated_username {
+                        relay_message(&connections, &target_username, SignalMessage::AnswerRift { target_username: src.clone(), ack_base64 }).await;
+                    }
+                },
                 SignalMessage::Offer { target_username, sdp } => {
                     if let Some(src) = &authenticated_username {
                         relay_message(&connections, &target_username, SignalMessage::Offer { target_username: src.clone(), sdp }).await;
@@ -134,8 +150,8 @@ async fn handle_socket(
                 },
                 SignalMessage::RequestRelay { target_username } => {
                     if let Some(src) = &authenticated_username {
-                        // Generate Token
-                        let token = Uuid::new_v4().to_string();
+                        let session_id = Uuid::new_v4();
+                        let token = session_id.to_string(); // Use session_id as token for MVP simplicity
                         
                         // Store in RelayMap
                         {
@@ -153,7 +169,8 @@ async fn handle_socket(
                         
                         let resp = SignalMessage::RelayCredentials { 
                             token: token.clone(),
-                            addr: "wavry.example.com:3478".into() // Dynamic IP needed in prod
+                            addr: "wavry.example.com:3478".into(), // Dynamic IP needed in prod
+                            session_id,
                         };
                         
                         // Send to requester

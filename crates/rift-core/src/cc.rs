@@ -36,13 +36,13 @@ pub struct DeltaConfig {
 impl Default for DeltaConfig {
     fn default() -> Self {
         Self {
-            target_delay_us: 15_000,
+            target_delay_us: 20_000,
             alpha: 0.125,
             beta: 0.85,
             increase_kbps: 500,
             min_bitrate_kbps: 2_000,
             max_bitrate_kbps: 50_000,
-            k_persistence: 3,
+            k_persistence: 5,
             epsilon_us: 100.0,
         }
     }
@@ -112,8 +112,11 @@ impl DeltaCC {
         let delta_q = d_q - self.last_d_q_us;
         self.last_d_q_us = d_q;
 
-        // 4. State Transitions
-        self.update_state(now, d_q, delta_q);
+        // 4. Dynamic Slope Noise Floor (Epsilon)
+        let epsilon = (jitter_us as f64 * 0.5).max(self.config.epsilon_us);
+
+        // 5. State Transitions
+        self.update_state(now, d_q, delta_q, epsilon);
 
         // 5. Update Control Params
         self.update_params(now, d_q, packet_loss, jitter_us);
@@ -133,7 +136,7 @@ impl DeltaCC {
             .unwrap_or(u64::MAX);
     }
 
-    fn update_state(&mut self, now: Instant, d_q: f64, delta_q: f64) {
+    fn update_state(&mut self, now: Instant, d_q: f64, delta_q: f64, epsilon: f64) {
         if d_q > self.config.target_delay_us as f64 {
             if self.state != DeltaState::Congested {
                 info!("DELTA: Transition to CONGESTED (Delay: {:.1}ms)", d_q / 1000.0);
@@ -142,10 +145,10 @@ impl DeltaCC {
             }
             self.rising_count = 0;
             self.stable_count = 0;
-        } else if delta_q > self.config.epsilon_us {
+        } else if delta_q > epsilon {
             self.rising_count += 1;
             if self.rising_count >= self.config.k_persistence && self.state == DeltaState::Stable {
-                info!("DELTA: Transition to RISING (Slope: {:.1}us)", delta_q);
+                info!("DELTA: Transition to RISING (Slope: {:.1}us, Epsilon: {:.1}us)", delta_q, epsilon);
                 self.state = DeltaState::Rising;
             }
             self.stable_count = 0;
@@ -264,19 +267,40 @@ mod tests {
         let config = DeltaConfig {
             alpha: 1.0, // Disable smoothing for easy testing
             epsilon_us: 100.0,
-            k_persistence: 3,
+            k_persistence: 5,
             ..DeltaConfig::default()
         };
         let mut cc = DeltaCC::new(config, 10000, 60);
         cc.on_rtt_sample(5000, 0.0, 0); // Baseline
         
-        cc.on_rtt_sample(5500, 0.0, 0); // rising_count = 1
+        cc.on_rtt_sample(5200, 0.0, 0); // rising_count = 1
+        cc.on_rtt_sample(5400, 0.0, 0); // rising_count = 2
+        cc.on_rtt_sample(5600, 0.0, 0); // rising_count = 3
+        cc.on_rtt_sample(5800, 0.0, 0); // rising_count = 4
         assert_eq!(cc.state, DeltaState::Stable);
         
-        cc.on_rtt_sample(6000, 0.0, 0); // rising_count = 2
+        cc.on_rtt_sample(6000, 0.0, 0); // rising_count = 5 -> RISING
+        assert_eq!(cc.state, DeltaState::Rising);
+    }
+
+    #[test]
+    fn test_delta_dynamic_epsilon() {
+        let config = DeltaConfig {
+            alpha: 1.0,
+            epsilon_us: 100.0,
+            k_persistence: 1,
+            ..DeltaConfig::default()
+        };
+        let mut cc = DeltaCC::new(config, 10000, 60);
+        cc.on_rtt_sample(5000, 0.0, 0); // Baseline
+        
+        // With 10ms jitter, epsilon = 5000us. 
+        // A slope of 1000us should NOT trigger RISING.
+        cc.on_rtt_sample(6000, 0.0, 10000); 
         assert_eq!(cc.state, DeltaState::Stable);
         
-        cc.on_rtt_sample(6500, 0.0, 0); // rising_count = 3 -> RISING
+        // A slope of 6000us SHOULD trigger RISING because it exceeds 5000us.
+        cc.on_rtt_sample(12000, 0.0, 10000);
         assert_eq!(cc.state, DeltaState::Rising);
     }
 

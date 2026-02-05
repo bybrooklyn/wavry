@@ -8,14 +8,26 @@ pub enum SignalMessage {
     /// Initial binding of a connection to a specific session/token.
     BIND { token: String },
     
-    /// WebRTC-style OFFER for P2P connection establishment.
+    /// RIFT-v1 SDP Exchange: OFFER (base64 encoded rift::Hello)
+    OFFER_RIFT { 
+        target_username: String, 
+        hello_base64: String 
+    },
+    
+    /// RIFT-v1 SDP Exchange: ANSWER (base64 encoded rift::HelloAck)
+    ANSWER_RIFT { 
+        target_username: String, 
+        ack_base64: String 
+    },
+
+    /// WebRTC-style OFFER (legacy/fallback)
     OFFER { 
         target_username: String, 
         sdp: String, 
         public_addr: Option<String> 
     },
     
-    /// WebRTC-style ANSWER for P2P connection establishment.
+    /// WebRTC-style ANSWER (legacy/fallback)
     ANSWER { 
         target_username: String, 
         sdp: String, 
@@ -36,7 +48,8 @@ pub enum SignalMessage {
     /// Received credentials for a blind relay session.
     RELAY_CREDENTIALS { 
         token: String, 
-        addr: String 
+        addr: String,
+        session_id: uuid::Uuid
     },
 
     /// Generic error message from the signaling server.

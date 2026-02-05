@@ -29,3 +29,21 @@ objc2-foundation = "0.3.2"
 objc2-quartz-core = "0.3.2"
 objc2-screen-capture-kit = "0.3.2"
 objc2-video-toolbox = "0.3.2"
+
+[target.'cfg(target_os = "windows")'.dependencies.windows]
+version = "0.58"
+features = [
+    "Win32_Graphics_Gdi",
+    "Win32_Graphics_Direct3D11",
+    "Win32_Graphics_Dxgi",
+    "Win32_System_WinRT",
+    "Win32_System_WinRT_Graphics_Capture",
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_Foundation",
+    "Graphics_Capture",
+    "Storage_Streams",
+    "Win32_Graphics_Direct3D",
+    "Win32_Media_Audio",
+    "Win32_System_Com",
+    "Win32_Media_MediaFoundation",
+]

@@ -43,10 +43,13 @@ impl InputInjector for UnsupportedInjector {
 }
 
 #[cfg(target_os = "linux")]
-mod linux;
-
-#[cfg(target_os = "linux")]
 pub use linux::{PipewireCapturer, UinputInjector};
+
+#[cfg(target_os = "windows")]
+mod windows_input_injector;
+
+#[cfg(target_os = "windows")]
+pub use windows_input_injector::WindowsInjector;
 
 mod dummy;
 pub use dummy::{DummyCapturer, DummyInjector};

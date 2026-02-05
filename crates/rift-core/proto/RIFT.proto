@@ -44,6 +44,7 @@ message Hello {
     uint32 max_fps = 5;
     uint32 input_caps = 6; // Bitflags
     uint32 protocol_version = 7;
+    string public_addr = 8;
 }
 
 message HelloAck {
@@ -55,6 +56,7 @@ message HelloAck {
     uint32 keyframe_interval_ms = 6;
     bytes session_id = 7; // 16 bytes UUID
     uint32 session_alias = 8; // 4 bytes for optimized transport
+    string public_addr = 9;
 }
 
 message Ping {

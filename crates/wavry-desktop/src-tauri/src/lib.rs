@@ -16,9 +16,37 @@ struct SessionState {
 
 static SESSION_STATE: Mutex<Option<SessionState>> = Mutex::new(None);
 static AUTH_STATE: Mutex<Option<AuthState>> = Mutex::new(None);
+static IDENTITY_KEY: Mutex<Option<rift_crypto::IdentityKeypair>> = Mutex::new(None);
 
 struct AuthState {
     token: String,
+}
+
+fn get_or_create_identity(app_handle: &tauri::AppHandle) -> Result<rift_crypto::IdentityKeypair, String> {
+    use std::path::PathBuf;
+    use tauri::Manager;
+
+    let mut id_lock = IDENTITY_KEY.lock().unwrap();
+    if let Some(ref id) = *id_lock {
+        return Ok(rift_crypto::IdentityKeypair::from_bytes(&id.private_key_bytes()));
+    }
+
+    let app_dir = app_handle.path().app_data_dir().map_err(|e| e.to_string())?;
+    std::fs::create_dir_all(&app_dir).map_err(|e| e.to_string())?;
+    let key_path = app_dir.join("identity.key");
+
+    if key_path.exists() {
+        let id = rift_crypto::IdentityKeypair::load(key_path.to_str().unwrap())
+            .map_err(|e| format!("Failed to load identity: {}", e))?;
+        *id_lock = Some(rift_crypto::IdentityKeypair::from_bytes(&id.private_key_bytes()));
+        Ok(id)
+    } else {
+        let id = rift_crypto::IdentityKeypair::generate();
+        id.save(key_path.to_str().unwrap(), app_dir.join("identity.pub").to_str().unwrap())
+            .map_err(|e| format!("Failed to save identity: {}", e))?;
+        *id_lock = Some(rift_crypto::IdentityKeypair::from_bytes(&id.private_key_bytes()));
+        Ok(id)
+    }
 }
 
 #[derive(Serialize, Deserialize)]
@@ -70,7 +98,10 @@ fn greet(name: &str) -> String {
 }
 
 #[tauri::command]
-async fn register(email: String, password: String, display_name: String, username: String) -> Result<String, String> {
+async fn register(app_handle: tauri::AppHandle, email: String, password: String, display_name: String, username: String) -> Result<String, String> {
+    let identity = get_or_create_identity(&app_handle)?;
+    let wavry_id = identity.wavry_id().to_string();
+
     let client = reqwest::Client::new();
     let res = client.post("https://auth.wavry.dev/auth/register")
         .json(&serde_json::json!({
@@ -78,7 +109,7 @@ async fn register(email: String, password: String, display_name: String, usernam
             "password": password,
             "display_name": display_name,
             "username": username,
-            "public_key": "TODO" // Phase 2: Crypto
+            "public_key": wavry_id
         }))
         .send()
         .await
@@ -92,12 +123,38 @@ async fn register(email: String, password: String, display_name: String, usernam
 }
 
 #[tauri::command]
-async fn login_full(email: String, password: String) -> Result<serde_json::Value, String> {
+async fn login_full(app_handle: tauri::AppHandle, email: String, password: String) -> Result<serde_json::Value, String> {
+    let identity = get_or_create_identity(&app_handle)?;
     let client = reqwest::Client::new();
+
+    // 1. Get auth challenge
+    let res = client.post("https://auth.wavry.dev/auth/challenge")
+        .json(&serde_json::json!({
+            "email": email,
+            "wavry_id": identity.wavry_id().to_string()
+        }))
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+
+    if !res.status().is_success() {
+        return Err("Failed to get auth challenge".into());
+    }
+
+    let challenge_resp: serde_json::Value = res.json().await.map_err(|e| e.to_string())?;
+    let challenge_hex = challenge_resp["challenge"].as_str().ok_or("Missing challenge")?;
+    let challenge = hex::decode(challenge_hex).map_err(|e| e.to_string())?;
+
+    // 2. Sign challenge
+    let signature = identity.sign(&challenge);
+    let signature_hex = hex::encode(signature);
+
+    // 3. Complete login with signature + password
     let res = client.post("https://auth.wavry.dev/auth/login")
         .json(&serde_json::json!({
             "email": email,
-            "password": password
+            "password": password,
+            "signature": signature_hex
         }))
         .send()
         .await
@@ -114,7 +171,7 @@ async fn login_full(email: String, password: String) -> Result<serde_json::Value
             "token": resp.session.token
         }))
     } else {
-        Err("Login failed".into())
+        Err("Login failed: invalid signature or password".into())
     }
 }
 
@@ -147,6 +204,7 @@ async fn start_session(addr: String) -> Result<String, String> {
         client_name: "wavry-desktop".to_string(),
         no_encrypt: false,
         identity_key: None,
+        relay_info: None,
     };
 
     // Spawn client in background
@@ -189,21 +247,57 @@ async fn connect_via_id(target_username: String) -> Result<String, String> {
 
     log::info!("Discovered public addr: {:?}", public_addr);
 
-    // 3. Send Offer (MVP: stubbed SDI/setup)
-    sig.send(SignalMessage::OFFER { 
+    // 3. Send OfferRift
+    let hello_b64 = wavry_client::create_hello_base64("wavry-desktop".into(), public_addr).map_err(|e| e.to_string())?;
+    sig.send(SignalMessage::OFFER_RIFT { 
         target_username: target_username.clone(), 
-        sdp: "RIFT_V1_SETUP".into(),
-        public_addr
+        hello_base64: hello_b64 
     }).await.map_err(|e| e.to_string())?;
 
-    // 3. Wait for Answer
+    // 4. Wait for AnswerRift
+    let mut relay_info: Option<wavry_client::RelayInfo> = None;
+
     loop {
         match sig.recv().await {
-            Ok(SignalMessage::ANSWER { sdp, .. }) => {
-                log::info!("Received answer from {}: {}", target_username, sdp);
-                // Start RIFT session with info from SDP (e.g. IP/Port or Relay Token)
-                // For MVP, we presume the Gateway relays RIFT or provides direct IP
+            Ok(SignalMessage::ANSWER_RIFT { ack_base64, .. }) => {
+                let ack = wavry_client::decode_hello_ack_base64(&ack_base64).map_err(|e| e.to_string())?;
+                log::info!("Received RIFT answer from {}: accepted={}", target_username, ack.accepted);
+                
+                if !ack.accepted {
+                    return Err("Connection rejected by host".into());
+                }
+
+                let connect_addr = if !ack.public_addr.is_empty() {
+                    ack.public_addr.parse::<std::net::SocketAddr>().ok()
+                } else {
+                    None
+                };
+
+                let config = wavry_client::ClientConfig {
+                    connect_addr,
+                    client_name: "wavry-desktop".into(),
+                    no_encrypt: false,
+                    identity_key: None,
+                    relay_info,
+                };
+
+                tauri::async_runtime::spawn(async move {
+                    if let Err(e) = wavry_client::run_client(config, None).await {
+                        log::error!("Client error: {}", e);
+                    }
+                });
+
                 return Ok("Connected".into());
+            }
+            Ok(SignalMessage::RELAY_CREDENTIALS { token, addr, session_id }) => {
+                log::info!("Received relay credentials: {}", addr);
+                if let Ok(relay_addr) = addr.parse::<std::net::SocketAddr>() {
+                    relay_info = Some(wavry_client::RelayInfo {
+                        addr: relay_addr,
+                        token,
+                        session_id,
+                    });
+                }
             }
             Ok(SignalMessage::ERROR { message, .. }) => return Err(message),
             Ok(_) => continue,
@@ -291,6 +385,7 @@ async fn start_host(port: u16) -> Result<String, String> {
         
         thread::spawn(move || {
             let mut sequence: u64 = 0;
+        let mut packet_id_counter: u64 = 1;
             loop {
                 if audio_stop_rx.try_recv().is_ok() { break; }
                 if let Ok(frame) = audio_capturer.next_packet() {
@@ -315,12 +410,22 @@ async fn start_host(port: u16) -> Result<String, String> {
                             version: rift_core::RIFT_VERSION,
                             session_id: None,
                             session_alias: None,
-                            packet_id: 0, // Simplified
+                            packet_id: { let id = packet_id_counter; packet_id_counter += 1; id },
                             payload: Bytes::from(rift_core::encode_msg(&msg)),
                         };
 
                         let _ = socket_audio.send_to(&phys.encode(), addr);
                         sequence = sequence.wrapping_add(1);
+
+                    // Adaptive FEC tuning
+                    let current_fec = delta_cc.fec_ratio();
+                    if (current_fec - last_fec_ratio).abs() > 0.01 {
+                        let shards = (1.0 / current_fec).clamp(4.0, 30.0) as u32;
+                        if let Ok(new_fec) = rift_core::FecBuilder::new(shards) {
+                            fec_builder = new_fec;
+                            last_fec_ratio = current_fec;
+                        }
+                    }
                     }
                 }
             }
@@ -334,23 +439,31 @@ async fn start_host(port: u16) -> Result<String, String> {
                     log::info!("Host registered with signaling gateway");
                     while let Ok(msg) = sig.recv().await {
                         match msg {
-                            SignalMessage::OFFER { target_username: _, sdp: _, public_addr: peer_addr } => {
-                                log::info!("Received connection offer from peer at {:?}", peer_addr);
-                                // Discover own public address
-                                let udp = std::net::UdpSocket::bind("0.0.0.0:0").ok();
-                                let my_public_addr = if let Some(ref s) = udp {
-                                    let tokio_u = tokio::net::UdpSocket::from_std(s.try_clone().unwrap()).ok();
-                                    if let Some(tu) = tokio_u {
-                                        wavry_client::discover_public_addr(&tu).await.ok().map(|a| a.to_string())
-                                    } else { None }
-                                } else { None };
+                            SignalMessage::OFFER_RIFT { target_username, hello_base64 } => {
+                                if let Ok(hello) = wavry_client::decode_hello_base64(&hello_base64) {
+                                    log::info!("Received RIFT offer from {} ({})", hello.client_name, target_username);
+                                    
+                                    // Generate session ID and alias
+                                    let session_id = [0u8; 16]; // TODO: random
+                                    let session_alias = 1;
+                                    
+                                    // Discover own public address for host
+                                    let udp = std::net::UdpSocket::bind("0.0.0.0:0").ok();
+                                    let my_public_addr = if let Some(ref s) = udp {
+                                        let tokio_u = tokio::net::UdpSocket::from_std(s.try_clone().unwrap()).ok();
+                                        if let Some(tu) = tokio_u {
+                                            wavry_client::discover_public_addr(&tu).await.ok().map(|a| a.to_string())
+                                        } else { None }
+                                    } else { None };
 
-                                // Send Answer
-                                let _ = sig.send(SignalMessage::ANSWER {
-                                    target_username: "TODO_PEER".into(), // Gateway handles routing
-                                    sdp: "RIFT_V1_READY".into(),
-                                    public_addr: my_public_addr,
-                                }).await;
+                                    let ack_b64 = wavry_client::create_hello_ack_base64(true, session_id, session_alias, my_public_addr)
+                                        .unwrap_or_default();
+
+                                    let _ = sig.send(SignalMessage::ANSWER_RIFT {
+                                        target_username,
+                                        ack_base64: ack_b64,
+                                    }).await;
+                                }
                             }
                             _ => {}
                         }
@@ -360,11 +473,14 @@ async fn start_host(port: u16) -> Result<String, String> {
         }
 
         let mut sequence: u64 = 0;
+        let mut packet_id_counter: u64 = 1;
         let mut delta_cc = rift_core::cc::DeltaCC::new(
             rift_core::cc::DeltaConfig::default(),
             config.bitrate_kbps,
             config.fps as u32
         );
+        let mut fec_builder = rift_core::FecBuilder::new(20).unwrap();
+        let mut last_fec_ratio = 0.05f32;
         
         let _last_cc_update = std::time::Instant::now();
 
@@ -451,13 +567,39 @@ async fn start_host(port: u16) -> Result<String, String> {
                             version: rift_core::RIFT_VERSION,
                             session_id: None,
                             session_alias: None, // Fill if needed for signaling
-                            packet_id: 0, // Simplified for now
+                            packet_id: { let id = packet_id_counter; packet_id_counter += 1; id },
                             payload: Bytes::from(rift_core::encode_msg(&msg)),
                         };
 
                         let _ = socket.send_to(&phys.encode(), addr);
+                        // Push to FEC builder
+                        if let Some(fec) = fec_builder.push(packet_id_counter - 1, &phys.payload) {
+                            let fec_msg = rift_core::Message {
+                                content: Some(rift_core::message::Content::Media(rift_core::MediaMessage {
+                                    content: Some(rift_core::media_message::Content::Fec(fec)),
+                                })),
+                            };
+                            let fec_phys = rift_core::PhysicalPacket {
+                                version: rift_core::RIFT_VERSION,
+                                session_id: None,
+                                session_alias: None,
+                                packet_id: 0,
+                                payload: bytes::Bytes::from(rift_core::encode_msg(&fec_msg)),
+                            };
+                            let _ = socket.send_to(&fec_phys.encode(), addr);
+                        }
                     }
                     sequence = sequence.wrapping_add(1);
+
+                    // Adaptive FEC tuning
+                    let current_fec = delta_cc.fec_ratio();
+                    if (current_fec - last_fec_ratio).abs() > 0.01 {
+                        let shards = (1.0 / current_fec).clamp(4.0, 30.0) as u32;
+                        if let Ok(new_fec) = rift_core::FecBuilder::new(shards) {
+                            fec_builder = new_fec;
+                            last_fec_ratio = current_fec;
+                        }
+                    }
                 }
             }
         }
@@ -482,11 +624,281 @@ async fn start_host(port: u16) -> Result<String, String> {
     ))
 }
 
-// Windows hosting - stub
+// Windows hosting - implementation
 #[cfg(target_os = "windows")]
 #[tauri::command]
-async fn start_host(_port: u16) -> Result<String, String> {
-    Err("Windows hosting is not yet implemented".into())
+async fn start_host(port: u16) -> Result<String, String> {
+    use wavry_media::{Codec, EncodeConfig, Resolution, WindowsEncoder, WindowsAudioCapturer};
+    use std::net::UdpSocket;
+    use std::thread;
+    use tokio::sync::{oneshot, mpsc};
+    use bytes::Bytes;
+    use std::sync::atomic::Ordering;
+
+    // Check if already hosting
+    {
+        let state = SESSION_STATE.lock().unwrap();
+        if state.is_some() {
+             return Err("Already hosting".into());
+        }
+    }
+
+    let (cc_tx, mut cc_rx) = mpsc::unbounded_channel::<rift_core::cc::DeltaConfig>();
+    let current_bitrate = Arc::new(AtomicU32::new(8000));
+    let cc_state_shared = Arc::new(Mutex::new("Stable".to_string()));
+
+    let (stop_tx, mut stop_rx) = oneshot::channel::<()>();
+    
+    // Create encoder in async block
+    let config = EncodeConfig {
+        codec: Codec::H264,
+        resolution: Resolution { width: 1920, height: 1080 },
+        fps: 60,
+        bitrate_kbps: 8000,
+        keyframe_interval_ms: 2000,
+    };
+
+    let video_encoder = WindowsEncoder::new(config).await.map_err(|e| e.to_string())?;
+    let mut audio_capturer = WindowsAudioCapturer::new().await.map_err(|e| e.to_string())?;
+    
+    // Optional: Register with Gateway if logged in
+    let mut signaling_token: Option<String> = None;
+    {
+        let auth = AUTH_STATE.lock().unwrap();
+        if let Some(ref a) = *auth {
+            signaling_token = Some(a.token.clone());
+        }
+    }
+
+    // Store state
+    {
+        let mut state = SESSION_STATE.lock().unwrap();
+        *state = Some(SessionState {
+            stop_tx: Some(stop_tx),
+            cc_config_tx: Some(cc_tx),
+            current_bitrate: current_bitrate.clone(),
+            cc_state: cc_state_shared.clone(),
+        });
+    }
+
+    // Spawn Windows host thread
+    thread::spawn(move || {
+        let mut video_encoder = video_encoder;
+        let socket = match UdpSocket::bind(format!("0.0.0.0:{}", port)) {
+            Ok(s) => s,
+            Err(e) => {
+                log::error!("Failed to bind socket: {}", e);
+                return;
+            }
+        };
+        socket.set_nonblocking(true).ok();
+        
+        log::info!("Windows host thread started on port {}", port);
+        
+        // Background signaling task if needed
+        if let Some(token) = signaling_token {
+            use wavry_client::signaling::{SignalingClient, SignalMessage};
+            tokio::spawn(async move {
+                if let Ok(mut sig) = SignalingClient::connect("wss://auth.wavry.dev/ws", &token).await {
+                    log::info!("Windows host registered with signaling gateway");
+                    while let Ok(msg) = sig.recv().await {
+                        match msg {
+                            SignalMessage::OFFER_RIFT { target_username, hello_base64 } => {
+                                if let Ok(hello) = wavry_client::decode_hello_base64(&hello_base64) {
+                                    log::info!("Received RIFT offer from {} ({})", hello.client_name, target_username);
+                                    
+                                    let session_id = [0u8; 16]; 
+                                    let session_alias = 1;
+                                    
+                                    // Discover own public address for host
+                                    let udp = std::net::UdpSocket::bind("0.0.0.0:0").ok();
+                                    let my_public_addr = if let Some(ref s) = udp {
+                                        let tokio_u = tokio::net::UdpSocket::from_std(s.try_clone().unwrap()).ok();
+                                        if let Some(tu) = tokio_u {
+                                            wavry_client::discover_public_addr(&tu).await.ok().map(|a| a.to_string())
+                                        } else { None }
+                                    } else { None };
+
+                                    let ack_b64 = wavry_client::create_hello_ack_base64(true, session_id, session_alias, my_public_addr)
+                                        .unwrap_or_default();
+
+                                    let _ = sig.send(SignalMessage::ANSWER_RIFT {
+                                        target_username,
+                                        ack_base64: ack_b64,
+                                    }).await;
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+            });
+        }
+
+        let shared_client_addr = std::sync::Arc::new(std::sync::Mutex::new(None));
+        
+        // Audio thread
+        let socket_audio = socket.try_clone().expect("Failed to clone socket");
+        let (audio_stop_tx, mut audio_stop_rx) = oneshot::channel::<()>();
+        let shared_client_addr_audio = shared_client_addr.clone();
+        
+        thread::spawn(move || {
+            loop {
+                if audio_stop_rx.try_recv().is_ok() { break; }
+                if let Ok(frame) = audio_capturer.next_frame() {
+                    let addr = {
+                        let addr_lock = shared_client_addr_audio.lock().unwrap();
+                        *addr_lock
+                    };
+                    
+                    if let Some(addr) = addr {
+                        let audio = rift_core::AudioPacket {
+                            timestamp_us: frame.timestamp_us,
+                            payload: frame.data,
+                        };
+
+                        let msg = rift_core::Message {
+                            content: Some(rift_core::message::Content::Media(rift_core::MediaMessage {
+                                content: Some(rift_core::media_message::Content::Audio(audio)),
+                            })),
+                        };
+
+                        let phys = rift_core::PhysicalPacket {
+                            version: rift_core::RIFT_VERSION,
+                            session_id: None,
+                            session_alias: None,
+                            packet_id: 0,
+                            payload: Bytes::from(rift_core::encode_msg(&msg)),
+                        };
+
+                        let _ = socket_audio.send_to(&phys.encode(), addr);
+                    }
+                }
+            }
+        });
+
+        let mut sequence: u64 = 0;
+        let mut packet_id_counter: u64 = 1;
+        let mut delta_cc = rift_core::cc::DeltaCC::new(
+            rift_core::cc::DeltaConfig::default(),
+            8000,
+            60
+        );
+        let mut fec_builder = rift_core::FecBuilder::new(20).unwrap();
+        let mut last_fec_ratio = 0.05f32;
+
+        loop {
+            if stop_rx.try_recv().is_ok() { 
+                let _ = audio_stop_tx.send(());
+                break; 
+            }
+
+            if let Ok(new_config) = cc_rx.try_recv() {
+                delta_cc = rift_core::cc::DeltaCC::new(new_config, delta_cc.target_bitrate_kbps(), delta_cc.target_fps());
+            }
+            
+            let mut buf = [0u8; 2048];
+            if let Ok((len, src)) = socket.recv_from(&mut buf) {
+                let mut addr_lock = shared_client_addr.lock().unwrap();
+                if addr_lock.is_none() {
+                    log::info!("Windows Client connected from {}", src);
+                    *addr_lock = Some(src);
+                }
+
+                if let Ok(phys) = rift_core::PhysicalPacket::decode(Bytes::copy_from_slice(&buf[..len])) {
+                    if let Ok(msg) = rift_core::decode_msg(&phys.payload) {
+                        if let Some(rift_core::message::Content::Control(ctrl)) = msg.content {
+                            if let Some(rift_core::control_message::Content::Stats(stats)) = ctrl.content {
+                                let loss = if stats.received_packets > 0 {
+                                    stats.lost_packets as f32 / (stats.received_packets + stats.lost_packets) as f32
+                                } else { 0.0 };
+                                delta_cc.on_rtt_sample(stats.rtt_us, loss, stats.jitter_us);
+                                
+                                let new_bitrate = delta_cc.target_bitrate_kbps();
+                                video_encoder.set_bitrate(new_bitrate).ok();
+
+                                current_bitrate.store(new_bitrate, Ordering::Relaxed);
+                                *cc_state_shared.lock().unwrap() = format!("{:?}", delta_cc.state());
+                            }
+                        }
+                    }
+                }
+            }
+            
+            if let Ok(frame) = video_encoder.next_frame() {
+                let addr = {
+                    let addr_lock = shared_client_addr.lock().unwrap();
+                    *addr_lock
+                };
+                
+                if let Some(addr) = addr {
+                    let max_payload = 1300;
+                    let data = frame.data;
+                    let total_chunks = data.len().div_ceil(max_payload) as u32;
+
+                    for i in 0..total_chunks {
+                        let start = (i as usize) * max_payload;
+                        let end = std::cmp::min(start + max_payload, data.len());
+                        let chunk_data = data[start..end].to_vec();
+
+                        let chunk = rift_core::VideoChunk {
+                            frame_id: sequence,
+                            chunk_index: i as u32,
+                            chunk_count: total_chunks,
+                            timestamp_us: frame.timestamp_us,
+                            keyframe: frame.keyframe,
+                            payload: chunk_data,
+                        };
+
+                        let msg = rift_core::Message {
+                            content: Some(rift_core::message::Content::Media(rift_core::MediaMessage {
+                                content: Some(rift_core::media_message::Content::Video(chunk)),
+                            })),
+                        };
+
+                        let phys = rift_core::PhysicalPacket {
+                            version: rift_core::RIFT_VERSION,
+                            session_id: None,
+                            session_alias: None,
+                            packet_id: 0,
+                            payload: Bytes::from(rift_core::encode_msg(&msg)),
+                        };
+
+                        let _ = socket.send_to(&phys.encode(), addr);
+                        // Push to FEC builder
+                        if let Some(fec) = fec_builder.push(packet_id_counter - 1, &phys.payload) {
+                            let fec_msg = rift_core::Message {
+                                content: Some(rift_core::message::Content::Media(rift_core::MediaMessage {
+                                    content: Some(rift_core::media_message::Content::Fec(fec)),
+                                })),
+                            };
+                            let fec_phys = rift_core::PhysicalPacket {
+                                version: rift_core::RIFT_VERSION,
+                                session_id: None,
+                                session_alias: None,
+                                packet_id: 0,
+                                payload: bytes::Bytes::from(rift_core::encode_msg(&fec_msg)),
+                            };
+                            let _ = socket.send_to(&fec_phys.encode(), addr);
+                        }
+                    }
+                    sequence = sequence.wrapping_add(1);
+
+                    // Adaptive FEC tuning
+                    let current_fec = delta_cc.fec_ratio();
+                    if (current_fec - last_fec_ratio).abs() > 0.01 {
+                        let shards = (1.0 / current_fec).clamp(4.0, 30.0) as u32;
+                        if let Ok(new_fec) = rift_core::FecBuilder::new(shards) {
+                            fec_builder = new_fec;
+                            last_fec_ratio = current_fec;
+                        }
+                    }
+                }
+            }
+        }
+    });
+
+    Ok(format!("Windows hosting started on port {}", port))
 }
 
 #[tauri::command]

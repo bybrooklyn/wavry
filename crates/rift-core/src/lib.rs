@@ -464,6 +464,7 @@ mod tests {
             max_fps: 60,
             input_caps: 1, // Keyboard
             protocol_version: 1,
+            public_addr: "".to_string(),
         }
     }
 
@@ -477,6 +478,7 @@ mod tests {
             keyframe_interval_ms: 1000,
             session_id: vec![0u8; 16],
             session_alias: 42,
+            public_addr: "".to_string(),
         }
     }
 

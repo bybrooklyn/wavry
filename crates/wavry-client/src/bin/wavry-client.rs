@@ -24,6 +24,7 @@ fn main() -> anyhow::Result<()> {
         client_name: "wavry-cli".to_string(),
         no_encrypt: args.no_encrypt,
         identity_key: None,
+        relay_info: None,
     };
 
     tokio::runtime::Builder::new_multi_thread()

@@ -80,6 +80,16 @@ pub struct RelaySession {
     pub packets_forwarded: u64,
     /// Bytes forwarded
     pub bytes_forwarded: u64,
+    /// Soft rate limit (kbps)
+    pub soft_limit_kbps: u32,
+    /// Hard rate limit (kbps)
+    pub hard_limit_kbps: u32,
+    /// Last stats reset time
+    pub last_stats_reset: Instant,
+    /// Bytes sent in the current window
+    pub bytes_sent_window: u64,
+    /// Current bandwidth usage (bits per second)
+    pub current_bps: f32,
 }
 
 impl RelaySession {
@@ -96,6 +106,11 @@ impl RelaySession {
             last_activity: now,
             packets_forwarded: 0,
             bytes_forwarded: 0,
+            soft_limit_kbps: 50_000,
+            hard_limit_kbps: 100_000,
+            last_stats_reset: now,
+            bytes_sent_window: 0,
+            current_bps: 0.0,
         }
     }
 

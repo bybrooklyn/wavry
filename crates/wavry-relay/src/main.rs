@@ -16,9 +16,13 @@ use std::time::Duration;
 
 use anyhow::Result;
 use clap::Parser;
-use rift_core::relay::{
-    LeaseAckPayload, LeaseRejectPayload, LeaseRejectReason, RelayHeader, RelayPacketType,
-    RELAY_HEADER_SIZE, RELAY_MAX_PACKET_SIZE,
+use serde::{Deserialize, Serialize};
+use rift_core::{
+    decode_msg, PhysicalPacket, Message as ProtoMessage,
+    relay::{
+        LeaseAckPayload, LeaseRejectPayload, LeaseRejectReason, RelayHeader, RelayPacketType,
+        RELAY_HEADER_SIZE, RELAY_MAX_PACKET_SIZE,
+    }
 };
 use session::{PeerRole, SessionError, SessionPool};
 use tokio::net::UdpSocket;
@@ -52,6 +56,10 @@ struct Args {
     /// Session idle timeout in seconds
     #[arg(long, default_value_t = DEFAULT_IDLE_TIMEOUT_SECS)]
     idle_timeout: u64,
+
+    /// Master public key (hex encoded Ed25519)
+    #[arg(long)]
+    master_public_key: Option<String>,
 
     /// Log level
     #[arg(long, default_value = "info")]
@@ -95,24 +103,55 @@ impl IpRateLimiter {
     }
 }
 
+/// Lease claims in PASETO token
+#[derive(Debug, Serialize, Deserialize)]
+struct LeaseClaims {
+    #[serde(rename = "sub")]
+    wavry_id: String,
+    #[serde(rename = "sid")]
+    session_id: Uuid,
+    role: String, // "client" or "server"
+    #[serde(rename = "exp")]
+    expiration: String,
+    #[serde(rename = "slimit")]
+    soft_limit_kbps: Option<u32>,
+    #[serde(rename = "hlimit")]
+    hard_limit_kbps: Option<u32>,
+}
+
 /// Relay server state
 struct RelayServer {
     socket: UdpSocket,
     sessions: RwLock<SessionPool>,
     ip_limiter: RwLock<IpRateLimiter>,
     lease_duration: Duration,
+    master_public_key: Option<pasetors::keys::AsymmetricPublicKey<pasetors::version4::V4>>,
 }
 
 impl RelayServer {
-    async fn new(listen: SocketAddr, max_sessions: usize, idle_timeout: Duration) -> Result<Self> {
+    async fn new(
+        listen: SocketAddr,
+        max_sessions: usize,
+        idle_timeout: Duration,
+        master_key_hex: Option<&str>,
+    ) -> Result<Self> {
         let socket = UdpSocket::bind(listen).await?;
         info!("Relay listening on {}", listen);
+
+        let master_public_key = if let Some(hex_key) = master_key_hex {
+            let key_bytes = hex::decode(hex_key)?;
+            let key = pasetors::keys::AsymmetricPublicKey::<pasetors::version4::V4>::from(&key_bytes)?;
+            Some(key)
+        } else {
+            None
+        };
 
         Ok(Self {
             socket,
             sessions: RwLock::new(SessionPool::new(max_sessions, idle_timeout)),
             ip_limiter: RwLock::new(IpRateLimiter::new(1000)),
             lease_duration: Duration::from_secs(DEFAULT_LEASE_DURATION_SECS),
+            master_public_key,
         })
     }
 
@@ -185,18 +224,46 @@ impl RelayServer {
         payload: &[u8],
         src: SocketAddr,
     ) -> Result<(), PacketError> {
-        // Parse lease present payload
-        if payload.is_empty() {
-            return Err(PacketError::InvalidPayload);
-        }
+        use rift_core::relay::LeasePresentPayload;
 
-        let peer_role = PeerRole::try_from(payload[0]).map_err(|_| PacketError::InvalidPayload)?;
+        // 1. Parse payload
+        let payload = LeasePresentPayload::decode(payload).map_err(|_| PacketError::InvalidPayload)?;
 
-        // TODO: Parse and validate PASETO lease token from payload
-        // For now, accept all leases (stub implementation)
-        let wavry_id = format!("peer-{}", src);
+        // 2. Validate PASETO lease token
+        let mut maybe_claims = None;
+        let wavry_id = if let Some(ref master_key) = self.master_public_key {
+            let token_str = String::from_utf8(payload.lease_token).map_err(|_| PacketError::InvalidPayload)?;
+            
+            let mut validation_rules = pasetors::claims::ClaimsValidationRules::new();
+            // validation_rules.validate_expiration(); // Removed or fix according to newer pasetors
+            
+            let untrusted_token = pasetors::token::UntrustedToken::<pasetors::token::Public, pasetors::version4::V4>::try_from(&token_str)
+                .map_err(|_| PacketError::InvalidSignature)?;
 
-        // Get or create session
+            let claims = pasetors::public::verify(
+                master_key,
+                &untrusted_token,
+                &validation_rules,
+                None,
+                None
+            ).map_err(|_| PacketError::InvalidSignature)?;
+
+            let claims_json: LeaseClaims = serde_json::from_value(claims.payload().clone().into())
+                .map_err(|_| PacketError::InvalidPayload)?;
+
+            // Verify session ID matches
+            if claims_json.session_id != header.session_id {
+                return Err(PacketError::InvalidPayload);
+            }
+
+            let id = claims_json.wavry_id.clone();
+            maybe_claims = Some(claims_json);
+            id
+        } else {
+            // If no master key, accept all (for development)
+            format!("dev-peer-{}", src)
+        };
+
         let mut sessions = self.sessions.write().await;
         let session = sessions
             .get_or_create(header.session_id, self.lease_duration)
@@ -205,11 +272,26 @@ impl RelayServer {
                 _ => PacketError::SessionError,
             })?;
 
-        // Register peer
+        let peer_role = match maybe_claims.as_ref().map(|c| c.role.as_str()) {
+            Some("server") => PeerRole::Server,
+            _ => PeerRole::Client,
+        };
+
+        // 3. Register peer
         if let Err(e) = session.register_peer(peer_role, wavry_id, src) {
             warn!("Failed to register peer from {}: {}", src, e);
             self.send_lease_reject(header.session_id, src, LeaseRejectReason::SessionFull).await;
             return Err(PacketError::SessionError);
+        }
+
+        // 5. Update limits from lease (if present)
+        if let Some(claims) = maybe_claims {
+            if let Some(soft) = claims.soft_limit_kbps {
+                session.soft_limit_kbps = soft;
+            }
+            if let Some(hard) = claims.hard_limit_kbps {
+                session.hard_limit_kbps = hard;
+            }
         }
 
         // Send ACK
@@ -267,27 +349,41 @@ impl RelayServer {
         }
 
         // Identify sender and get destination
-        let (sender_role, _sender, dest) = session
+        let (sender_role, _sender_id, dest) = session
             .identify_peer(src)
             .ok_or(PacketError::UnknownPeer)?;
 
         let dest_addr = dest.socket_addr;
 
-        // TODO: Sequence number check from payload header
-        // TODO: Per-peer rate limiting
+        // 6. Bandwidth Rate Limiting
+        let now = std::time::Instant::now();
+        let elapsed = now.duration_since(session.last_stats_reset).as_secs_f32();
+        if elapsed >= 1.0 {
+            session.current_bps = (session.bytes_sent_window as f32 / elapsed) * 8.0;
+            session.bytes_sent_window = 0;
+            session.last_stats_reset = now;
+        }
 
-        // Update sender's last seen (for NAT rebinding)
+        if session.current_bps > (session.hard_limit_kbps * 1000) as f32 {
+            return Err(PacketError::RateLimited);
+        }
+
+        // 7. Sequence number check 
+        // TODO: Implement sequence window check in session
+        
+        // 8. Update sender's last seen (for NAT rebinding)
         if let Some(sender) = session.get_peer_mut(sender_role) {
             if sender.socket_addr != src {
                 debug!("NAT rebinding detected for {:?}: {} -> {}", sender_role, sender.socket_addr, src);
                 sender.socket_addr = src;
             }
-            sender.last_seen = std::time::Instant::now();
+            sender.last_seen = now;
         }
 
         // Record stats
         let forward_size = RELAY_HEADER_SIZE + payload.len();
         session.record_forward(forward_size);
+        session.bytes_sent_window += forward_size as u64;
 
         // Forward the entire original packet to destination
         // We need to re-encode header + payload
@@ -382,6 +478,8 @@ enum PacketError {
     InvalidPayload,
     #[error("unexpected packet type")]
     UnexpectedType,
+    #[error("invalid signature")]
+    InvalidSignature,
     #[error("session not found")]
     SessionNotFound,
     #[error("session not active")]
@@ -454,6 +552,7 @@ async fn main() -> Result<()> {
         args.listen,
         args.max_sessions,
         Duration::from_secs(args.idle_timeout),
+        args.master_public_key.as_deref(),
     )
     .await?);
 

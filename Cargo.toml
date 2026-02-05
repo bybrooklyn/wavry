@@ -74,3 +74,4 @@ sqlx = { version = "0.8", features = ["runtime-tokio", "tls-rustls", "postgres",
 bitflags = { version = "2.6", features = ["serde"] }
 uuid = { version = "1", features = ["v4", "serde"] }
 chrono = { version = "0.4", features = ["serde"] }
+pasetors = "0.7"

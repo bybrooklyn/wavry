@@ -25,8 +25,10 @@ serde_json = "1"
 wavry-client = { path = "../../wavry-client" }
 wavry-media = { path = "../../wavry-media" }
 rift-core = { path = "../../rift-core" }
+rift-crypto = { path = "../../rift-crypto" }
 tokio = { version = "1", features = ["full"] }
 log = "0.4"
+hex = "0.4"
 anyhow = { workspace = true }
 reqwest = { version = "0.12", features = ["json"] }
 jsonwebtoken = "9"
@@ -34,4 +36,7 @@ uuid = { version = "1", features = ["v4"] }
 bytes.workspace = true
 
 [target.'cfg(target_os = "linux")'.dependencies]
+wavry-platform = { path = "../../wavry-platform" }
+
+[target.'cfg(target_os = "windows")'.dependencies]
 wavry-platform = { path = "../../wavry-platform" }
