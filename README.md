@@ -1,16 +1,20 @@
 # WAVRY: Latency-First Streaming Platform
 
-Wavry is a low-latency remote desktop and media streaming platform built in Rust. It prioritizes direct peer-to-peer connectivity, hardware-accelerated media pipelines, and cryptographic identity.
+[![Rust](https://img.shields.io/badge/language-Rust-orange.svg)](https://www.rust-lang.org/)
+[![Protocol](https://img.shields.io/badge/protocol-RIFT--v0.1.0-blue)](docs/RIFT_SPEC_V1.md)
+[![License](https://img.shields.io/badge/license-AGPL--3.0-blue)](LICENSE)
 
-## Principles
+---
 
-Wavry is designed around several core engineering principles:
+## The Manifesto
 
-1.  **Input Priority**: Input processing occurs on a dedicated high-priority thread to ensure responsiveness independent of video encoding latency.
-2.  **Delay-Oriented Congestion Control**: The DELTA algorithm manages bandwidth based on queuing delay trends rather than packet loss, maintaining minimal buffers.
-3.  **Cryptographic Identity**: Peer identity is established via Ed25519 keypairs. Authentication uses challenge-response signatures.
-4.  **Native Performance**: Media pipelines utilize platform-native APIs (DirectX/Windows Graphics Capture on Windows, ScreenCaptureKit/Metal on macOS) to minimize overhead.
-5.  **Direct Connectivity**: Peer-to-peer connectivity is prioritized using STUN for NAT traversal, with encrypted relay fallback only when necessary.
+Wavry is built on the premise that latency is a primary feature, not a secondary metric. While existing solutions provide high-quality video, Wavry focuses on the mathematical optimization of the entire pipeline—from capture to presentation.
+
+1.  **Input is Sacred**: We process input on high-priority threads that operate independently of video encoding to ensure responsiveness even under heavy system load.
+2.  **Delay-Oriented Control**: Our DELTA congestion control prioritizes queuing delay trends over throughput, maintaining minimal buffers for a near-zero standing queue.
+3.  **Privacy by Design**: Identity is established via Ed25519 keypairs. Authentication is handled through challenge-response signatures. We do not store or process user passwords.
+4.  **Hardware Native**: We utilize platform-native media APIs (Windows Graphics Capture/Media Foundation, Metal/ScreenCaptureKit, VA-API/PipeWire) to achieve maximum performance.
+5.  **P2P First**: We aggressively prioritize direct connections using STUN for NAT traversal. Encrypted relay fallback is used only as a last resort.
 
 ---
 
