@@ -24,3 +24,4 @@ once_cell = "1.18"
 wavry-client = { path = "../wavry-client" }
 x25519-dalek.workspace = true
 bytes.workspace = true
+rand.workspace = true

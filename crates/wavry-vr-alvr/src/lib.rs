@@ -10,8 +10,8 @@ pub use vendor::AlvrAdapter;
 mod stub {
     use std::sync::Arc;
 
-    use wavry_vr::{VrAdapter, VrAdapterCallbacks, VrError, VrResult};
     use wavry_vr::types::{Pose, StreamConfig, VideoFrame};
+    use wavry_vr::{VrAdapter, VrAdapterCallbacks, VrError, VrResult};
 
     pub struct AlvrAdapter {
         _callback: Option<Arc<dyn VrAdapterCallbacks>>,
@@ -57,7 +57,6 @@ mod stub {
 
         fn on_encoder_control(&mut self, _control: wavry_vr::types::EncoderControl) {}
     }
-
 }
 
 #[cfg(not(feature = "alvr"))]

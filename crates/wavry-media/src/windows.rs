@@ -1,21 +1,23 @@
 // Windows implementation for wavry-media
 // Using Windows.Graphics.Capture (WGC) for high-performance screen capture.
 
-use crate::{Codec, DecodeConfig, EncodeConfig, EncodedFrame, FrameData, FrameFormat, RawFrame, Renderer};
+use crate::{
+    Codec, DecodeConfig, EncodeConfig, EncodedFrame, FrameData, FrameFormat, RawFrame, Renderer,
+};
 use anyhow::{anyhow, Result};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{BufferSize, SampleFormat, SampleRate, Stream, StreamConfig, SupportedBufferSize};
 use libloading::{Library, Symbol};
 use opus::{Application, Channels, Decoder as OpusDecoder, Encoder as OpusEncoder};
 use std::collections::VecDeque;
-use std::sync::Mutex;
-use std::sync::Arc;
-use std::time::Instant;
 use std::ffi::c_void;
+use std::sync::Arc;
+use std::sync::Mutex;
+use std::time::Instant;
 
 use crate::audio::{
-    AUDIO_MAX_BUFFER_SAMPLES, OPUS_BITRATE_BPS, OPUS_CHANNELS, OPUS_FRAME_SAMPLES,
-    OPUS_MAX_FRAME_SAMPLES, OPUS_MAX_PACKET_BYTES, OPUS_SAMPLE_RATE, opus_frame_duration_us,
+    opus_frame_duration_us, AUDIO_MAX_BUFFER_SAMPLES, OPUS_BITRATE_BPS, OPUS_CHANNELS,
+    OPUS_FRAME_SAMPLES, OPUS_MAX_FRAME_SAMPLES, OPUS_MAX_PACKET_BYTES, OPUS_SAMPLE_RATE,
 };
 
 #[cfg(target_os = "windows")]
@@ -135,10 +137,7 @@ impl WindowsEncoder {
             )?;
 
             if count == 0 {
-                return Err(anyhow!(
-                    "No hardware encoders found for {:?}",
-                    config.codec
-                ));
+                return Err(anyhow!("No hardware encoders found for {:?}", config.codec));
             }
 
             let activate = std::slice::from_raw_parts(activate_list, count as usize)[0]
@@ -329,15 +328,11 @@ impl WindowsEncoder {
         output_media_type.SetGUID(&MF_MT_SUBTYPE, &mf_subtype_for_codec(self.config.codec))?;
         output_media_type.SetUINT32(&MF_MT_AVG_BITRATE, self.config.bitrate_kbps * 1000)?;
         MFSetAttributeRatio(&output_media_type, &MF_MT_FRAME_RATE, self.config.fps, 1)?;
-        MFSetAttributeSize(
-            &output_media_type,
-            &MF_MT_FRAME_SIZE,
-            width,
-            height,
-        )?;
+        MFSetAttributeSize(&output_media_type, &MF_MT_FRAME_SIZE, width, height)?;
         output_media_type
             .SetUINT32(&MF_MT_INTERLACE_MODE, MFVideoInterlace_Progressive.0 as u32)?;
-        self.transform.SetOutputType(0, Some(&output_media_type), 0)?;
+        self.transform
+            .SetOutputType(0, Some(&output_media_type), 0)?;
 
         let input_media_type: IMFMediaType = MFCreateMediaType()?;
         input_media_type.SetGUID(&MF_MT_MAJOR_TYPE, &MFMediaType_Video)?;
@@ -625,7 +620,9 @@ impl Renderer for WindowsAudioRenderer {
 #[cfg(target_os = "windows")]
 use windows::Win32::Media::Audio::*;
 #[cfg(target_os = "windows")]
-use windows::Win32::Media::KernelStreaming::{KSDATAFORMAT_SUBTYPE_IEEE_FLOAT, KSDATAFORMAT_SUBTYPE_PCM};
+use windows::Win32::Media::KernelStreaming::{
+    KSDATAFORMAT_SUBTYPE_IEEE_FLOAT, KSDATAFORMAT_SUBTYPE_PCM,
+};
 #[cfg(target_os = "windows")]
 use windows::Win32::System::Com::*;
 
@@ -771,10 +768,7 @@ impl WindowsAudioCapturer {
             let frac = (pos - idx as f64) as f32;
             let a = src[idx];
             let b = src[idx + 1];
-            let sample = [
-                a[0] + (b[0] - a[0]) * frac,
-                a[1] + (b[1] - a[1]) * frac,
-            ];
+            let sample = [a[0] + (b[0] - a[0]) * frac, a[1] + (b[1] - a[1]) * frac];
             out.push(sample);
             pos += step;
         }
@@ -843,10 +837,8 @@ impl WindowsAudioCapturer {
 }
 
 fn create_opus_encoder() -> Result<OpusEncoder> {
-    let mut encoder =
-        OpusEncoder::new(OPUS_SAMPLE_RATE, Channels::Stereo, Application::Audio).map_err(|e| {
-            anyhow!("Opus encoder init failed: {}", e)
-        })?;
+    let mut encoder = OpusEncoder::new(OPUS_SAMPLE_RATE, Channels::Stereo, Application::Audio)
+        .map_err(|e| anyhow!("Opus encoder init failed: {}", e))?;
     encoder
         .set_bitrate(opus::Bitrate::Bits(OPUS_BITRATE_BPS))
         .map_err(|e| anyhow!("Opus bitrate set failed: {}", e))?;
@@ -1185,14 +1177,24 @@ struct GamepadState {
 }
 
 impl GamepadState {
-    fn update(&mut self, id: u32, axes: &[crate::GamepadAxis], buttons: &[crate::GamepadButton]) {
-        let target = if id == 0 { &mut self.left } else { &mut self.right };
+    fn update(
+        &mut self,
+        id: u32,
+        axes: &[crate::GamepadAxis],
+        buttons: &[crate::GamepadButton],
+        deadzone: f32,
+    ) {
+        let target = if id == 0 {
+            &mut self.left
+        } else {
+            &mut self.right
+        };
         target.axes = [0.0; 4];
         target.buttons = [false; 2];
         for axis in axes {
             let idx = axis.axis as usize;
             if idx < target.axes.len() {
-                target.axes[idx] = axis.value;
+                target.axes[idx] = apply_gamepad_deadzone(axis.value, deadzone);
             }
         }
         for button in buttons {
@@ -1244,11 +1246,27 @@ fn trigger_to_u8(value: f32) -> u8 {
     (value.clamp(0.0, 1.0) * u8::MAX as f32) as u8
 }
 
+fn normalize_gamepad_deadzone(deadzone: f32) -> f32 {
+    deadzone.clamp(0.0, 0.95)
+}
+
+fn apply_gamepad_deadzone(value: f32, deadzone: f32) -> f32 {
+    let deadzone = normalize_gamepad_deadzone(deadzone);
+    let abs = value.abs();
+    if abs <= deadzone {
+        0.0
+    } else {
+        let scaled = (abs - deadzone) / (1.0 - deadzone);
+        scaled.copysign(value).clamp(-1.0, 1.0)
+    }
+}
+
 /// Windows input injector
 pub struct WindowsInputInjector {
     gamepad: Option<VigemGamepad>,
     gamepad_state: GamepadState,
     gamepad_failed: bool,
+    gamepad_deadzone: f32,
 }
 
 impl Default for WindowsInputInjector {
@@ -1257,7 +1275,21 @@ impl Default for WindowsInputInjector {
             gamepad: None,
             gamepad_state: GamepadState::default(),
             gamepad_failed: false,
+            gamepad_deadzone: 0.1,
         }
+    }
+}
+
+impl WindowsInputInjector {
+    pub fn with_gamepad_deadzone(deadzone: f32) -> Self {
+        Self {
+            gamepad_deadzone: normalize_gamepad_deadzone(deadzone),
+            ..Self::default()
+        }
+    }
+
+    pub fn set_gamepad_deadzone(&mut self, deadzone: f32) {
+        self.gamepad_deadzone = normalize_gamepad_deadzone(deadzone);
     }
 }
 
@@ -1371,7 +1403,8 @@ impl crate::InputInjector for WindowsInputInjector {
                     axes,
                     buttons,
                 } => {
-                    self.gamepad_state.update(gamepad_id, &axes, &buttons);
+                    self.gamepad_state
+                        .update(gamepad_id, &axes, &buttons, self.gamepad_deadzone);
                     if self.gamepad.is_none() && !self.gamepad_failed {
                         match VigemGamepad::new() {
                             Ok(pad) => self.gamepad = Some(pad),
@@ -1399,6 +1432,22 @@ pub struct WindowsProbe;
 impl crate::CapabilityProbe for WindowsProbe {
     fn supported_encoders(&self) -> Result<Vec<crate::Codec>> {
         supported_mft_codecs(MFT_CATEGORY_VIDEO_ENCODER)
+    }
+
+    fn encoder_capabilities(&self) -> Result<Vec<crate::VideoCodecCapability>> {
+        Ok(self
+            .supported_encoders()?
+            .into_iter()
+            .map(|codec| {
+                let supports_hdr10 = matches!(codec, Codec::Av1 | Codec::Hevc);
+                crate::VideoCodecCapability {
+                    codec,
+                    hardware_accelerated: true,
+                    supports_10bit: supports_hdr10,
+                    supports_hdr10,
+                }
+            })
+            .collect())
     }
 
     fn supported_decoders(&self) -> Result<Vec<crate::Codec>> {

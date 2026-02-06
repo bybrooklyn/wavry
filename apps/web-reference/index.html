@@ -1,0 +1,158 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Wavry Web Reference Client</title>
+  <style>
+    :root {
+      --bg: #0f172a;
+      --panel: #111827;
+      --border: #334155;
+      --text: #e2e8f0;
+      --muted: #94a3b8;
+      --accent: #10b981;
+      --danger: #ef4444;
+    }
+    body {
+      margin: 0;
+      font-family: "SF Mono", "Consolas", "Menlo", monospace;
+      background: linear-gradient(120deg, #0f172a, #020617);
+      color: var(--text);
+    }
+    main {
+      max-width: 960px;
+      margin: 0 auto;
+      padding: 24px;
+    }
+    h1 {
+      margin: 0 0 8px;
+      font-size: 24px;
+    }
+    p {
+      margin: 0 0 16px;
+      color: var(--muted);
+    }
+    .card {
+      border: 1px solid var(--border);
+      background: rgba(17, 24, 39, 0.9);
+      border-radius: 10px;
+      padding: 16px;
+      margin-bottom: 14px;
+    }
+    .row {
+      display: grid;
+      gap: 10px;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      margin-bottom: 10px;
+    }
+    label {
+      display: block;
+      font-size: 12px;
+      color: var(--muted);
+      margin-bottom: 4px;
+    }
+    input, textarea, button {
+      width: 100%;
+      border-radius: 8px;
+      border: 1px solid var(--border);
+      background: #020617;
+      color: var(--text);
+      padding: 10px;
+      font: inherit;
+      box-sizing: border-box;
+    }
+    button {
+      cursor: pointer;
+      background: #0b1220;
+    }
+    button.primary {
+      border-color: #0f766e;
+      background: #052e2b;
+    }
+    button.danger {
+      border-color: #991b1b;
+      background: #2a0a0a;
+    }
+    .status {
+      font-size: 12px;
+      color: var(--muted);
+      margin-top: 6px;
+    }
+    .status.ok {
+      color: var(--accent);
+    }
+    .status.err {
+      color: var(--danger);
+    }
+    textarea {
+      min-height: 110px;
+      resize: vertical;
+    }
+    pre {
+      margin: 0;
+      background: #000;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      min-height: 220px;
+      max-height: 360px;
+      overflow: auto;
+      padding: 12px;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Wavry Web Reference Client</h1>
+    <p>Reference stub for WebRTC signaling + gateway WS messaging.</p>
+
+    <section class="card">
+      <div class="row">
+        <div>
+          <label for="gatewayBase">Gateway Base URL</label>
+          <input id="gatewayBase" value="http://localhost:3000" />
+        </div>
+        <div>
+          <label for="sessionToken">Session Token</label>
+          <input id="sessionToken" placeholder="paste token from /auth/login" />
+        </div>
+        <div>
+          <label for="targetUsername">Target Username</label>
+          <input id="targetUsername" placeholder="peer username" />
+        </div>
+      </div>
+      <div class="row">
+        <button id="connectWsBtn" class="primary">Connect WS + Bind</button>
+        <button id="disconnectWsBtn" class="danger">Disconnect WS</button>
+      </div>
+      <div id="wsStatus" class="status">WS: disconnected</div>
+    </section>
+
+    <section class="card">
+      <label for="sdpInput">SDP</label>
+      <textarea id="sdpInput" placeholder="paste offer/answer SDP"></textarea>
+      <div class="row" style="margin-top:10px">
+        <button id="offerBtn">POST /webrtc/offer</button>
+        <button id="answerBtn">POST /webrtc/answer</button>
+      </div>
+    </section>
+
+    <section class="card">
+      <label for="candidateInput">ICE Candidate</label>
+      <textarea id="candidateInput" placeholder="candidate:..."></textarea>
+      <div class="row" style="margin-top:10px">
+        <button id="candidateBtn">POST /webrtc/candidate</button>
+      </div>
+    </section>
+
+    <section class="card">
+      <label>Event Log</label>
+      <pre id="log"></pre>
+    </section>
+  </main>
+
+  <script src="./app.js"></script>
+</body>
+</html>

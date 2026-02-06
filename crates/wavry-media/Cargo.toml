@@ -18,6 +18,7 @@ gstreamer = "0.22"
 gstreamer-app = "0.22"
 gstreamer-video = "0.22"
 gstreamer-audio = "0.22"
+x11rb = { version = "0.13", features = ["randr"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 block2 = "0.6.2"
@@ -32,6 +33,7 @@ objc2-foundation = "0.3.2"
 objc2-quartz-core = "0.3.2"
 objc2-screen-capture-kit = "0.3.2"
 objc2-video-toolbox = "0.3.2"
+libloading = "0.8"
 opus = "0.3"
 
 [target.'cfg(target_os = "windows")'.dependencies.windows]

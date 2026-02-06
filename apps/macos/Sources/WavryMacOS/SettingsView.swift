@@ -39,6 +39,23 @@ struct SettingsView: View {
             .padding(.bottom, .themeSpacing.sm)
             
             Divider().background(Color.borderSubtle).padding(.horizontal, .themeSpacing.xxl)
+
+            if !appState.errorMessage.isEmpty || !appState.statusMessage.isEmpty {
+                VStack(alignment: .leading, spacing: 4) {
+                    if !appState.errorMessage.isEmpty {
+                        Text(appState.errorMessage)
+                            .font(.caption)
+                            .foregroundColor(.accentDanger)
+                    }
+                    if !appState.statusMessage.isEmpty {
+                        Text(appState.statusMessage)
+                            .font(.caption)
+                            .foregroundColor(.accentSuccess)
+                    }
+                }
+                .padding(.horizontal, .themeSpacing.xxl)
+                .padding(.top, .themeSpacing.sm)
+            }
             
             // Content
             ScrollView {
@@ -56,6 +73,19 @@ struct SettingsView: View {
             
             // Footer Action
             HStack {
+                Button(action: {
+                    appState.refreshDisplays()
+                }) {
+                    Text("Refresh Displays")
+                        .fontWeight(.semibold)
+                        .padding(.horizontal, .themeSpacing.xl)
+                        .padding(.vertical, .themeSpacing.sm)
+                        .background(Color.bgElevation3)
+                        .foregroundColor(.white)
+                        .cornerRadius(.themeRadius.md)
+                }
+                .buttonStyle(.plain)
+
                 Spacer()
                 Button(action: {
                     appState.saveSettings()
@@ -111,25 +141,45 @@ struct SettingsView: View {
     var hostSettings: some View {
         VStack(alignment: .leading, spacing: 20) {
             SettingsSectionHeader(title: "Hosting")
-            SettingsRow(label: "Hosting Enabled", sublabel: "Allow connections to this computer.", control: Toggle("", isOn: .constant(true)).labelsHidden())
-            SettingsRow(label: "Host Name", sublabel: "Identifies your computer to others.", control: TextField("Mac", text: $appState.displayName).textFieldStyle(.plain).padding(6).background(Color.bgElevation1).cornerRadius(.themeRadius.sm).frame(width: 200))
+            SettingsRow(label: "Host Name", sublabel: "Identifies your computer to others.", control: TextField("Mac", text: $appState.displayName).textFieldStyle(.plain).padding(6).background(Color.bgElevation1).cornerRadius(.themeRadius.sm).frame(width: 220))
             
             SettingsSectionHeader(title: "Streaming")
             SettingsRow(label: "Resolution", sublabel: "Target resolution for host capture.", control: Picker("", selection: $appState.resolution) {
                 Text("1280x720").tag("1280x720")
                 Text("1920x1080").tag("1920x1080")
                 Text("2560x1440").tag("2560x1440")
+                Text("3840x2160").tag("3840x2160")
+            }.labelsHidden().pickerStyle(.menu).frame(width: 150))
+            SettingsRow(label: "Host FPS", sublabel: "Frame rate used by host encoding.", control: Picker("", selection: $appState.hostFps) {
+                Text("30 FPS").tag(30)
+                Text("60 FPS").tag(60)
+                Text("90 FPS").tag(90)
+                Text("120 FPS").tag(120)
             }.labelsHidden().pickerStyle(.menu).frame(width: 150))
             SettingsRow(label: "Bandwidth Limit", sublabel: "Maximum bit rate used by the host.", control: Picker("", selection: $appState.bitrateMbps) {
                 Text("10 Mbps").tag(10)
                 Text("25 Mbps").tag(25)
                 Text("50 Mbps").tag(50)
+                Text("80 Mbps").tag(80)
             }.labelsHidden().pickerStyle(.menu).frame(width: 150))
+            SettingsRow(
+                label: "Keyframe Interval",
+                sublabel: "How often to force an IDR frame (ms).",
+                control: TextField("2000", value: $appState.keyframeIntervalMs, formatter: NumberFormatter())
+                    .textFieldStyle(.plain)
+                    .padding(6)
+                    .background(Color.bgElevation1)
+                    .cornerRadius(.themeRadius.sm)
+                    .frame(width: 100)
+            )
             
             SettingsSectionHeader(title: "Hardware")
-            SettingsRow(label: "Display", sublabel: "Select which monitor to capture.", control: Picker("", selection: .constant(0)) {
-                Text("Display 0 (Built-in)").tag(0)
-            }.labelsHidden().pickerStyle(.menu).frame(width: 200))
+            SettingsRow(label: "Display", sublabel: "Select which monitor to capture.", control: Picker("", selection: $appState.selectedDisplayID) {
+                Text("Auto").tag(UInt32.max)
+                ForEach(appState.hostDisplays) { display in
+                    Text(display.label).tag(display.id)
+                }
+            }.labelsHidden().pickerStyle(.menu).frame(width: 260))
         }
     }
     

@@ -1,3 +1,7 @@
+#![allow(dead_code)]
+
+#[allow(unused_imports)]
+use std::collections::{BTreeMap, VecDeque};
 #[allow(unused_imports)]
 use std::net::SocketAddr;
 #[allow(unused_imports)]
@@ -11,25 +15,205 @@ use anyhow::{anyhow, Result};
 use bytes::Bytes;
 use tokio::net::UdpSocket;
 use tokio::sync::oneshot;
+use tokio::time;
 
 // Imports
-use wavry_media::{Codec, EncodeConfig, Renderer, Resolution};
+use wavry_media::{Codec, EncodeConfig, EncodedFrame, Renderer, Resolution};
 
 #[cfg(target_os = "macos")]
 use wavry_media::{MacScreenEncoder, MacVideoRenderer};
 
+#[cfg(target_os = "macos")]
 use rift_core::cc::{DeltaCC, DeltaConfig};
 #[allow(unused_imports)]
 use rift_core::{
-    decode_msg, encode_msg, CongestionControl as ProtoCongestion, ControlMessage as ProtoControl,
-    Message as ProtoMessage, PhysicalPacket, Pong as ProtoPong, RIFT_MAGIC, RIFT_VERSION,
+    chunk_video_payload, decode_msg, encode_msg, Codec as RiftCodec,
+    CongestionControl as ProtoCongestion, ControlMessage as ProtoControl, Handshake,
+    Hello as ProtoHello, HelloAck as ProtoHelloAck, Message as ProtoMessage, PhysicalPacket,
+    Pong as ProtoPong, Resolution as ProtoResolution, Role, RIFT_MAGIC, RIFT_VERSION,
 };
-use wavry_client::{run_client as run_rift_client, ClientConfig, RendererFactory};
+use rift_crypto::connection::SecureServer;
+use wavry_client::{
+    run_client as run_rift_client, ClientConfig, ClientRuntimeStats, RendererFactory,
+};
 #[cfg(not(target_os = "macos"))]
 use wavry_media::DummyRenderer as MacVideoRenderer;
 
 #[allow(dead_code)]
 const CONNECTION_TIMEOUT: Duration = Duration::from_secs(5);
+const MAX_DATAGRAM_SIZE: usize = 1200;
+const NACK_HISTORY: usize = 512;
+const PACER_MIN_US: u64 = 20;
+const PACER_MAX_US: u64 = 500;
+const PACER_BASE_US: f64 = 30.0;
+
+#[derive(Debug)]
+struct SendHistory {
+    capacity: usize,
+    order: VecDeque<u64>,
+    packets: BTreeMap<u64, Bytes>,
+}
+
+impl SendHistory {
+    fn new(capacity: usize) -> Self {
+        Self {
+            capacity,
+            order: VecDeque::with_capacity(capacity),
+            packets: BTreeMap::new(),
+        }
+    }
+
+    fn insert(&mut self, packet_id: u64, payload: Bytes) {
+        if !self.packets.contains_key(&packet_id) {
+            self.order.push_back(packet_id);
+        }
+        self.packets.insert(packet_id, payload);
+        while self.order.len() > self.capacity {
+            if let Some(oldest) = self.order.pop_front() {
+                self.packets.remove(&oldest);
+            }
+        }
+    }
+
+    fn get(&self, packet_id: u64) -> Option<Bytes> {
+        self.packets.get(&packet_id).cloned()
+    }
+}
+
+#[derive(Debug)]
+struct Pacer {
+    next_send: time::Instant,
+    interval_us: u64,
+    rtt_smooth_us: f64,
+    rtt_min_us: u64,
+    jitter_smooth_us: f64,
+    last_packet_bytes: usize,
+}
+
+impl Pacer {
+    fn new() -> Self {
+        Self {
+            next_send: time::Instant::now(),
+            interval_us: PACER_BASE_US as u64,
+            rtt_smooth_us: 0.0,
+            rtt_min_us: u64::MAX,
+            jitter_smooth_us: 0.0,
+            last_packet_bytes: 1200,
+        }
+    }
+
+    fn on_stats(&mut self, rtt_us: u64, jitter_us: u32, bitrate_kbps: u32) {
+        if self.rtt_smooth_us == 0.0 {
+            self.rtt_smooth_us = rtt_us as f64;
+        } else {
+            self.rtt_smooth_us = 0.875 * self.rtt_smooth_us + 0.125 * (rtt_us as f64);
+        }
+        self.rtt_min_us = self.rtt_min_us.min(rtt_us);
+        if self.jitter_smooth_us == 0.0 {
+            self.jitter_smooth_us = jitter_us as f64;
+        } else {
+            self.jitter_smooth_us = 0.75 * self.jitter_smooth_us + 0.25 * (jitter_us as f64);
+        }
+        self.recompute_interval(bitrate_kbps);
+    }
+
+    fn note_packet_bytes(&mut self, bytes: usize, bitrate_kbps: u32) {
+        self.last_packet_bytes = bytes.max(1);
+        self.recompute_interval(bitrate_kbps);
+    }
+
+    fn recompute_interval(&mut self, bitrate_kbps: u32) {
+        let bitrate_factor = (20_000.0 / bitrate_kbps.max(1) as f64).clamp(0.5, 2.0);
+        let size_factor = (self.last_packet_bytes as f64 / 1200.0).clamp(0.5, 2.0);
+        let base_interval = PACER_BASE_US * bitrate_factor * size_factor;
+
+        let rtt_base = if self.rtt_min_us == u64::MAX {
+            self.rtt_smooth_us.max(1.0)
+        } else {
+            self.rtt_min_us as f64
+        };
+        let rtt_increase = ((self.rtt_smooth_us - rtt_base).max(0.0) / rtt_base).clamp(0.0, 2.0);
+        let jitter_norm = (self.jitter_smooth_us / 2000.0).clamp(0.0, 3.0);
+
+        let mut congestion = 1.0 + rtt_increase * 1.5 + jitter_norm * 0.5;
+        if rtt_increase < 0.02 && jitter_norm < 0.2 {
+            congestion *= 0.8;
+        }
+
+        let interval =
+            (base_interval * congestion).clamp(PACER_MIN_US as f64, PACER_MAX_US as f64) as u64;
+        self.interval_us = interval.max(PACER_MIN_US);
+    }
+
+    async fn wait(&mut self) {
+        let now = time::Instant::now();
+        if self.next_send <= now {
+            self.next_send = now;
+        }
+        let target = self.next_send;
+        self.next_send += Duration::from_micros(self.interval_us);
+        time::sleep_until(target).await;
+    }
+}
+
+enum CryptoState {
+    Disabled,
+    Handshaking(SecureServer),
+    Established(SecureServer),
+}
+
+impl CryptoState {
+    fn is_established(&self) -> bool {
+        matches!(self, CryptoState::Established(_))
+    }
+
+    fn decrypt(&mut self, packet_id: u64, payload: &[u8]) -> Result<Vec<u8>> {
+        match self {
+            CryptoState::Disabled => Ok(payload.to_vec()),
+            CryptoState::Established(server) => server
+                .decrypt(packet_id, payload)
+                .map_err(|e| anyhow!("decrypt failed: {}", e)),
+            CryptoState::Handshaking(_) => Err(anyhow!("crypto handshake not complete")),
+        }
+    }
+
+    fn encrypt(&mut self, packet_id: u64, payload: &[u8]) -> Result<Vec<u8>> {
+        match self {
+            CryptoState::Disabled => Ok(payload.to_vec()),
+            CryptoState::Established(server) => server
+                .encrypt(packet_id, payload)
+                .map_err(|e| anyhow!("encrypt failed: {}", e)),
+            CryptoState::Handshaking(_) => Err(anyhow!("crypto handshake not complete")),
+        }
+    }
+}
+
+struct PeerState {
+    session_alias: u32,
+    session_id: Option<Vec<u8>>,
+    crypto: CryptoState,
+    handshake: Handshake,
+    next_packet_id: u64,
+    frame_id: u64,
+    send_history: SendHistory,
+    pacer: Pacer,
+}
+
+impl PeerState {
+    fn new() -> Result<Self> {
+        let crypto = SecureServer::new().map_err(|e| anyhow!("crypto init failed: {}", e))?;
+        Ok(Self {
+            session_alias: rand::random::<u32>().max(1),
+            session_id: None,
+            crypto: CryptoState::Handshaking(crypto),
+            handshake: Handshake::new(Role::Host),
+            next_packet_id: 1,
+            frame_id: 0,
+            send_history: SendHistory::new(NACK_HISTORY),
+            pacer: Pacer::new(),
+        })
+    }
+}
 
 // Stats shared with FFI
 #[derive(Debug, Default)]
@@ -55,10 +239,116 @@ impl SessionHandle {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
+pub struct HostRuntimeConfig {
+    pub codec: Codec,
+    pub width: u16,
+    pub height: u16,
+    pub fps: u16,
+    pub bitrate_kbps: u32,
+    pub keyframe_interval_ms: u32,
+    pub display_id: Option<u32>,
+}
+
+impl Default for HostRuntimeConfig {
+    fn default() -> Self {
+        Self {
+            codec: Codec::H264,
+            width: 1920,
+            height: 1080,
+            fps: 60,
+            bitrate_kbps: 8000,
+            keyframe_interval_ms: 2000,
+            display_id: None,
+        }
+    }
+}
+
+fn select_codec_for_hello(hello: &ProtoHello, encoder_codec: Codec) -> Option<RiftCodec> {
+    let desired = match encoder_codec {
+        Codec::Av1 => RiftCodec::Av1,
+        Codec::Hevc => RiftCodec::Hevc,
+        Codec::H264 => RiftCodec::H264,
+    };
+    if hello.supported_codecs.contains(&(desired as i32)) {
+        Some(desired)
+    } else {
+        None
+    }
+}
+
+fn stream_resolution_from_config(config: &EncodeConfig) -> ProtoResolution {
+    ProtoResolution {
+        width: config.resolution.width as u32,
+        height: config.resolution.height as u32,
+    }
+}
+
+async fn send_rift_msg(
+    socket: &UdpSocket,
+    peer_state: &mut PeerState,
+    peer: SocketAddr,
+    msg: ProtoMessage,
+) -> Result<()> {
+    let plaintext = encode_msg(&msg);
+    let packet_id = peer_state.next_packet_id;
+    peer_state.next_packet_id = peer_state.next_packet_id.wrapping_add(1);
+
+    let payload = peer_state.crypto.encrypt(packet_id, &plaintext)?;
+    let phys = PhysicalPacket {
+        version: RIFT_VERSION,
+        session_id: None,
+        session_alias: Some(peer_state.session_alias),
+        packet_id,
+        payload: Bytes::from(payload),
+    };
+
+    let bytes = phys.encode();
+    peer_state.send_history.insert(packet_id, bytes.clone());
+    socket.send_to(&bytes, peer).await?;
+    Ok(())
+}
+
+async fn send_video_frame(
+    socket: &UdpSocket,
+    peer_state: &mut PeerState,
+    peer: SocketAddr,
+    frame: EncodedFrame,
+    bitrate_kbps: u32,
+) -> Result<()> {
+    let chunks = chunk_video_payload(
+        peer_state.frame_id,
+        frame.timestamp_us,
+        frame.keyframe,
+        &frame.data,
+        MAX_DATAGRAM_SIZE,
+    )
+    .map_err(|e| anyhow!("chunking error: {}", e))?;
+    peer_state.frame_id = peer_state.frame_id.wrapping_add(1);
+
+    for chunk in chunks {
+        let packet_bytes = chunk.payload.len() + 64;
+        let msg = ProtoMessage {
+            content: Some(rift_core::message::Content::Media(
+                rift_core::MediaMessage {
+                    content: Some(rift_core::media_message::Content::Video(chunk)),
+                },
+            )),
+        };
+        peer_state
+            .pacer
+            .note_packet_bytes(packet_bytes, bitrate_kbps);
+        peer_state.pacer.wait().await;
+        send_rift_msg(socket, peer_state, peer, msg).await?;
+    }
+    Ok(())
+}
+
 pub async fn run_host(
     port: u16,
+    host_config: HostRuntimeConfig,
     stats: Arc<SessionStats>,
-    mut stop_rx: oneshot::Receiver<()>,
+    #[allow(unused_mut)] mut stop_rx: oneshot::Receiver<()>,
     init_tx: oneshot::Sender<Result<()>>,
 ) -> Result<()> {
     #![allow(unused_variables)]
@@ -85,15 +375,15 @@ pub async fn run_host(
 
     // 2. Setup Encoder
     let config = EncodeConfig {
-        codec: Codec::H264,
+        codec: host_config.codec,
         resolution: Resolution {
-            width: 1920,
-            height: 1080,
-        }, // TODO: Dynamic
-        fps: 60,
-        bitrate_kbps: 8000,
-        keyframe_interval_ms: 2000,
-        display_id: None,
+            width: host_config.width,
+            height: host_config.height,
+        },
+        fps: host_config.fps,
+        bitrate_kbps: host_config.bitrate_kbps,
+        keyframe_interval_ms: host_config.keyframe_interval_ms,
+        display_id: host_config.display_id,
     };
 
     #[cfg(target_os = "macos")]
@@ -115,7 +405,7 @@ pub async fn run_host(
 
         // 3. Client state
         let mut client_addr: Option<SocketAddr> = None;
-        let mut sequence: u64 = 0;
+        let mut peer_state: Option<PeerState> = None;
 
         // 4. DELTA Congestion Control
         let mut cc = DeltaCC::new(
@@ -129,13 +419,14 @@ pub async fn run_host(
         let mut fps_counter = 0;
         let mut last_fps_time = std::time::Instant::now();
         let mut last_packet_time = std::time::Instant::now(); // To track client activity
-        let mut bytes_sent = 0;
+        let mut bytes_sent: u64 = 0;
 
         loop {
             // Enforce timeout
             if client_addr.is_some() && last_packet_time.elapsed() > CONNECTION_TIMEOUT {
                 log::warn!("Client timed out");
                 client_addr = None;
+                peer_state = None;
                 stats.connected.store(false, Ordering::Relaxed);
             }
 
@@ -147,98 +438,186 @@ pub async fn run_host(
                     break;
                 }
 
-                // Check for incoming packets (Control/Keepalive)
+                // Check for incoming packets (Control/Keepalive/Handshake)
                 res = async {
                     let mut buf = [0u8; 2048];
                     socket.recv_from(&mut buf).await.map(|(len, src)| (buf, len, src))
                 } => {
-                    match res {
-                        Ok((buf, len, src)) => {
-                            // Accept new client or update existing
-                            if client_addr.is_none() || client_addr == Some(src) {
-                                if client_addr.is_none() {
-                                    log::info!("Client connected from {}", src);
-                                    client_addr = Some(src);
-                                    stats.connected.store(true, Ordering::Relaxed);
-                                }
-                                last_packet_time = std::time::Instant::now();
+                    let handled: Result<()> = async {
+                        let (buf, len, src) = res?;
+                        if client_addr.is_some() && client_addr != Some(src) {
+                            // Only one active client for now.
+                            return Ok(());
+                        }
+
+                        if client_addr.is_none() {
+                            client_addr = Some(src);
+                            peer_state = Some(PeerState::new()?);
+                            log::info!("Client connected from {}", src);
+                        }
+
+                        last_packet_time = std::time::Instant::now();
+
+                        if len < 2 || buf[0..2] != RIFT_MAGIC {
+                            return Ok(());
+                        }
+
+                        let phys = match PhysicalPacket::decode(Bytes::copy_from_slice(&buf[..len])) {
+                            Ok(p) => p,
+                            Err(e) => {
+                                log::warn!("RIFT decode error: {}", e);
+                                return Ok(());
                             }
+                        };
 
-                            // Parse RIFT message if this is a valid RIFT packet
-                            if len >= 2 && buf[0..2] == RIFT_MAGIC {
-                                if let Ok(phys) = PhysicalPacket::decode(Bytes::copy_from_slice(&buf[..len])) {
-                                    // For now, no encryption on host (MVP)
-                                    if let Ok(msg) = decode_msg(&phys.payload) {
-                                        if let Some(rift_core::message::Content::Control(ctrl)) = msg.content {
-                                            match ctrl.content {
-                                                Some(rift_core::control_message::Content::Ping(ping)) => {
-                                                    // Respond with Pong
-                                                    let pong = ProtoMessage {
-                                                        content: Some(rift_core::message::Content::Control(ProtoControl {
-                                                            content: Some(rift_core::control_message::Content::Pong(ProtoPong {
-                                                                timestamp_us: ping.timestamp_us,
-                                                            })),
-                                                        })),
-                                                    };
-                                                    let payload = encode_msg(&pong);
-                                                    let phys_out = PhysicalPacket {
-                                                        version: RIFT_VERSION,
-                                                        session_id: None,
-                                                        session_alias: phys.session_alias,
-                                                        packet_id: sequence,
-                                                        payload: Bytes::from(payload),
-                                                    };
-                                                    let _ = socket.send_to(&phys_out.encode(), src).await;
-                                                    sequence = sequence.wrapping_add(1);
-                                                }
-                                                Some(rift_core::control_message::Content::Stats(report)) => {
-                                                    // Feed to DELTA CC (include jitter for preemptive FEC)
-                                                    let loss_ratio = if report.received_packets > 0 {
-                                                        report.lost_packets as f32 / (report.received_packets + report.lost_packets) as f32
-                                                    } else {
-                                                        0.0
-                                                    };
-                                                    cc.on_rtt_sample(report.rtt_us, loss_ratio, report.jitter_us);
-                                                    stats.rtt_ms.store((report.rtt_us / 1000) as u32, Ordering::Relaxed);
+                        let state = match peer_state.as_mut() {
+                            Some(s) => s,
+                            None => return Ok(()),
+                        };
 
-                                                    // Check if bitrate target changed
-                                                    let new_bitrate = cc.target_bitrate_kbps();
-                                                    if new_bitrate != last_target_bitrate {
-                                                        log::info!("DELTA: Bitrate {} -> {} kbps", last_target_bitrate, new_bitrate);
-                                                        if let Err(e) = encoder.set_bitrate(new_bitrate) {
-                                                            log::warn!("Failed to set encoder bitrate: {}", e);
-                                                        }
-                                                        last_target_bitrate = new_bitrate;
+                        if let CryptoState::Handshaking(server) = &mut state.crypto {
+                            if let Some(session_id) = phys.session_id {
+                                if session_id == 0 {
+                                    let msg2 = server.process_client_hello(&phys.payload)
+                                        .map_err(|e| anyhow!("crypto msg1 error: {}", e))?;
+                                    let resp = PhysicalPacket {
+                                        version: RIFT_VERSION,
+                                        session_id: Some(0),
+                                        session_alias: None,
+                                        packet_id: 0,
+                                        payload: Bytes::copy_from_slice(&msg2),
+                                    };
+                                    let _ = socket.send_to(&resp.encode(), src).await;
+                                }
+                            } else if phys.session_alias.is_some() {
+                                let mut server = match std::mem::replace(&mut state.crypto, CryptoState::Disabled) {
+                                    CryptoState::Handshaking(server) => server,
+                                    other => {
+                                        state.crypto = other;
+                                        return Ok(());
+                                    }
+                                };
+                                if let Err(e) = server.process_client_finish(&phys.payload) {
+                                    state.crypto = CryptoState::Handshaking(server);
+                                    return Err(anyhow!("crypto msg3 error: {}", e));
+                                }
+                                state.crypto = CryptoState::Established(server);
+                                log::info!("crypto established with {}", src);
+                            }
+                            return Ok(());
+                        }
 
-                                                        // Send CongestionControl to client
-                                                        let cc_msg = ProtoMessage {
-                                                            content: Some(rift_core::message::Content::Control(ProtoControl {
-                                                                content: Some(rift_core::control_message::Content::Congestion(ProtoCongestion {
-                                                                    target_bitrate_kbps: new_bitrate,
-                                                                    target_fps: cc.target_fps(),
-                                                                })),
-                                                            })),
-                                                        };
-                                                        let payload = encode_msg(&cc_msg);
-                                                        let phys_out = PhysicalPacket {
-                                                            version: RIFT_VERSION,
-                                                            session_id: None,
-                                                            session_alias: phys.session_alias,
-                                                            packet_id: sequence,
-                                                            payload: Bytes::from(payload),
-                                                        };
-                                                        let _ = socket.send_to(&phys_out.encode(), src).await;
-                                                        sequence = sequence.wrapping_add(1);
-                                                    }
-                                                }
-                                                _ => {}
-                                            }
+                        let plaintext = match state.crypto.decrypt(phys.packet_id, &phys.payload) {
+                            Ok(p) => p,
+                            Err(e) => {
+                                log::warn!("decrypt failed: {}", e);
+                                return Ok(());
+                            }
+                        };
+                        let msg = match decode_msg(&plaintext) {
+                            Ok(m) => m,
+                            Err(e) => {
+                                log::warn!("RIFT proto decode error: {}", e);
+                                return Ok(());
+                            }
+                        };
+
+                        if let Some(rift_core::message::Content::Control(ctrl)) = msg.content {
+                            match ctrl.content {
+                                Some(rift_core::control_message::Content::Hello(hello)) => {
+                                    if !state.crypto.is_established() {
+                                        return Ok(());
+                                    }
+                                    let selected = select_codec_for_hello(&hello, config.codec);
+                                    let accepted = selected.is_some();
+                                    let ack = ProtoHelloAck {
+                                        accepted,
+                                        selected_codec: selected.map(|c| c as i32).unwrap_or(0),
+                                        stream_resolution: Some(stream_resolution_from_config(&config)),
+                                        fps: config.fps as u32,
+                                        initial_bitrate_kbps: config.bitrate_kbps,
+                                        keyframe_interval_ms: config.keyframe_interval_ms,
+                                        session_id: if accepted {
+                                            let sid = rand::random::<[u8; 16]>().to_vec();
+                                            state.session_id = Some(sid.clone());
+                                            sid
+                                        } else {
+                                            vec![0u8; 16]
+                                        },
+                                        session_alias: state.session_alias,
+                                        public_addr: String::new(),
+                                    };
+
+                                    if accepted {
+                                        if let Err(e) = state.handshake.on_receive_hello(&hello) {
+                                            log::warn!("handshake error: {}", e);
+                                        }
+                                        if let Err(e) = state.handshake.on_send_hello_ack(&ack) {
+                                            log::warn!("handshake ack error: {}", e);
+                                        }
+                                        stats.connected.store(true, Ordering::Relaxed);
+                                    }
+
+                                    let ack_msg = ProtoMessage {
+                                        content: Some(rift_core::message::Content::Control(ProtoControl {
+                                            content: Some(rift_core::control_message::Content::HelloAck(ack)),
+                                        })),
+                                    };
+                                    let _ = send_rift_msg(socket.as_ref(), state, src, ack_msg).await;
+                                }
+                                Some(rift_core::control_message::Content::Ping(ping)) => {
+                                    let pong = ProtoMessage {
+                                        content: Some(rift_core::message::Content::Control(ProtoControl {
+                                            content: Some(rift_core::control_message::Content::Pong(ProtoPong {
+                                                timestamp_us: ping.timestamp_us,
+                                            })),
+                                        })),
+                                    };
+                                    let _ = send_rift_msg(socket.as_ref(), state, src, pong).await;
+                                }
+                                Some(rift_core::control_message::Content::Stats(report)) => {
+                                    let loss_ratio = if report.received_packets > 0 {
+                                        report.lost_packets as f32 / (report.received_packets + report.lost_packets) as f32
+                                    } else {
+                                        0.0
+                                    };
+                                    cc.on_rtt_sample(report.rtt_us, loss_ratio, report.jitter_us);
+                                    state.pacer.on_stats(report.rtt_us, report.jitter_us, last_target_bitrate);
+                                    stats.rtt_ms.store((report.rtt_us / 1000) as u32, Ordering::Relaxed);
+
+                                    let new_bitrate = cc.target_bitrate_kbps();
+                                    if new_bitrate != last_target_bitrate {
+                                        if let Err(e) = encoder.set_bitrate(new_bitrate) {
+                                            log::warn!("Failed to set encoder bitrate: {}", e);
+                                        }
+                                        last_target_bitrate = new_bitrate;
+
+                                        let cc_msg = ProtoMessage {
+                                            content: Some(rift_core::message::Content::Control(ProtoControl {
+                                                content: Some(rift_core::control_message::Content::Congestion(ProtoCongestion {
+                                                    target_bitrate_kbps: new_bitrate,
+                                                    target_fps: cc.target_fps(),
+                                                })),
+                                            })),
+                                        };
+                                        let _ = send_rift_msg(socket.as_ref(), state, src, cc_msg).await;
+                                    }
+                                }
+                                Some(rift_core::control_message::Content::Nack(nack)) => {
+                                    for packet_id in nack.packet_ids {
+                                        if let Some(payload) = state.send_history.get(packet_id) {
+                                            let _ = socket.send_to(&payload, src).await;
                                         }
                                     }
                                 }
+                                _ => {}
                             }
                         }
-                        Err(e) => log::warn!("Socket recv error: {}", e),
+                        Ok(())
+                    }.await;
+
+                    if let Err(e) = handled {
+                        log::warn!("recv handler error: {}", e);
                     }
                 }
 
@@ -246,41 +625,25 @@ pub async fn run_host(
                 res = encoder.next_frame_async() => {
                     match res {
                         Ok(frame) => {
-                            if let Some(addr) = client_addr {
-                                // Packetize and send (Simplified for MVP: 1 chunk)
-                                let max_payload = 1400;
-                                let data = frame.data;
-                                let total_chunks = data.len().div_ceil(max_payload);
-
-                                for i in 0..total_chunks {
-                                    let start = i * max_payload;
-                                    let end = std::cmp::min(start + max_payload, data.len());
-                                    let chunk = &data[start..end];
-
-                                    let mut packet = Vec::with_capacity(10 + chunk.len());
-                                    packet.extend_from_slice(&sequence.to_be_bytes());
-                                    packet.push(i as u8);
-                                    packet.push(total_chunks as u8);
-                                    packet.extend_from_slice(chunk);
-
-                                    if let Err(e) = socket.send_to(&packet, addr).await {
-                                        log::warn!("Send error: {}", e);
+                            if let (Some(addr), Some(state)) = (client_addr, peer_state.as_mut()) {
+                                let ready = state.crypto.is_established() &&
+                                    matches!(state.handshake.state(), rift_core::HandshakeState::Established { .. });
+                                if ready {
+                                    let frame_bytes = frame.data.len();
+                                    if let Err(e) = send_video_frame(socket.as_ref(), state, addr, frame, last_target_bitrate).await {
+                                        log::warn!("send frame error: {}", e);
                                     }
 
-                                    bytes_sent += packet.len();
-                                }
-
-                                sequence = sequence.wrapping_add(1);
-                                stats.frames_encoded.fetch_add(1, Ordering::Relaxed);
-
-                                // FPS calc
-                                fps_counter += 1;
-                                if last_fps_time.elapsed() >= std::time::Duration::from_secs(1) {
-                                    stats.fps.store(fps_counter, Ordering::Relaxed);
-                                    stats.bitrate_kbps.store((bytes_sent as u32 * 8) / 1000, Ordering::Relaxed);
-                                    fps_counter = 0;
-                                    bytes_sent = 0;
-                                    last_fps_time = std::time::Instant::now();
+                                    stats.frames_encoded.fetch_add(1, Ordering::Relaxed);
+                                    bytes_sent = bytes_sent.saturating_add(frame_bytes as u64);
+                                    fps_counter += 1;
+                                    if last_fps_time.elapsed() >= std::time::Duration::from_secs(1) {
+                                        stats.fps.store(fps_counter, Ordering::Relaxed);
+                                        stats.bitrate_kbps.store((bytes_sent as u32 * 8) / 1000, Ordering::Relaxed);
+                                        fps_counter = 0;
+                                        bytes_sent = 0;
+                                        last_fps_time = std::time::Instant::now();
+                                    }
                                 }
                             }
                         }
@@ -319,25 +682,34 @@ pub async fn run_client(
     host_ip: String,
     port: u16,
     renderer_handle: Arc<std::sync::Mutex<Option<Box<MacVideoRenderer>>>>,
-    _stats: Arc<SessionStats>,
-    stop_rx: oneshot::Receiver<()>,
+    stats: Arc<SessionStats>,
+    mut stop_rx: oneshot::Receiver<()>,
     init_tx: oneshot::Sender<Result<()>>,
 ) -> Result<()> {
+    let mut init_tx = Some(init_tx);
+    let connect_addr = match format!("{}:{}", host_ip, port).parse() {
+        Ok(a) => Some(a),
+        Err(e) => {
+            if let Some(tx) = init_tx.take() {
+                let _ = tx.send(Err(anyhow!("Invalid address: {}", e)));
+            }
+            return Err(anyhow!("Invalid address: {}", e));
+        }
+    };
+    let runtime_stats = Arc::new(ClientRuntimeStats::default());
+
     // Config for lib
     let config = ClientConfig {
-        connect_addr: match format!("{}:{}", host_ip, port).parse() {
-            Ok(a) => Some(a),
-            Err(e) => {
-                let _ = init_tx.send(Err(anyhow!("Invalid address: {}", e)));
-                return Err(e.into());
-            }
-        },
-        client_name: "WavryMacOS".to_string(),
+        connect_addr,
+        client_name: "WavryAndroid".to_string(),
         no_encrypt: false,
         identity_key: crate::identity::get_private_key(),
         relay_info: None,
         max_resolution: None,
+        gamepad_enabled: true,
+        gamepad_deadzone: 0.1,
         vr_adapter: None,
+        runtime_stats: Some(runtime_stats.clone()),
     };
 
     // Factory
@@ -351,35 +723,73 @@ pub async fn run_client(
         host_ip,
         port
     );
+    let mut started = false;
+    let startup_deadline = Instant::now() + Duration::from_secs(12);
+    let mut stats_tick = time::interval(Duration::from_millis(250));
+    let client_fut = run_rift_client(config, Some(factory));
+    tokio::pin!(client_fut);
 
-    // We need to signal init_tx when it *starts*?
-    // run_client is blocking (async).
-    // We need to signal success early? No, run_client takes over.
-    // The previous implementation signaled init success after socket connect.
-    // wavry_client::run_client performs discovery/connect.
-    // We should signal success immediately for FFI to unblock, OR spawn run_client separately.
-    // But `run_client` here IS the spawned task.
-    // So we signal success now.
-    let _ = init_tx.send(Ok(()));
+    loop {
+        tokio::select! {
+            res = &mut client_fut => {
+                stats.connected.store(false, Ordering::Relaxed);
+                match res {
+                    Ok(_) => {
+                        if !started {
+                            let err = anyhow!("Connection ended before handshake completed");
+                            if let Some(tx) = init_tx.take() {
+                                let _ = tx.send(Err(anyhow!(err.to_string())));
+                            }
+                            return Err(err);
+                        }
+                        log::info!("Client finished normally");
+                        return Ok(());
+                    }
+                    Err(e) => {
+                        if !started {
+                            if let Some(tx) = init_tx.take() {
+                                let _ = tx.send(Err(anyhow!("Failed to connect: {}", e)));
+                            }
+                        }
+                        return Err(anyhow!("Client returned error: {}", e));
+                    }
+                }
+            }
+            _ = &mut stop_rx => {
+                stats.connected.store(false, Ordering::Relaxed);
+                if !started {
+                    if let Some(tx) = init_tx.take() {
+                        let _ = tx.send(Err(anyhow!("Client startup canceled")));
+                    }
+                }
+                log::info!("Client stopped via FFI");
+                return Ok(());
+            }
+            _ = stats_tick.tick() => {
+                let connected = runtime_stats.connected.load(Ordering::Relaxed);
+                stats.connected.store(connected, Ordering::Relaxed);
+                stats.frames_decoded.store(
+                    runtime_stats.frames_decoded.load(Ordering::Relaxed),
+                    Ordering::Relaxed,
+                );
 
-    // Run the library client
-    // We invoke it, but we need to support cancellation via stop_rx.
-    // run_client doesn't have a stop channel in arguments... it runs until error or return.
-    // But we are inside tokio::spawn in lib.rs.
-    // So `select!` on stop_rx vs run_client.
-
-    tokio::select! {
-        res = run_rift_client(config, Some(factory)) => {
-            match res {
-                Ok(_) => log::info!("Client finished normally"),
-                Err(e) => log::error!("Client returned error: {}", e),
+                if connected && !started {
+                    started = true;
+                    if let Some(tx) = init_tx.take() {
+                        let _ = tx.send(Ok(()));
+                    }
+                } else if !started && Instant::now() >= startup_deadline {
+                    let err = anyhow!(
+                        "Timed out waiting for host acknowledgment at {}:{}",
+                        host_ip,
+                        port
+                    );
+                    if let Some(tx) = init_tx.take() {
+                        let _ = tx.send(Err(anyhow!(err.to_string())));
+                    }
+                    return Err(err);
+                }
             }
         }
-        _ = stop_rx => {
-            log::info!("Client stopped via FFI");
-            // run_client will be dropped/cancelled.
-        }
     }
-
-    Ok(())
 }

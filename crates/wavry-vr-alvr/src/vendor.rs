@@ -12,9 +12,9 @@ use std::sync::{
 };
 use std::thread::JoinHandle;
 
-use wavry_vr::{VrAdapter, VrAdapterCallbacks, VrError, VrResult};
-use wavry_vr::types::{EncoderControl, NetworkStats, Pose, StreamConfig, VideoFrame};
 use glam::{Quat, Vec3};
+use wavry_vr::types::{EncoderControl, NetworkStats, Pose, StreamConfig, VideoFrame};
+use wavry_vr::{VrAdapter, VrAdapterCallbacks, VrError, VrResult};
 
 // Minimal ALVR primitives (vendored) for compatibility with ALVR types.
 #[allow(dead_code)]

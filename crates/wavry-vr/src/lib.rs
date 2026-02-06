@@ -6,7 +6,10 @@ pub mod types;
 
 pub use adapter::{VrAdapter, VrAdapterCallbacks};
 pub use status::{pcvr_status, set_pcvr_status};
-pub use types::{EncoderControl, GamepadAxis, GamepadButton, GamepadInput, NetworkStats, Pose, PoseVelocity, StreamConfig, VideoCodec, VideoFrame, VrTiming};
+pub use types::{
+    EncoderControl, GamepadAxis, GamepadButton, GamepadInput, NetworkStats, Pose, PoseVelocity,
+    StreamConfig, VideoCodec, VideoFrame, VrTiming,
+};
 
 use thiserror::Error;
 

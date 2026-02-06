@@ -1,7 +1,7 @@
-# Handle line endings automatically
+# Normalize line endings by default
 * text=auto
 
-# Ensure LF for source files (cross-platform consistency)
+# Keep source/config files LF across platforms
 *.rs text eol=lf
 *.toml text eol=lf
 *.proto text eol=lf
@@ -13,8 +13,16 @@
 *.css text eol=lf
 *.html text eol=lf
 *.json text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+*.kt text eol=lf
+*.kts text eol=lf
+*.swift text eol=lf
+*.c text eol=lf
+*.h text eol=lf
+*.cpp text eol=lf
 
-# Binary files
+# Binary assets
 *.png binary
 *.jpg binary
 *.jpeg binary
@@ -23,24 +31,32 @@
 *.pdf binary
 *.mov binary
 *.mp4 binary
+*.a binary
+*.so binary
+*.dylib binary
+*.dll binary
+*.apk binary
+*.aab binary
+*.jar binary
+*.jks binary
+*.keystore binary
 
-# Linguist overrides
-# Mark generated and lockfiles so they don't clutter diffs/stats
+# Generated files (GitHub Linguist)
 Cargo.lock linguist-generated=true
 package-lock.json linguist-generated=true
+yarn.lock linguist-generated=true
 bun.lockb linguist-generated=true
 pnpm-lock.yaml linguist-generated=true
+/target/** linguist-generated=true
+**/node_modules/** linguist-generated=true
+**/dist/** linguist-generated=true
+**/build/** linguist-generated=true
+**/.svelte-kit/** linguist-generated=true
 
-# Mark build artifacts if they ever leak into the tree
-/target/ linguist-generated=true
-**/node_modules/ linguist-generated=true
-**/dist/ linguist-generated=true
-**/build/ linguist-generated=true
-.svelte-kit/ linguist-generated=true
+# Vendored sources
+crates/wavry-vr-alvr/src/vendor/** linguist-vendored=true
 
 # Documentation
-docs/ linguist-documentation=true
+docs/** linguist-documentation=true
 LICENSE linguist-documentation=true
-
-# Hide language statistics for this repository
-* linguist-vendored
+THIRD_PARTY.md linguist-documentation=true

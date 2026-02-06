@@ -38,6 +38,7 @@ use chacha20poly1305::{
 use thiserror::Error;
 
 use crate::noise::{generate_noise_keypair, NoiseError, NoiseInitiator, NoiseResponder};
+use crate::seq_window::SequenceWindow;
 
 /// Handshake message types
 pub mod handshake_type {
@@ -58,6 +59,9 @@ pub enum ConnectionError {
 
     #[error("decryption failed: {0}")]
     DecryptionFailed(String),
+
+    #[error("replay detected for packet {0}")]
+    ReplayDetected(u64),
 
     #[error("invalid packet format")]
     InvalidPacket,
@@ -86,6 +90,7 @@ pub struct SecureClient {
     initiator: Option<NoiseInitiator>,
     state: ClientHandshakeState,
     cipher: Option<PacketCipher>,
+    recv_window: SequenceWindow,
     local_keypair: ([u8; 32], [u8; 32]),
 }
 
@@ -99,6 +104,7 @@ impl SecureClient {
             initiator: Some(initiator),
             state: ClientHandshakeState::Init,
             cipher: None,
+            recv_window: SequenceWindow::new(),
             local_keypair: keypair,
         })
     }
@@ -115,6 +121,7 @@ impl SecureClient {
             initiator: Some(initiator),
             state: ClientHandshakeState::Init,
             cipher: None,
+            recv_window: SequenceWindow::new(),
             local_keypair: (private_key, *public_key.as_bytes()),
         })
     }
@@ -157,6 +164,7 @@ impl SecureClient {
 
         // Create cipher from established session (client = initiator)
         self.cipher = Some(PacketCipher::from_session(session, true)?);
+        self.recv_window.reset();
         self.state = ClientHandshakeState::Complete;
 
         Ok(msg3)
@@ -186,11 +194,17 @@ impl SecureClient {
         packet_id: u64,
         ciphertext: &[u8],
     ) -> Result<Vec<u8>, ConnectionError> {
+        if !self.recv_window.check(packet_id) {
+            return Err(ConnectionError::ReplayDetected(packet_id));
+        }
+
         let cipher = self
             .cipher
             .as_mut()
             .ok_or(ConnectionError::NotEstablished)?;
-        cipher.decrypt(packet_id, ciphertext)
+        let plaintext = cipher.decrypt(packet_id, ciphertext)?;
+        self.recv_window.check_and_update(packet_id);
+        Ok(plaintext)
     }
 
     /// Get the local public key.
@@ -220,6 +234,7 @@ pub struct SecureServer {
     responder: Option<NoiseResponder>,
     state: ServerHandshakeState,
     cipher: Option<PacketCipher>,
+    recv_window: SequenceWindow,
     local_keypair: ([u8; 32], [u8; 32]),
 }
 
@@ -233,6 +248,7 @@ impl SecureServer {
             responder: Some(responder),
             state: ServerHandshakeState::Init,
             cipher: None,
+            recv_window: SequenceWindow::new(),
             local_keypair: keypair,
         })
     }
@@ -248,6 +264,7 @@ impl SecureServer {
             responder: Some(responder),
             state: ServerHandshakeState::Init,
             cipher: None,
+            recv_window: SequenceWindow::new(),
             local_keypair: (private_key, *public_key.as_bytes()),
         })
     }
@@ -289,6 +306,7 @@ impl SecureServer {
         let session = responder.into_session()?;
 
         self.cipher = Some(PacketCipher::from_session(session, false)?);
+        self.recv_window.reset();
         self.state = ServerHandshakeState::Complete;
 
         Ok(())
@@ -318,11 +336,17 @@ impl SecureServer {
         packet_id: u64,
         ciphertext: &[u8],
     ) -> Result<Vec<u8>, ConnectionError> {
+        if !self.recv_window.check(packet_id) {
+            return Err(ConnectionError::ReplayDetected(packet_id));
+        }
+
         let cipher = self
             .cipher
             .as_mut()
             .ok_or(ConnectionError::NotEstablished)?;
-        cipher.decrypt(packet_id, ciphertext)
+        let plaintext = cipher.decrypt(packet_id, ciphertext)?;
+        self.recv_window.check_and_update(packet_id);
+        Ok(plaintext)
     }
 
     /// Get the local public key.
@@ -468,5 +492,23 @@ mod tests {
 
         let decrypted = server.decrypt(0, &ciphertext).unwrap();
         assert_eq!(decrypted, plaintext);
+    }
+
+    #[test]
+    fn test_replay_rejected() {
+        let mut client = SecureClient::new().unwrap();
+        let mut server = SecureServer::new().unwrap();
+
+        let msg1 = client.start_handshake().unwrap();
+        let msg2 = server.process_client_hello(&msg1).unwrap();
+        let msg3 = client.process_server_response(&msg2).unwrap();
+        server.process_client_finish(&msg3).unwrap();
+
+        let ciphertext = client.encrypt(7, b"nonce-once").unwrap();
+        let first = server.decrypt(7, &ciphertext).unwrap();
+        assert_eq!(first, b"nonce-once");
+
+        let replay = server.decrypt(7, &ciphertext);
+        assert!(matches!(replay, Err(ConnectionError::ReplayDetected(7))));
     }
 }

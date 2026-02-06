@@ -20,6 +20,7 @@ reqwest = { workspace = true }
 ed25519-dalek.workspace = true
 hex.workspace = true
 pasetors = { workspace = true }
+bytes.workspace = true
 
 rift-core = { path = "../rift-core" }
 rift-crypto = { path = "../rift-crypto" }

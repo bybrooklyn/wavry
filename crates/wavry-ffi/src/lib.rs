@@ -24,10 +24,11 @@ impl MacInputInjector {
 }
 
 use wavry_media::InputEvent;
+#[cfg(target_os = "macos")]
 use wavry_media::InputInjector;
 
 mod session;
-use session::{run_client, run_host, SessionHandle, SessionStats};
+use session::{run_client, run_host, HostRuntimeConfig, SessionHandle, SessionStats};
 
 mod identity;
 mod signaling_ffi;
@@ -97,9 +98,40 @@ pub unsafe extern "C" fn wavry_version() -> *const c_char {
     VERSION.as_ptr() as *const c_char
 }
 
-/// Start Host Mode (Screen Capture -> UDP Stream)
-#[no_mangle]
-pub extern "C" fn wavry_start_host(port: u16) -> i32 {
+#[repr(C)]
+pub struct WavryHostConfig {
+    pub width: u16,
+    pub height: u16,
+    pub fps: u16,
+    pub bitrate_kbps: u32,
+    pub keyframe_interval_ms: u32,
+    pub display_id: u32,
+}
+
+fn normalize_host_config(raw: &WavryHostConfig) -> HostRuntimeConfig {
+    let width = raw.width.clamp(320, 7680);
+    let height = raw.height.clamp(240, 4320);
+    let fps = raw.fps.clamp(15, 240);
+    let bitrate_kbps = raw.bitrate_kbps.clamp(1_000, 100_000);
+    let keyframe_interval_ms = raw.keyframe_interval_ms.clamp(250, 10_000);
+    let display_id = if raw.display_id == u32::MAX {
+        None
+    } else {
+        Some(raw.display_id)
+    };
+
+    HostRuntimeConfig {
+        codec: wavry_media::Codec::H264,
+        width,
+        height,
+        fps,
+        bitrate_kbps,
+        keyframe_interval_ms,
+        display_id,
+    }
+}
+
+fn start_host_internal(port: u16, host_config: HostRuntimeConfig) -> i32 {
     let mut guard = SESSION.lock().unwrap();
     if guard.is_some() {
         log::warn!("Session already running");
@@ -112,19 +144,27 @@ pub extern "C" fn wavry_start_host(port: u16) -> i32 {
 
     let stats_clone = stats.clone();
     RUNTIME.spawn(async move {
-        if let Err(e) = run_host(port, stats_clone, rx, init_tx).await {
+        if let Err(e) = run_host(port, host_config, stats_clone, rx, init_tx).await {
             log::error!("Host error: {}", e);
         }
     });
 
-    // Wait for initialization
     match init_rx.blocking_recv() {
         Ok(Ok(())) => {
             *guard = Some(SessionHandle {
                 stop_tx: Some(tx),
                 stats,
             });
-            log::info!("Started Host on port {}", port);
+            log::info!(
+                "Started Host on port {} ({}x{} @ {}fps, {} kbps, keyframe {}ms, display {:?})",
+                port,
+                host_config.width,
+                host_config.height,
+                host_config.fps,
+                host_config.bitrate_kbps,
+                host_config.keyframe_interval_ms,
+                host_config.display_id
+            );
             0
         }
         Ok(Err(e)) => {
@@ -136,6 +176,27 @@ pub extern "C" fn wavry_start_host(port: u16) -> i32 {
             -3
         }
     }
+}
+
+/// Start Host Mode (Screen Capture -> UDP Stream)
+#[no_mangle]
+pub extern "C" fn wavry_start_host(port: u16) -> i32 {
+    start_host_internal(port, HostRuntimeConfig::default())
+}
+
+/// Start Host Mode with explicit runtime configuration.
+#[no_mangle]
+pub unsafe extern "C" fn wavry_start_host_with_config(
+    port: u16,
+    config_ptr: *const WavryHostConfig,
+) -> i32 {
+    if config_ptr.is_null() {
+        return -4;
+    }
+
+    let raw = &*config_ptr;
+    let config = normalize_host_config(raw);
+    start_host_internal(port, config)
 }
 
 /// Start Client Mode (UDP Stream -> Remote Display)

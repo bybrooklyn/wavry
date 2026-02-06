@@ -27,6 +27,14 @@ pub struct PoseVelocity {
 }
 
 #[derive(Debug, Clone, Copy)]
+pub struct HandPose {
+    pub hand_id: u32, // 0 = left, 1 = right
+    pub pose: Pose,
+    pub linear_velocity: [f32; 3],
+    pub angular_velocity: [f32; 3],
+}
+
+#[derive(Debug, Clone, Copy)]
 pub struct VrTiming {
     pub refresh_hz: f32,
     pub vsync_offset_us: i64,

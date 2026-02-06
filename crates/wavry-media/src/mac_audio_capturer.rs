@@ -12,19 +12,18 @@ use objc2::rc::Retained;
 #[cfg(target_os = "macos")]
 use objc2::runtime::AnyObject;
 #[cfg(target_os = "macos")]
-use objc2::{AnyThread, DefinedClass, Message, define_class};
+use objc2::{define_class, AnyThread, DefinedClass, Message};
 #[cfg(target_os = "macos")]
 use objc2_core_audio_types::{
-    AudioBuffer, AudioBufferList, AudioFormatFlags,
     kAudioFormatFlagIsFloat, kAudioFormatFlagIsNonInterleaved, kAudioFormatFlagIsSignedInteger,
-    kAudioFormatLinearPCM,
+    kAudioFormatLinearPCM, AudioBuffer, AudioBufferList, AudioFormatFlags,
 };
 #[cfg(target_os = "macos")]
 use objc2_core_foundation::{CFAllocator, CFRetained};
 #[cfg(target_os = "macos")]
 use objc2_core_media::{
-    kCMSampleBufferFlag_AudioBufferList_Assure16ByteAlignment, CMBlockBuffer, CMAudioFormatDescription,
-    CMSampleBuffer, CMTime,
+    kCMSampleBufferFlag_AudioBufferList_Assure16ByteAlignment, CMAudioFormatDescription,
+    CMBlockBuffer, CMSampleBuffer, CMTime,
 };
 #[cfg(target_os = "macos")]
 use objc2_foundation::{NSError, NSObject, NSObjectProtocol};
@@ -41,8 +40,8 @@ use std::time::Instant;
 use tokio::sync::oneshot;
 
 use crate::audio::{
-    AUDIO_MAX_BUFFER_SAMPLES, OPUS_BITRATE_BPS, OPUS_CHANNELS, OPUS_FRAME_SAMPLES,
-    OPUS_MAX_PACKET_BYTES, OPUS_SAMPLE_RATE, opus_frame_duration_us,
+    opus_frame_duration_us, AUDIO_MAX_BUFFER_SAMPLES, OPUS_BITRATE_BPS, OPUS_CHANNELS,
+    OPUS_FRAME_SAMPLES, OPUS_MAX_PACKET_BYTES, OPUS_SAMPLE_RATE,
 };
 use crate::EncodedFrame;
 
@@ -118,10 +117,8 @@ struct PcmChunk {
 
 #[cfg(target_os = "macos")]
 fn create_opus_encoder() -> Result<OpusEncoder> {
-    let mut encoder =
-        OpusEncoder::new(OPUS_SAMPLE_RATE, Channels::Stereo, Application::Audio).map_err(|e| {
-            anyhow!("Opus encoder init failed: {}", e)
-        })?;
+    let mut encoder = OpusEncoder::new(OPUS_SAMPLE_RATE, Channels::Stereo, Application::Audio)
+        .map_err(|e| anyhow!("Opus encoder init failed: {}", e))?;
     encoder
         .set_bitrate(opus::Bitrate::Bits(OPUS_BITRATE_BPS))
         .map_err(|e| anyhow!("Opus bitrate set failed: {}", e))?;
@@ -211,9 +208,7 @@ fn request_shareable_content(tx: ShareableContentSender) {
                         let ret = content_ref.retain();
                         let _ = tx.send(Ok(SendRetained(ret)));
                     } else {
-                        let _ = tx.send(Err(anyhow!(
-                            "No content provided by ScreenCaptureKit"
-                        )));
+                        let _ = tx.send(Err(anyhow!("No content provided by ScreenCaptureKit")));
                     }
                 }
             }
@@ -389,13 +384,14 @@ fn build_pcm_chunk(sample_buffer: &CMSampleBuffer, start_time: &Instant) -> Opti
         return None;
     }
 
-    let _block = unsafe {
-        NonNull::new(block_buffer).map(|ptr| CFRetained::from_raw(ptr))
-    };
+    let _block = unsafe { NonNull::new(block_buffer).map(|ptr| CFRetained::from_raw(ptr)) };
 
     let buffer_list = unsafe { &*buffer_list_ptr };
     let buffers = unsafe {
-        std::slice::from_raw_parts(buffer_list.mBuffers.as_ptr(), buffer_list.mNumberBuffers as usize)
+        std::slice::from_raw_parts(
+            buffer_list.mBuffers.as_ptr(),
+            buffer_list.mNumberBuffers as usize,
+        )
     };
 
     let channels = asbd.mChannelsPerFrame as usize;

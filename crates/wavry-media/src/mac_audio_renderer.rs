@@ -1,15 +1,15 @@
 use anyhow::{anyhow, Result};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{BufferSize, SampleFormat, SampleRate, Stream, StreamConfig, SupportedBufferSize};
-use opus::{Decoder as OpusDecoder, Channels};
+use opus::{Channels, Decoder as OpusDecoder};
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 
-use crate::Renderer;
 use crate::audio::{
-    AUDIO_MAX_BUFFER_SAMPLES, OPUS_CHANNELS, OPUS_MAX_FRAME_SAMPLES, OPUS_SAMPLE_RATE,
-    OPUS_FRAME_SAMPLES,
+    AUDIO_MAX_BUFFER_SAMPLES, OPUS_CHANNELS, OPUS_FRAME_SAMPLES, OPUS_MAX_FRAME_SAMPLES,
+    OPUS_SAMPLE_RATE,
 };
+use crate::Renderer;
 
 pub struct MacAudioRenderer {
     _stream: Stream,

@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 pub(crate) const OPUS_SAMPLE_RATE: u32 = 48_000;
 pub(crate) const OPUS_CHANNELS: usize = 2;
 pub(crate) const OPUS_FRAME_MS: u32 = 5;

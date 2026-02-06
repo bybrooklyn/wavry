@@ -4,9 +4,8 @@ use std::{
     fmt,
     net::SocketAddr,
     sync::{
-        atomic::{AtomicU64, Ordering},
-        Arc,
-        Mutex,
+        atomic::{AtomicBool, AtomicU64, Ordering},
+        Arc, Mutex,
     },
     thread,
     time::{Duration, Instant},
@@ -16,7 +15,7 @@ use uuid::Uuid;
 use anyhow::{anyhow, Result};
 use bytes::Bytes;
 #[cfg(target_os = "linux")]
-use evdev::{Device, EventType};
+use evdev::{Device, EventType, Key, RelativeAxisType};
 use gilrs::{Event, EventType as GilrsEventType, Gilrs};
 use mdns_sd::{ServiceDaemon, ServiceEvent};
 use rift_core::{
@@ -29,19 +28,24 @@ use rift_core::{
 };
 use rift_crypto::connection::SecureClient;
 use socket2::SockRef;
+use tokio::sync::oneshot;
 use tokio::{net::UdpSocket, sync::mpsc, time};
 use tracing::{debug, info, warn};
-use wavry_vr::{VrAdapter, VrAdapterCallbacks};
-use wavry_vr::types::{
-    EncoderControl as VrEncoderControl, NetworkStats as VrNetworkStats, Pose as VrPose,
-    StreamConfig as VrStreamConfig, VideoCodec as VrVideoCodec, VideoFrame as VrVideoFrame, VrTiming,
-};
+#[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
+use wavry_media::CapabilityProbe;
 #[cfg(not(target_os = "linux"))]
 use wavry_media::DummyRenderer as VideoRenderer;
 #[cfg(target_os = "linux")]
+use wavry_media::DummyRenderer as LinuxFallbackRenderer;
+#[cfg(target_os = "linux")]
 use wavry_media::GstVideoRenderer as VideoRenderer;
-use wavry_media::CapabilityProbe;
 use wavry_media::{Codec, DecodeConfig, Renderer, Resolution as MediaResolution};
+use wavry_vr::types::{
+    EncoderControl as VrEncoderControl, HandPose as VrHandPose, NetworkStats as VrNetworkStats,
+    Pose as VrPose, StreamConfig as VrStreamConfig, VideoCodec as VrVideoCodec,
+    VideoFrame as VrVideoFrame, VrTiming,
+};
+use wavry_vr::{VrAdapter, VrAdapterCallbacks};
 
 fn probe_supported_codecs() -> Vec<Codec> {
     #[cfg(target_os = "windows")]
@@ -52,9 +56,9 @@ fn probe_supported_codecs() -> Vec<Codec> {
     }
     #[cfg(target_os = "macos")]
     {
-        return wavry_media::MacProbe
+        wavry_media::MacProbe
             .supported_decoders()
-            .unwrap_or_else(|_| vec![Codec::H264]);
+            .unwrap_or_else(|_| vec![Codec::H264])
     }
     #[cfg(target_os = "linux")]
     {
@@ -66,6 +70,21 @@ fn probe_supported_codecs() -> Vec<Codec> {
     {
         vec![Codec::H264]
     }
+}
+
+fn local_platform() -> rift_core::Platform {
+    if cfg!(target_os = "windows") {
+        rift_core::Platform::Windows
+    } else if cfg!(target_os = "macos") {
+        rift_core::Platform::Macos
+    } else {
+        rift_core::Platform::Linux
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn linux_has_display() -> bool {
+    std::env::var_os("WAYLAND_DISPLAY").is_some() || std::env::var_os("DISPLAY").is_some()
 }
 
 const FRAME_TIMEOUT_US: u64 = 50_000;
@@ -84,7 +103,10 @@ pub struct ClientConfig {
     pub identity_key: Option<[u8; 32]>,
     pub relay_info: Option<RelayInfo>,
     pub max_resolution: Option<MediaResolution>,
+    pub gamepad_enabled: bool,
+    pub gamepad_deadzone: f32,
     pub vr_adapter: Option<Arc<Mutex<dyn VrAdapter>>>,
+    pub runtime_stats: Option<Arc<ClientRuntimeStats>>,
 }
 
 #[derive(Debug, Clone)]
@@ -92,6 +114,12 @@ pub struct RelayInfo {
     pub addr: SocketAddr,
     pub token: String,
     pub session_id: Uuid,
+}
+
+#[derive(Debug, Default)]
+pub struct ClientRuntimeStats {
+    pub connected: AtomicBool,
+    pub frames_decoded: AtomicU64,
 }
 
 pub type RendererFactory = Box<dyn Fn(DecodeConfig) -> Result<Box<dyn Renderer + Send>> + Send>;
@@ -118,6 +146,7 @@ impl fmt::Debug for CryptoState {
 
 enum VrOutbound {
     Pose(rift_core::PoseUpdate),
+    HandPose(rift_core::HandPoseUpdate),
     Timing(rift_core::VrTiming),
     Gamepad(rift_core::InputMessage),
 }
@@ -143,6 +172,27 @@ impl VrAdapterCallbacks for ClientVrCallbacks {
             orientation_w: pose.orientation[3],
         };
         let _ = self.tx.try_send(VrOutbound::Pose(msg));
+    }
+
+    fn on_hand_pose_update(&self, hand_pose: VrHandPose, timestamp_us: u64) {
+        let msg = rift_core::HandPoseUpdate {
+            timestamp_us,
+            hand_id: hand_pose.hand_id,
+            position_x: hand_pose.pose.position[0],
+            position_y: hand_pose.pose.position[1],
+            position_z: hand_pose.pose.position[2],
+            orientation_x: hand_pose.pose.orientation[0],
+            orientation_y: hand_pose.pose.orientation[1],
+            orientation_z: hand_pose.pose.orientation[2],
+            orientation_w: hand_pose.pose.orientation[3],
+            linear_velocity_x: hand_pose.linear_velocity[0],
+            linear_velocity_y: hand_pose.linear_velocity[1],
+            linear_velocity_z: hand_pose.linear_velocity[2],
+            angular_velocity_x: hand_pose.angular_velocity[0],
+            angular_velocity_y: hand_pose.angular_velocity[1],
+            angular_velocity_z: hand_pose.angular_velocity[2],
+        };
+        let _ = self.tx.try_send(VrOutbound::HandPose(msg));
     }
 
     fn on_vr_timing(&self, timing: VrTiming) {
@@ -196,6 +246,28 @@ impl CryptoState {
     }
 }
 
+struct RuntimeStatsGuard {
+    stats: Option<Arc<ClientRuntimeStats>>,
+}
+
+impl RuntimeStatsGuard {
+    fn new(stats: Option<Arc<ClientRuntimeStats>>) -> Self {
+        if let Some(s) = stats.as_ref() {
+            s.connected.store(false, Ordering::Relaxed);
+            s.frames_decoded.store(0, Ordering::Relaxed);
+        }
+        Self { stats }
+    }
+}
+
+impl Drop for RuntimeStatsGuard {
+    fn drop(&mut self) {
+        if let Some(stats) = self.stats.as_ref() {
+            stats.connected.store(false, Ordering::Relaxed);
+        }
+    }
+}
+
 pub async fn discover_public_addr(socket: &UdpSocket) -> Result<SocketAddr> {
     use rift_core::stun::StunMessage;
     let stun_server = "stun.l.google.com:19302";
@@ -245,7 +317,25 @@ pub async fn run_client(
     config: ClientConfig,
     renderer_factory: Option<RendererFactory>,
 ) -> Result<()> {
+    run_client_inner(config, renderer_factory, None).await
+}
+
+pub async fn run_client_with_shutdown(
+    config: ClientConfig,
+    renderer_factory: Option<RendererFactory>,
+    shutdown_rx: oneshot::Receiver<()>,
+) -> Result<()> {
+    run_client_inner(config, renderer_factory, Some(shutdown_rx)).await
+}
+
+async fn run_client_inner(
+    config: ClientConfig,
+    renderer_factory: Option<RendererFactory>,
+    mut shutdown_rx: Option<oneshot::Receiver<()>>,
+) -> Result<()> {
     // Note: Logging init removed, caller should init tracing
+    let runtime_stats = config.runtime_stats.clone();
+    let _runtime_stats_guard = RuntimeStatsGuard::new(runtime_stats.clone());
 
     let socket = UdpSocket::bind("0.0.0.0:0").await?;
     if let Err(e) = SockRef::from(&socket).set_tos_v4(DSCP_EF) {
@@ -279,33 +369,34 @@ pub async fn run_client(
 
     // Create input channel
     let (input_tx, mut input_rx) = mpsc::channel::<ProtoInputMessage>(128);
-    spawn_input_threads(input_tx)?;
+    spawn_input_threads(input_tx, config.gamepad_enabled, config.gamepad_deadzone)?;
 
     // VR adapter wiring (optional)
     let (vr_tx, mut vr_rx) = mpsc::channel::<VrOutbound>(64);
-    let vr_adapter: Option<Arc<Mutex<dyn VrAdapter>>> = if let Some(adapter) = config.vr_adapter.clone() {
-        let cb = Arc::new(ClientVrCallbacks { tx: vr_tx });
-        let start_ok = match adapter.lock() {
-            Ok(mut guard) => match guard.start(cb) {
-                Ok(()) => true,
+    let vr_adapter: Option<Arc<Mutex<dyn VrAdapter>>> =
+        if let Some(adapter) = config.vr_adapter.clone() {
+            let cb = Arc::new(ClientVrCallbacks { tx: vr_tx });
+            let start_ok = match adapter.lock() {
+                Ok(mut guard) => match guard.start(cb) {
+                    Ok(()) => true,
+                    Err(e) => {
+                        warn!("vr adapter start failed: {}", e);
+                        false
+                    }
+                },
                 Err(e) => {
-                    warn!("vr adapter start failed: {}", e);
+                    warn!("vr adapter lock failed: {}", e);
                     false
                 }
-            },
-            Err(e) => {
-                warn!("vr adapter lock failed: {}", e);
-                false
+            };
+            if start_ok {
+                Some(adapter)
+            } else {
+                None
             }
-        };
-        if start_ok {
-            Some(adapter)
         } else {
             None
-        }
-    } else {
-        None
-    };
+        };
 
     // Perform crypto handshake if enabled
     if let CryptoState::Handshaking(ref mut client) = crypto {
@@ -375,7 +466,7 @@ pub async fn run_client(
 
     let hello = ProtoHello {
         client_name: config.client_name,
-        platform: rift_core::Platform::Linux as i32,
+        platform: local_platform() as i32,
         supported_codecs,
         max_resolution: config.max_resolution.map(|r| ProtoResolution {
             width: r.width as u32,
@@ -431,11 +522,27 @@ pub async fn run_client(
 
     let mut renderer: Option<Box<dyn Renderer + Send>> = None;
     let mut audio_renderer: Option<Box<dyn Renderer + Send>> = None;
+    let mut audio_disabled = false;
+    #[cfg(target_os = "linux")]
+    let mut video_disabled = false;
+    #[cfg(not(target_os = "linux"))]
+    let _video_disabled = false;
     let mut frames = FrameAssembler::new(FRAME_TIMEOUT_US);
     let mut fec_cache = FecCache::new();
 
     loop {
         tokio::select! {
+            _ = async {
+                if let Some(rx) = &mut shutdown_rx {
+                    let _ = rx.await;
+                } else {
+                    std::future::pending::<()>().await;
+                }
+            } => {
+                info!("client shutdown requested");
+                break;
+            }
+
             // Handle input from capture threads
             Some(input) = input_rx.recv() => {
                 if let Some(alias) = session_alias {
@@ -456,6 +563,16 @@ pub async fn run_client(
                             let msg = ProtoMessage {
                                 content: Some(rift_core::message::Content::Control(ProtoControl {
                                     content: Some(rift_core::control_message::Content::PoseUpdate(pose)),
+                                })),
+                            };
+                            if let Err(e) = send_rift_msg(&socket, &mut crypto, connect_addr, msg, Some(alias), next_packet_id(), relay_info).await {
+                                debug!("vr control send error: {}", e);
+                            }
+                        }
+                        VrOutbound::HandPose(hand_pose) => {
+                            let msg = ProtoMessage {
+                                content: Some(rift_core::message::Content::Control(ProtoControl {
+                                    content: Some(rift_core::control_message::Content::HandPoseUpdate(hand_pose)),
                                 })),
                             };
                             if let Err(e) = send_rift_msg(&socket, &mut crypto, connect_addr, msg, Some(alias), next_packet_id(), relay_info).await {
@@ -535,6 +652,7 @@ pub async fn run_client(
             // Jitter buffer drain
             _ = jitter_interval.tick() => {
                 while let Some(ready) = jitter_buffer.pop_ready(now_us()) {
+                    let mut rendered = false;
                     if let Some(adapter) = vr_adapter.as_ref() {
                         if let Ok(mut adapter) = adapter.lock() {
                             let frame = VrVideoFrame {
@@ -544,9 +662,16 @@ pub async fn run_client(
                                 data: Bytes::from(ready.data),
                             };
                             let _ = adapter.submit_video(frame);
+                            rendered = true;
                         }
                     } else if let Some(r) = renderer.as_mut() {
                         r.render(&ready.data, ready.timestamp_us)?;
+                        rendered = true;
+                    }
+                    if rendered {
+                        if let Some(stats) = runtime_stats.as_ref() {
+                            stats.frames_decoded.fetch_add(1, Ordering::Relaxed);
+                        }
                     }
                 }
             }
@@ -643,6 +768,9 @@ pub async fn run_client(
                                     info!("session established with {}", peer);
                                     _session_id = Some(ack.session_id.clone());
                                     session_alias = Some(ack.session_alias);
+                                    if let Some(stats) = runtime_stats.as_ref() {
+                                        stats.connected.store(true, Ordering::Relaxed);
+                                    }
 
                                     if let Some(res) = ack.stream_resolution {
                                         if vr_adapter.is_none() {
@@ -659,26 +787,66 @@ pub async fn run_client(
                                             };
 
                                             if let Some(factory) = &renderer_factory {
-                                                renderer = Some(factory(config)?);
-                                            } else {
+                                                match factory(config) {
+                                                    Ok(r) => renderer = Some(r),
+                                                    Err(e) => {
+                                                        warn!("renderer factory failed: {}", e);
+                                                    }
+                                                }
+                                            }
+
+                                            if renderer.is_none() {
                                                 // Fallback to default platform renderer
-                                                let r = VideoRenderer::new(config)?;
-                                                renderer = Some(Box::new(r));
+                                                #[cfg(target_os = "linux")]
+                                                if !linux_has_display() {
+                                                    if let Ok(fallback) = LinuxFallbackRenderer::new(config) {
+                                                        renderer = Some(Box::new(fallback));
+                                                        if !video_disabled {
+                                                            warn!("video disabled: no display available");
+                                                            video_disabled = true;
+                                                        }
+                                                    }
+                                                }
+
+                                                if renderer.is_none() {
+                                                    match VideoRenderer::new(config) {
+                                                        Ok(r) => renderer = Some(Box::new(r)),
+                                                        Err(e) => {
+                                                            warn!("video renderer init failed: {}", e);
+                                                            #[cfg(target_os = "linux")]
+                                                            {
+                                                                if let Ok(fallback) = LinuxFallbackRenderer::new(config) {
+                                                                    renderer = Some(Box::new(fallback));
+                                                                    if !video_disabled {
+                                                                        warn!("video disabled: falling back to headless renderer");
+                                                                        video_disabled = true;
+                                                                    }
+                                                                }
+                                                            }
+                                                        }
+                                                    }
+                                                }
 
                                                 #[cfg(target_os = "linux")]
                                                 {
-                                                    let ar = wavry_media::GstAudioRenderer::new()?;
-                                                    audio_renderer = Some(Box::new(ar));
+                                                    match wavry_media::GstAudioRenderer::new() {
+                                                        Ok(ar) => audio_renderer = Some(Box::new(ar)),
+                                                        Err(e) => warn!("audio renderer init failed: {}", e),
+                                                    }
                                                 }
                                                 #[cfg(target_os = "macos")]
                                                 {
-                                                    let ar = wavry_media::MacAudioRenderer::new()?;
-                                                    audio_renderer = Some(Box::new(ar));
+                                                    match wavry_media::MacAudioRenderer::new() {
+                                                        Ok(ar) => audio_renderer = Some(Box::new(ar)),
+                                                        Err(e) => warn!("audio renderer init failed: {}", e),
+                                                    }
                                                 }
                                                 #[cfg(target_os = "windows")]
                                                 {
-                                                    let ar = wavry_media::WindowsAudioRenderer::new()?;
-                                                    audio_renderer = Some(Box::new(ar));
+                                                    match wavry_media::WindowsAudioRenderer::new() {
+                                                        Ok(ar) => audio_renderer = Some(Box::new(ar)),
+                                                        Err(e) => warn!("audio renderer init failed: {}", e),
+                                                    }
                                                 }
                                             }
                                         }
@@ -765,7 +933,13 @@ pub async fn run_client(
                             Some(rift_core::media_message::Content::Audio(packet)) => {
                                 fec_cache.insert(phys.packet_id, plaintext.clone());
                                 if let Some(ar) = audio_renderer.as_mut() {
-                                    ar.render(&packet.payload, packet.timestamp_us)?;
+                                    if let Err(e) = ar.render(&packet.payload, packet.timestamp_us) {
+                                        if !audio_disabled {
+                                            warn!("audio render failed, disabling audio: {}", e);
+                                        }
+                                        audio_renderer = None;
+                                        audio_disabled = true;
+                                    }
                                 }
                             }
                             Some(rift_core::media_message::Content::Fec(fec)) => {
@@ -796,7 +970,13 @@ pub async fn run_client(
                                                 }
                                                 Some(rift_core::media_message::Content::Audio(packet)) => {
                                                     if let Some(ar) = audio_renderer.as_mut() {
-                                                        ar.render(&packet.payload, packet.timestamp_us)?;
+                                                        if let Err(e) = ar.render(&packet.payload, packet.timestamp_us) {
+                                                            if !audio_disabled {
+                                                                warn!("audio render failed, disabling audio: {}", e);
+                                                            }
+                                                            audio_renderer = None;
+                                                            audio_disabled = true;
+                                                        }
                                                     }
                                                 }
                                                 _ => {}
@@ -813,6 +993,14 @@ pub async fn run_client(
             }
         }
     }
+
+    if let Some(adapter) = vr_adapter.as_ref() {
+        if let Ok(mut adapter) = adapter.lock() {
+            adapter.stop();
+        }
+    }
+
+    Ok(())
 }
 
 async fn send_rift_msg(
@@ -988,7 +1176,9 @@ impl FecCache {
 
         if present_count == (fec.shard_count - 2) {
             // Exactly one missing, we've XORed everything else into the parity
-            debug!("FEC: Recovered packet {}", missing_id.unwrap());
+            if let Some(id) = missing_id {
+                debug!("FEC: Recovered packet {}", id);
+            }
             Some(recovered_payload)
         } else {
             None
@@ -1015,74 +1205,109 @@ fn discover_host_blocking() -> Result<SocketAddr> {
     Err(anyhow!("no wavry hosts discovered"))
 }
 
+fn normalize_gamepad_deadzone(deadzone: f32) -> f32 {
+    deadzone.clamp(0.0, 0.95)
+}
+
+fn apply_gamepad_deadzone(value: f32, deadzone: f32) -> f32 {
+    let deadzone = normalize_gamepad_deadzone(deadzone);
+    let abs = value.abs();
+    if abs <= deadzone {
+        0.0
+    } else {
+        let scaled = (abs - deadzone) / (1.0 - deadzone);
+        scaled.copysign(value).clamp(-1.0, 1.0)
+    }
+}
+
 #[cfg(target_os = "linux")]
-fn spawn_input_threads(input_tx: mpsc::Sender<ProtoInputMessage>) -> Result<()> {
-    // Spawn Gamepad Thread
-    let tx_gamepad = input_tx.clone();
-    thread::spawn(move || {
-        let mut gilrs = Gilrs::new()
-            .map_err(|e| anyhow!("gilrs init: {}", e))
-            .unwrap();
-        loop {
-            while let Some(Event { id, event, .. }) = gilrs.next_event() {
-                let gamepad_id = Into::<usize>::into(id) as u32;
-                let mut msg = ProtoInputMessage {
-                    timestamp_us: now_us(),
-                    event: None,
-                };
-                match event {
-                    GilrsEventType::ButtonPressed(button, _) => {
-                        msg.event = Some(rift_core::input_message::Event::Gamepad(
-                            rift_core::GamepadMessage {
-                                gamepad_id,
-                                buttons: vec![rift_core::GamepadButton {
-                                    button: button as u32,
-                                    pressed: true,
-                                }],
-                                axes: vec![],
-                            },
-                        ));
-                    }
-                    GilrsEventType::ButtonReleased(button, _) => {
-                        msg.event = Some(rift_core::input_message::Event::Gamepad(
-                            rift_core::GamepadMessage {
-                                gamepad_id,
-                                buttons: vec![rift_core::GamepadButton {
-                                    button: button as u32,
-                                    pressed: false,
-                                }],
-                                axes: vec![],
-                            },
-                        ));
-                    }
-                    GilrsEventType::AxisChanged(axis, value, _) => {
-                        msg.event = Some(rift_core::input_message::Event::Gamepad(
-                            rift_core::GamepadMessage {
-                                gamepad_id,
-                                axes: vec![rift_core::GamepadAxis {
-                                    axis: axis as u32,
-                                    value,
-                                }],
-                                buttons: vec![],
-                            },
-                        ));
-                    }
-                    _ => continue,
+fn spawn_input_threads(
+    input_tx: mpsc::Sender<ProtoInputMessage>,
+    gamepad_enabled: bool,
+    gamepad_deadzone: f32,
+) -> Result<()> {
+    if gamepad_enabled {
+        let tx_gamepad = input_tx.clone();
+        let deadzone = normalize_gamepad_deadzone(gamepad_deadzone);
+        thread::spawn(move || {
+            let mut gilrs = match Gilrs::new() {
+                Ok(g) => g,
+                Err(e) => {
+                    warn!("gilrs init failed: {}", e);
+                    return;
                 }
-                let _ = tx_gamepad.blocking_send(msg);
+            };
+            loop {
+                while let Some(Event { id, event, .. }) = gilrs.next_event() {
+                    let gamepad_id = Into::<usize>::into(id) as u32;
+                    let mut msg = ProtoInputMessage {
+                        timestamp_us: now_us(),
+                        event: None,
+                    };
+                    match event {
+                        GilrsEventType::ButtonPressed(button, _) => {
+                            msg.event = Some(rift_core::input_message::Event::Gamepad(
+                                rift_core::GamepadMessage {
+                                    gamepad_id,
+                                    buttons: vec![rift_core::GamepadButton {
+                                        button: button as u32,
+                                        pressed: true,
+                                    }],
+                                    axes: vec![],
+                                },
+                            ));
+                        }
+                        GilrsEventType::ButtonReleased(button, _) => {
+                            msg.event = Some(rift_core::input_message::Event::Gamepad(
+                                rift_core::GamepadMessage {
+                                    gamepad_id,
+                                    buttons: vec![rift_core::GamepadButton {
+                                        button: button as u32,
+                                        pressed: false,
+                                    }],
+                                    axes: vec![],
+                                },
+                            ));
+                        }
+                        GilrsEventType::AxisChanged(axis, value, _) => {
+                            msg.event = Some(rift_core::input_message::Event::Gamepad(
+                                rift_core::GamepadMessage {
+                                    gamepad_id,
+                                    axes: vec![rift_core::GamepadAxis {
+                                        axis: axis as u32,
+                                        value: apply_gamepad_deadzone(value, deadzone),
+                                    }],
+                                    buttons: vec![],
+                                },
+                            ));
+                        }
+                        _ => continue,
+                    }
+                    if tx_gamepad.blocking_send(msg).is_err() {
+                        return;
+                    }
+                }
+                thread::sleep(Duration::from_millis(8));
             }
-            thread::sleep(Duration::from_millis(8));
-        }
-    });
+        });
+    }
 
     let keyboard = find_device(DeviceKind::Keyboard)?;
+    if keyboard.is_none() {
+        warn!("no keyboard input device found");
+    }
     let mouse = find_device(DeviceKind::Mouse)?;
+    if mouse.is_none() {
+        warn!("no mouse input device found");
+    }
 
     if let Some(mut keyboard) = keyboard {
         let tx = input_tx.clone();
         thread::spawn(move || loop {
+            let mut had_events = false;
             if let Ok(events) = keyboard.fetch_events() {
                 for event in events {
+                    had_events = true;
                     if event.event_type() == EventType::KEY {
                         let keycode = event.code();
                         let pressed = event.value() != 0;
@@ -1099,6 +1324,9 @@ fn spawn_input_threads(input_tx: mpsc::Sender<ProtoInputMessage>) -> Result<()> 
                     }
                 }
             }
+            if !had_events {
+                thread::sleep(Duration::from_millis(1));
+            }
         });
     }
 
@@ -1106,10 +1334,15 @@ fn spawn_input_threads(input_tx: mpsc::Sender<ProtoInputMessage>) -> Result<()> 
         let _tx = input_tx;
         thread::spawn(move || {
             loop {
+                let mut had_events = false;
                 if let Ok(events) = mouse.fetch_events() {
                     for _event in events {
+                        had_events = true;
                         // ... simple mouse handling ...
                     }
+                }
+                if !had_events {
+                    thread::sleep(Duration::from_millis(1));
                 }
             }
         });
@@ -1118,62 +1351,76 @@ fn spawn_input_threads(input_tx: mpsc::Sender<ProtoInputMessage>) -> Result<()> 
 }
 
 #[cfg(not(target_os = "linux"))]
-fn spawn_input_threads(input_tx: mpsc::Sender<ProtoInputMessage>) -> Result<()> {
-    // Spawn Gamepad Thread
-    let tx_gamepad = input_tx.clone();
-    thread::spawn(move || {
-        let mut gilrs = Gilrs::new().unwrap();
-        loop {
-            while let Some(Event { id, event, .. }) = gilrs.next_event() {
-                let gamepad_id = Into::<usize>::into(id) as u32;
-                let mut msg = ProtoInputMessage {
-                    timestamp_us: now_us(),
-                    event: None,
-                };
-                match event {
-                    GilrsEventType::ButtonPressed(button, _) => {
-                        msg.event = Some(rift_core::input_message::Event::Gamepad(
-                            rift_core::GamepadMessage {
-                                gamepad_id,
-                                buttons: vec![rift_core::GamepadButton {
-                                    button: button as u32,
-                                    pressed: true,
-                                }],
-                                axes: vec![],
-                            },
-                        ));
-                    }
-                    GilrsEventType::ButtonReleased(button, _) => {
-                        msg.event = Some(rift_core::input_message::Event::Gamepad(
-                            rift_core::GamepadMessage {
-                                gamepad_id,
-                                buttons: vec![rift_core::GamepadButton {
-                                    button: button as u32,
-                                    pressed: false,
-                                }],
-                                axes: vec![],
-                            },
-                        ));
-                    }
-                    GilrsEventType::AxisChanged(axis, value, _) => {
-                        msg.event = Some(rift_core::input_message::Event::Gamepad(
-                            rift_core::GamepadMessage {
-                                gamepad_id,
-                                axes: vec![rift_core::GamepadAxis {
-                                    axis: axis as u32,
-                                    value,
-                                }],
-                                buttons: vec![],
-                            },
-                        ));
-                    }
-                    _ => continue,
+fn spawn_input_threads(
+    input_tx: mpsc::Sender<ProtoInputMessage>,
+    gamepad_enabled: bool,
+    gamepad_deadzone: f32,
+) -> Result<()> {
+    if gamepad_enabled {
+        let tx_gamepad = input_tx.clone();
+        let deadzone = normalize_gamepad_deadzone(gamepad_deadzone);
+        thread::spawn(move || {
+            let mut gilrs = match Gilrs::new() {
+                Ok(g) => g,
+                Err(e) => {
+                    warn!("gilrs init failed: {}", e);
+                    return;
                 }
-                let _ = tx_gamepad.blocking_send(msg);
+            };
+            loop {
+                while let Some(Event { id, event, .. }) = gilrs.next_event() {
+                    let gamepad_id = Into::<usize>::into(id) as u32;
+                    let mut msg = ProtoInputMessage {
+                        timestamp_us: now_us(),
+                        event: None,
+                    };
+                    match event {
+                        GilrsEventType::ButtonPressed(button, _) => {
+                            msg.event = Some(rift_core::input_message::Event::Gamepad(
+                                rift_core::GamepadMessage {
+                                    gamepad_id,
+                                    buttons: vec![rift_core::GamepadButton {
+                                        button: button as u32,
+                                        pressed: true,
+                                    }],
+                                    axes: vec![],
+                                },
+                            ));
+                        }
+                        GilrsEventType::ButtonReleased(button, _) => {
+                            msg.event = Some(rift_core::input_message::Event::Gamepad(
+                                rift_core::GamepadMessage {
+                                    gamepad_id,
+                                    buttons: vec![rift_core::GamepadButton {
+                                        button: button as u32,
+                                        pressed: false,
+                                    }],
+                                    axes: vec![],
+                                },
+                            ));
+                        }
+                        GilrsEventType::AxisChanged(axis, value, _) => {
+                            msg.event = Some(rift_core::input_message::Event::Gamepad(
+                                rift_core::GamepadMessage {
+                                    gamepad_id,
+                                    axes: vec![rift_core::GamepadAxis {
+                                        axis: axis as u32,
+                                        value: apply_gamepad_deadzone(value, deadzone),
+                                    }],
+                                    buttons: vec![],
+                                },
+                            ));
+                        }
+                        _ => continue,
+                    }
+                    if tx_gamepad.blocking_send(msg).is_err() {
+                        return;
+                    }
+                }
+                thread::sleep(Duration::from_millis(8));
             }
-            thread::sleep(Duration::from_millis(8));
-        }
-    });
+        });
+    }
 
     thread::spawn(move || loop {
         thread::sleep(Duration::from_secs(2));
@@ -1184,7 +1431,9 @@ fn spawn_input_threads(input_tx: mpsc::Sender<ProtoInputMessage>) -> Result<()> 
             })),
             timestamp_us: now_us(),
         };
-        let _ = input_tx.blocking_send(press);
+        if input_tx.blocking_send(press).is_err() {
+            break;
+        }
         thread::sleep(Duration::from_millis(100));
         let release = ProtoInputMessage {
             event: Some(rift_core::input_message::Event::Key(rift_core::Key {
@@ -1193,7 +1442,9 @@ fn spawn_input_threads(input_tx: mpsc::Sender<ProtoInputMessage>) -> Result<()> 
             })),
             timestamp_us: now_us(),
         };
-        let _ = input_tx.blocking_send(release);
+        if input_tx.blocking_send(release).is_err() {
+            break;
+        }
     });
     Ok(())
 }
@@ -1205,22 +1456,55 @@ enum DeviceKind {
 }
 
 #[cfg(target_os = "linux")]
+fn is_keyboard(device: &Device) -> bool {
+    let keys = match device.supported_keys() {
+        Some(keys) => keys,
+        None => return false,
+    };
+    keys.contains(Key::KEY_A)
+        || keys.contains(Key::KEY_Z)
+        || keys.contains(Key::KEY_ENTER)
+        || keys.contains(Key::KEY_SPACE)
+}
+
+#[cfg(target_os = "linux")]
+fn is_mouse(device: &Device) -> bool {
+    let rel = match device.supported_relative_axes() {
+        Some(rel) => rel,
+        None => return false,
+    };
+    let keys = device.supported_keys();
+    let rel_ok = rel.contains(RelativeAxisType::REL_X) && rel.contains(RelativeAxisType::REL_Y);
+    let btn_ok = keys
+        .map(|k| k.contains(Key::BTN_LEFT) || k.contains(Key::BTN_RIGHT))
+        .unwrap_or(false);
+    rel_ok && btn_ok
+}
+
+#[cfg(target_os = "linux")]
 fn find_device(kind: DeviceKind) -> Result<Option<Device>> {
+    let mut fallback: Option<Device> = None;
     for (_path, device) in evdev::enumerate() {
         match kind {
             DeviceKind::Keyboard => {
-                if device.supported_keys().is_some() {
+                if is_keyboard(&device) {
                     return Ok(Some(device));
+                }
+                if fallback.is_none() && device.supported_keys().is_some() {
+                    fallback = Some(device);
                 }
             }
             DeviceKind::Mouse => {
-                if device.supported_relative_axes().is_some() {
+                if is_mouse(&device) {
                     return Ok(Some(device));
+                }
+                if fallback.is_none() && device.supported_relative_axes().is_some() {
+                    fallback = Some(device);
                 }
             }
         }
     }
-    Ok(None)
+    Ok(fallback)
 }
 
 pub fn create_hello_base64(client_name: String, public_addr: Option<String>) -> Result<String> {
@@ -1237,13 +1521,7 @@ pub fn create_hello_base64(client_name: String, public_addr: Option<String>) -> 
 
     let hello = ProtoHello {
         client_name,
-        platform: if cfg!(target_os = "windows") {
-            rift_core::Platform::Windows as i32
-        } else if cfg!(target_os = "macos") {
-            rift_core::Platform::Macos as i32
-        } else {
-            rift_core::Platform::Linux as i32
-        },
+        platform: local_platform() as i32,
         supported_codecs,
         max_resolution: Some(ProtoResolution {
             width: 1920,
@@ -1318,7 +1596,7 @@ pub fn decode_hello_ack_base64(b64: &str) -> Result<rift_core::HelloAck> {
 fn now_us() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
+        .unwrap_or_default()
         .as_micros() as u64
 }
 

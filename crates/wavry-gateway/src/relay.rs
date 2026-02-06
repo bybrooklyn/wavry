@@ -1,162 +1,349 @@
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
+
+use anyhow::Result;
+use rift_core::relay::{
+    LeaseAckPayload, LeasePresentPayload, LeaseRejectPayload, LeaseRejectReason, RelayHeader,
+    RelayPacketType, RELAY_HEADER_SIZE, RELAY_MAX_PACKET_SIZE,
+};
 use tokio::net::UdpSocket;
 use tokio::sync::RwLock;
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 use uuid::Uuid;
 
-// Shared state for Relay Tokens
-// Token -> (HostEmail, ClientEmail, Expiration)
-// Actual binding: Addr -> Token
+use crate::security;
+
 pub struct RelaySession {
     pub host_email: String,
     pub client_email: String,
+    pub session_id: Uuid,
     pub host_addr: Option<SocketAddr>,
     pub client_addr: Option<SocketAddr>,
-    pub created_at: std::time::Instant,
-    // Rate Limiting
+    pub created_at: Instant,
     pub bytes_sent: usize,
-    pub last_tick: std::time::Instant,
+    pub last_tick: Instant,
 }
 
-const BANDWIDTH_LIMIT_BPS: usize = 500 * 1024; // 500 KB/s (~4 Mbps)
+const BANDWIDTH_LIMIT_BPS: usize = 500 * 1024;
+const ROUTE_IDLE_TIMEOUT: Duration = Duration::from_secs(120);
+const DEFAULT_LEASE_TTL: Duration = Duration::from_secs(300);
 
-pub type RelayMap = Arc<RwLock<HashMap<String, RelaySession>>>; // Key: Token
+pub type RelayMap = Arc<RwLock<HashMap<String, RelaySession>>>;
 
-pub async fn run_relay_server(port: u16, state: RelayMap) -> anyhow::Result<()> {
-    let addr = format!("0.0.0.0:{}", port);
+#[derive(Clone)]
+enum RouteSide {
+    Host,
+    Client,
+}
+
+#[derive(Clone)]
+struct RouteEntry {
+    token: String,
+    session_id: Uuid,
+    side: RouteSide,
+    dest: SocketAddr,
+    last_seen: Instant,
+}
+
+pub async fn run_relay_server(port: u16, state: RelayMap) -> Result<()> {
+    let addr = std::env::var("WAVRY_GATEWAY_RELAY_BIND_ADDR")
+        .unwrap_or_else(|_| format!("127.0.0.1:{}", port));
+    if let Ok(parsed) = addr.parse::<SocketAddr>() {
+        let allow_public = std::env::var("WAVRY_GATEWAY_RELAY_ALLOW_PUBLIC_BIND")
+            .map(|v| {
+                matches!(
+                    v.trim().to_ascii_lowercase().as_str(),
+                    "1" | "true" | "yes" | "on"
+                )
+            })
+            .unwrap_or(false);
+        if !parsed.ip().is_loopback() && !allow_public {
+            return Err(anyhow::anyhow!(
+                "refusing non-loopback gateway relay bind without WAVRY_GATEWAY_RELAY_ALLOW_PUBLIC_BIND=1"
+            ));
+        }
+    }
     let socket = UdpSocket::bind(&addr).await?;
-    info!("Relay Server listening on udp://{}", addr);
+    info!("relay server listening on udp://{}", addr);
 
-    let mut buf = [0u8; 2048]; // Max MTU usually 1500, safe margin
+    let mut buf = [0u8; RELAY_MAX_PACKET_SIZE];
+    let mut routes: HashMap<SocketAddr, RouteEntry> = HashMap::new();
 
     loop {
         let (len, src_addr) = match socket.recv_from(&mut buf).await {
             Ok(v) => v,
-            Err(e) => {
-                warn!("Relay recv error: {}", e);
+            Err(err) => {
+                warn!("relay recv error: {}", err);
                 continue;
             }
         };
 
-        let data = &buf[0..len];
-
-        // Protocol:
-        // 1. Handshake: 1 byte TYPE (0x01), 16 Bytes Token (UUID bytes)
-        // 2. Data: Anything else is forwarded based on src_addr
-
-        if len == 17 && data[0] == 0x01 {
-            // Handshake
-            handle_handshake(&state, src_addr, &data[1..], &socket).await;
-        } else {
-            // Forwarding
-            handle_forward(&state, src_addr, data, &socket).await;
+        if len < RELAY_HEADER_SIZE {
+            continue;
         }
+
+        let packet = &buf[..len];
+        let header = match RelayHeader::decode(packet) {
+            Ok(header) => header,
+            Err(err) => {
+                debug!("dropping invalid relay header from {}: {}", src_addr, err);
+                continue;
+            }
+        };
+
+        let payload = &packet[RELAY_HEADER_SIZE..];
+        match header.packet_type {
+            RelayPacketType::LeasePresent => {
+                handle_lease_present(&state, &mut routes, src_addr, &header, payload, &socket)
+                    .await;
+            }
+            RelayPacketType::Forward => {
+                handle_forward(&state, &mut routes, src_addr, &header, packet, &socket).await;
+            }
+            RelayPacketType::LeaseRenew => {
+                send_lease_ack(&socket, header.session_id, src_addr, DEFAULT_LEASE_TTL).await;
+            }
+            _ => {
+                debug!("ignoring unexpected relay packet type from {}", src_addr);
+            }
+        }
+
+        cleanup_routes(&mut routes);
     }
 }
 
-async fn handle_handshake(
+async fn handle_lease_present(
     state: &RelayMap,
+    routes: &mut HashMap<SocketAddr, RouteEntry>,
     src: SocketAddr,
-    token_bytes: &[u8],
+    header: &RelayHeader,
+    payload: &[u8],
     socket: &UdpSocket,
 ) {
-    let token_uuid = match Uuid::from_slice(token_bytes) {
-        Ok(u) => u.to_string(),
-        Err(_) => return,
+    let lease = match LeasePresentPayload::decode(payload) {
+        Ok(v) => v,
+        Err(_) => {
+            send_lease_reject(
+                socket,
+                header.session_id,
+                src,
+                LeaseRejectReason::InvalidSignature,
+            )
+            .await;
+            return;
+        }
     };
 
-    let mut guard = state.write().await;
+    let token = match String::from_utf8(lease.lease_token) {
+        Ok(token) if security::is_valid_session_token(&token) => token,
+        _ => {
+            send_lease_reject(
+                socket,
+                header.session_id,
+                src,
+                LeaseRejectReason::InvalidSignature,
+            )
+            .await;
+            return;
+        }
+    };
 
-    // We need to find which session this token belongs to
-    // Simplified: Both Host and Client send the SAME token.
-    // The first one to bind is stored as "HostAddr" (or just Peer A)
-    // The second is "ClientAddr" (Peer B)
-    // Actually, we can just fill slots.
+    let mut sessions = state.write().await;
+    let Some(session) = sessions.get_mut(&token) else {
+        send_lease_reject(
+            socket,
+            header.session_id,
+            src,
+            LeaseRejectReason::InvalidSignature,
+        )
+        .await;
+        return;
+    };
 
-    if let Some(session) = guard.get_mut(&token_uuid) {
-        if session.host_addr.is_none() {
-            session.host_addr = Some(src);
-            info!("Relay: Peer A bonded for session {}", token_uuid);
-            let _ = socket.send_to(b"\x02OK", src).await; // 0x02 = Ack
-        } else if session.client_addr.is_none() {
-            // Avoid rebinding same addr
-            if Some(src) != session.host_addr {
-                session.client_addr = Some(src);
-                info!(
-                    "Relay: Peer B bonded for session {}. Ready to relay.",
-                    token_uuid
-                );
-                let _ = socket.send_to(b"\x02OK", src).await;
+    if session.session_id != header.session_id {
+        send_lease_reject(
+            socket,
+            header.session_id,
+            src,
+            LeaseRejectReason::WrongRelay,
+        )
+        .await;
+        return;
+    }
 
-                // Notify Peer A? Optional.
-            }
-        } else {
-            // Re-binding logic? Or reject 3rd party?
-            // If src matches existing, just ack.
-            if Some(src) == session.host_addr || Some(src) == session.client_addr {
-                let _ = socket.send_to(b"\x02OK", src).await;
-            } else {
-                warn!("Relay: Session full or invalid attempt from {}", src);
+    let now = Instant::now();
+    let mut host_bound = false;
+    let mut client_bound = false;
+
+    match lease.peer_role {
+        rift_core::relay::PeerRole::Server => {
+            host_bound = bind_host(session, src);
+            if !host_bound && session.client_addr.is_none() {
+                client_bound = bind_client(session, src);
             }
         }
-    } else {
-        warn!("Relay: Unknown token from {}", src);
+        rift_core::relay::PeerRole::Client => {
+            client_bound = bind_client(session, src);
+            if !client_bound && session.host_addr.is_none() {
+                host_bound = bind_host(session, src);
+            }
+        }
+    }
+
+    if !host_bound && !client_bound {
+        send_lease_reject(
+            socket,
+            header.session_id,
+            src,
+            LeaseRejectReason::SessionFull,
+        )
+        .await;
+        return;
+    }
+
+    if let (Some(host), Some(client)) = (session.host_addr, session.client_addr) {
+        routes.insert(
+            host,
+            RouteEntry {
+                token: token.clone(),
+                session_id: session.session_id,
+                side: RouteSide::Host,
+                dest: client,
+                last_seen: now,
+            },
+        );
+        routes.insert(
+            client,
+            RouteEntry {
+                token: token.clone(),
+                session_id: session.session_id,
+                side: RouteSide::Client,
+                dest: host,
+                last_seen: now,
+            },
+        );
+    }
+
+    send_lease_ack(socket, session.session_id, src, DEFAULT_LEASE_TTL).await;
+}
+
+fn bind_host(session: &mut RelaySession, src: SocketAddr) -> bool {
+    match session.host_addr {
+        None => {
+            session.host_addr = Some(src);
+            true
+        }
+        Some(addr) => addr == src,
     }
 }
 
-async fn handle_forward(state: &RelayMap, src: SocketAddr, data: &[u8], socket: &UdpSocket) {
-    // Reverse lookup: Src -> Target
-    // This is O(N) if we iterate.
-    // OPTIMIZATION: Maintain a separate `Addr -> TargetAddr` map for O(1) forwarding.
-    // For MVP/Monolith, we can lock read and find.
-    // Ideally `RelayMap` connects Token -> Session.
-    // We need `AddrMap` for fast path.
-    // Let's modify `run_relay_server` to keep a local fast-map `HashMap<SocketAddr, SocketAddr>`.
-    // But `RelayMap` is modified by Signaling (to add tokens).
-    // The shared state is tricky.
-
-    // Better: `RelayMap` stores the authoritative session state.
-    // The Relay Loop maintains a local `FastMap`.
-    // Periodically (or on handshake), `FastMap` is updated.
-
-    // Implementation for MVP: Write Lock + Find (Need write for rate limiting)
-    let mut guard = state.write().await;
-
-    // Find session containing src
-    // Note: iterating values_mut() allows modification
-    for session in guard.values_mut() {
-        let is_host = session.host_addr == Some(src);
-        let is_client = session.client_addr == Some(src);
-
-        if is_host || is_client {
-            // Check Rate Limit
-            let now = std::time::Instant::now();
-            if now.duration_since(session.last_tick).as_secs() >= 1 {
-                session.bytes_sent = 0;
-                session.last_tick = now;
-            }
-
-            if session.bytes_sent + data.len() > BANDWIDTH_LIMIT_BPS {
-                // Drop packet implies congestion or abuse
-                // debug!("Relay: Rate limit exceeded for session");
-                return;
-            }
-
-            session.bytes_sent += data.len();
-
-            // Forward
-            if let Some(target) = if is_host {
-                session.client_addr
-            } else {
-                session.host_addr
-            } {
-                let _ = socket.send_to(data, target).await;
-            }
-            return;
+fn bind_client(session: &mut RelaySession, src: SocketAddr) -> bool {
+    match session.client_addr {
+        None => {
+            session.client_addr = Some(src);
+            true
         }
+        Some(addr) => addr == src,
+    }
+}
+
+async fn handle_forward(
+    state: &RelayMap,
+    routes: &mut HashMap<SocketAddr, RouteEntry>,
+    src: SocketAddr,
+    header: &RelayHeader,
+    packet: &[u8],
+    socket: &UdpSocket,
+) {
+    let Some(route) = routes.get_mut(&src) else {
+        return;
+    };
+
+    if route.session_id != header.session_id {
+        routes.remove(&src);
+        return;
     }
 
-    // debug!("Relay: packet dropped from unbonded source {}", src);
+    let now = Instant::now();
+    let mut sessions = state.write().await;
+    let Some(session) = sessions.get_mut(&route.token) else {
+        routes.remove(&src);
+        return;
+    };
+
+    if session.session_id != header.session_id {
+        routes.remove(&src);
+        return;
+    }
+
+    let source_matches = match route.side {
+        RouteSide::Host => session.host_addr == Some(src),
+        RouteSide::Client => session.client_addr == Some(src),
+    };
+    if !source_matches {
+        routes.remove(&src);
+        return;
+    }
+
+    if now.duration_since(session.last_tick).as_secs() >= 1 {
+        session.bytes_sent = 0;
+        session.last_tick = now;
+    }
+    if session.bytes_sent + packet.len() > BANDWIDTH_LIMIT_BPS {
+        return;
+    }
+    session.bytes_sent += packet.len();
+
+    route.last_seen = now;
+    let dest = route.dest;
+    drop(sessions);
+
+    let _ = socket.send_to(packet, dest).await;
+}
+
+fn cleanup_routes(routes: &mut HashMap<SocketAddr, RouteEntry>) {
+    let now = Instant::now();
+    routes.retain(|_, route| now.duration_since(route.last_seen) <= ROUTE_IDLE_TIMEOUT);
+}
+
+async fn send_lease_ack(
+    socket: &UdpSocket,
+    session_id: Uuid,
+    dest: SocketAddr,
+    lease_ttl: Duration,
+) {
+    let header = RelayHeader::new(RelayPacketType::LeaseAck, session_id);
+    let expires_ms = (chrono::Utc::now() + chrono::Duration::from_std(lease_ttl).unwrap())
+        .timestamp_millis()
+        .max(0) as u64;
+    let payload = LeaseAckPayload {
+        expires_ms,
+        soft_limit_kbps: 10_000,
+        hard_limit_kbps: 50_000,
+    };
+
+    let mut packet = [0u8; RELAY_HEADER_SIZE + LeaseAckPayload::SIZE];
+    if header.encode(&mut packet).is_ok()
+        && payload.encode(&mut packet[RELAY_HEADER_SIZE..]).is_ok()
+    {
+        let _ = socket.send_to(&packet, dest).await;
+    }
+}
+
+async fn send_lease_reject(
+    socket: &UdpSocket,
+    session_id: Uuid,
+    dest: SocketAddr,
+    reason: LeaseRejectReason,
+) {
+    let header = RelayHeader::new(RelayPacketType::LeaseReject, session_id);
+    let payload = LeaseRejectPayload { reason };
+    let mut packet = [0u8; RELAY_HEADER_SIZE + LeaseRejectPayload::SIZE];
+    if header.encode(&mut packet).is_ok()
+        && payload.encode(&mut packet[RELAY_HEADER_SIZE..]).is_ok()
+    {
+        let _ = socket.send_to(&packet, dest).await;
+    }
 }

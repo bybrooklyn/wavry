@@ -10,6 +10,6 @@ If you need to:
 
 you can purchase a **commercial license** that grants an exception to the AGPL requirements.
 
-Contact: `licensing@wavry.example`
+Contact: `licensing@wavry.dev`
 
 No pricing is published in this repository. Terms are available on request.

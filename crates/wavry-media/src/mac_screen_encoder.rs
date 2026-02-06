@@ -4,7 +4,7 @@
     deprecated,
     clippy::arc_with_non_send_sync
 )]
-use crate::{EncodeConfig, EncodedFrame};
+use crate::{Codec, EncodeConfig, EncodedFrame};
 use anyhow::{anyhow, Result};
 use tokio::sync::{mpsc, oneshot};
 
@@ -12,6 +12,8 @@ use tokio::sync::{mpsc, oneshot};
 use block2::RcBlock;
 #[cfg(target_os = "macos")]
 use dispatch2::{DispatchObject, DispatchRetained};
+#[cfg(target_os = "macos")]
+use libloading::Library;
 #[cfg(target_os = "macos")]
 use objc2::{define_class, msg_send, rc::Retained, AnyThread, DeclaredClass, Message};
 #[cfg(target_os = "macos")]
@@ -37,6 +39,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 const K_CMVIDEO_CODEC_TYPE_H264: CMVideoCodecType = 0x61766331; // 'avc1'
 #[cfg(target_os = "macos")]
 const K_CMVIDEO_CODEC_TYPE_HEVC: CMVideoCodecType = 0x68766331; // 'hvc1'
+#[cfg(target_os = "macos")]
+const K_CMVIDEO_CODEC_TYPE_AV1: CMVideoCodecType = 0x61763031; // 'av01'
 
 // Property keys for VTCompressionSession
 #[cfg(target_os = "macos")]
@@ -342,7 +346,34 @@ async fn get_shareable_content() -> Result<SendRetained<SCShareableContent>> {
 }
 
 #[cfg(target_os = "macos")]
+fn cm_codec_type(codec: Codec) -> CMVideoCodecType {
+    match codec {
+        Codec::Av1 => K_CMVIDEO_CODEC_TYPE_AV1,
+        Codec::Hevc => K_CMVIDEO_CODEC_TYPE_HEVC,
+        Codec::H264 => K_CMVIDEO_CODEC_TYPE_H264,
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn hardware_encode_supported(codec: Codec) -> bool {
+    type VTHardwareEncodeFn = unsafe extern "C" fn(CMVideoCodecType) -> u8;
+
+    let Ok(lib) =
+        (unsafe { Library::new("/System/Library/Frameworks/VideoToolbox.framework/VideoToolbox") })
+    else {
+        return false;
+    };
+    let Ok(func) = (unsafe { lib.get::<VTHardwareEncodeFn>(b"VTIsHardwareEncodeSupported\0") })
+    else {
+        return false;
+    };
+
+    unsafe { func(cm_codec_type(codec)) != 0 }
+}
+
+#[cfg(target_os = "macos")]
 fn create_compression_session(
+    codec: Codec,
     width: i32,
     height: i32,
     fps: u16,
@@ -366,7 +397,7 @@ fn create_compression_session(
             None, // allocator
             width,
             height,
-            K_CMVIDEO_CODEC_TYPE_H264,
+            cm_codec_type(codec),
             None, // encoderSpecification
             None, // sourceImageBufferAttributes
             None, // compressedDataAllocator
@@ -454,16 +485,18 @@ fn create_compression_session(
             kCFBooleanFalse,
         );
 
-        // Set Entropy Mode to CABAC (higher quality/efficiency)
-        let cabac = b"CABAC\0";
-        let cabac_str = CFStringCreateWithCString(std::ptr::null(), cabac.as_ptr(), 0x08000100); // kCFStringEncodingUTF8
-        if !cabac_str.is_null() {
-            VTSessionSetProperty(
-                session,
-                kVTCompressionPropertyKey_H264EntropyMode,
-                cabac_str,
-            );
-            CFRelease(cabac_str);
+        // H.264-only entropy setting for better quality/efficiency at the same bitrate.
+        if codec == Codec::H264 {
+            let cabac = b"CABAC\0";
+            let cabac_str = CFStringCreateWithCString(std::ptr::null(), cabac.as_ptr(), 0x08000100); // kCFStringEncodingUTF8
+            if !cabac_str.is_null() {
+                VTSessionSetProperty(
+                    session,
+                    kVTCompressionPropertyKey_H264EntropyMode,
+                    cabac_str,
+                );
+                CFRelease(cabac_str);
+            }
         }
 
         // Prepare for encoding
@@ -676,6 +709,7 @@ impl MacScreenEncoder {
 
         // 2. Create compression session
         let (session_ptr, encoder_context) = create_compression_session(
+            config.codec,
             config.resolution.width as i32,
             config.resolution.height as i32,
             config.fps,
@@ -708,7 +742,8 @@ impl MacScreenEncoder {
         let session_ptr = send_session_ptr.0;
 
         log::info!(
-            "MacScreenEncoder started: {}x{} @ {}fps, {}kbps",
+            "MacScreenEncoder started: {:?}, {}x{} @ {}fps, {}kbps",
+            config.codec,
             config.resolution.width,
             config.resolution.height,
             config.fps,
@@ -799,11 +834,41 @@ pub struct MacProbe;
 
 impl crate::CapabilityProbe for MacProbe {
     fn supported_encoders(&self) -> Result<Vec<crate::Codec>> {
-        Ok(vec![crate::Codec::Hevc, crate::Codec::H264])
+        Ok(self
+            .encoder_capabilities()?
+            .into_iter()
+            .map(|cap| cap.codec)
+            .collect())
     }
 
     fn supported_decoders(&self) -> Result<Vec<crate::Codec>> {
         Ok(vec![crate::Codec::Hevc, crate::Codec::H264])
+    }
+
+    fn encoder_capabilities(&self) -> Result<Vec<crate::VideoCodecCapability>> {
+        let mut caps = Vec::new();
+
+        for codec in [crate::Codec::Av1, crate::Codec::Hevc, crate::Codec::H264] {
+            let hardware_accelerated = hardware_encode_supported(codec);
+            let available = hardware_accelerated || codec != crate::Codec::Av1;
+            if !available {
+                continue;
+            }
+            let supports_hdr10 =
+                hardware_accelerated && matches!(codec, crate::Codec::Av1 | crate::Codec::Hevc);
+            caps.push(crate::VideoCodecCapability {
+                codec,
+                hardware_accelerated,
+                supports_10bit: supports_hdr10,
+                supports_hdr10,
+            });
+        }
+
+        if caps.is_empty() {
+            caps.push(crate::VideoCodecCapability::sdr(crate::Codec::H264, false));
+        }
+
+        Ok(caps)
     }
 
     fn enumerate_displays(&self) -> Result<Vec<crate::DisplayInfo>> {

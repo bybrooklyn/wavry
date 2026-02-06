@@ -15,11 +15,13 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Result;
+use bytes::Bytes;
 use clap::Parser;
 use rift_core::relay::{
-    LeaseAckPayload, LeaseRejectPayload, LeaseRejectReason, RelayHeader, RelayPacketType,
-    RELAY_HEADER_SIZE, RELAY_MAX_PACKET_SIZE,
+    ForwardPayloadHeader, LeaseAckPayload, LeaseRejectPayload, LeaseRejectReason, RelayHeader,
+    RelayPacketType, RELAY_HEADER_SIZE, RELAY_MAX_PACKET_SIZE,
 };
+use rift_core::PhysicalPacket;
 use serde::{Deserialize, Serialize};
 use session::{PeerRole, SessionError, SessionPool};
 use tokio::net::UdpSocket;
@@ -39,7 +41,7 @@ const CLEANUP_INTERVAL_SECS: u64 = 10;
 #[command(about = "Wavry relay node - forwards encrypted UDP traffic between peers")]
 struct Args {
     /// UDP listen address
-    #[arg(long, default_value = "0.0.0.0:4000")]
+    #[arg(long, default_value = "127.0.0.1:4000")]
     listen: SocketAddr,
 
     /// Master server URL
@@ -58,9 +60,23 @@ struct Args {
     #[arg(long)]
     master_public_key: Option<String>,
 
+    /// Allow running without master signature validation (development only)
+    #[arg(long, default_value_t = false)]
+    allow_insecure_dev: bool,
+
     /// Log level
     #[arg(long, default_value = "info")]
     log_level: String,
+}
+
+fn env_bool(name: &str, default: bool) -> bool {
+    match std::env::var(name) {
+        Ok(value) => matches!(
+            value.trim().to_ascii_lowercase().as_str(),
+            "1" | "true" | "yes" | "on"
+        ),
+        Err(_) => default,
+    }
 }
 
 /// Rate limiter for per-IP flood protection
@@ -131,6 +147,7 @@ impl RelayServer {
         max_sessions: usize,
         idle_timeout: Duration,
         master_key_hex: Option<&str>,
+        allow_insecure_dev: bool,
     ) -> Result<Self> {
         let socket = UdpSocket::bind(listen).await?;
         info!("Relay listening on {}", listen);
@@ -140,8 +157,13 @@ impl RelayServer {
             let key =
                 pasetors::keys::AsymmetricPublicKey::<pasetors::version4::V4>::from(&key_bytes)?;
             Some(key)
-        } else {
+        } else if allow_insecure_dev {
+            warn!("relay running in insecure dev mode (lease signature checks disabled)");
             None
+        } else {
+            return Err(anyhow::anyhow!(
+                "master public key is required; pass --master-public-key or --allow-insecure-dev"
+            ));
         };
 
         Ok(Self {
@@ -353,6 +375,13 @@ impl RelayServer {
             session.identify_peer(src).ok_or(PacketError::UnknownPeer)?;
 
         let dest_addr = dest.socket_addr;
+        let sequence = extract_forward_sequence(payload)?;
+
+        if let Some(sender) = session.get_peer_mut(sender_role) {
+            if !sender.seq_window.check_and_update(sequence) {
+                return Err(PacketError::ReplayDetected(sequence));
+            }
+        }
 
         // 6. Bandwidth Rate Limiting
         let now = std::time::Instant::now();
@@ -367,10 +396,7 @@ impl RelayServer {
             return Err(PacketError::RateLimited);
         }
 
-        // 7. Sequence number check
-        // TODO: Implement sequence window check in session
-
-        // 8. Update sender's last seen (for NAT rebinding)
+        // 7. Update sender's last seen (for NAT rebinding)
         if let Some(sender) = session.get_peer_mut(sender_role) {
             if sender.socket_addr != src {
                 debug!(
@@ -497,15 +523,34 @@ enum PacketError {
     SessionFull,
     #[error("unknown peer")]
     UnknownPeer,
+    #[error("replay detected for sequence {0}")]
+    ReplayDetected(u64),
     #[error("session error")]
     SessionError,
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),
 }
 
+fn extract_forward_sequence(payload: &[u8]) -> Result<u64, PacketError> {
+    if payload.starts_with(&rift_core::RIFT_MAGIC) {
+        let packet = PhysicalPacket::decode(Bytes::copy_from_slice(payload))
+            .map_err(|_| PacketError::InvalidPayload)?;
+        return Ok(packet.packet_id);
+    }
+
+    let header = ForwardPayloadHeader::decode(payload).map_err(|_| PacketError::InvalidPayload)?;
+    Ok(header.sequence)
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     let args = Args::parse();
+
+    if !args.listen.ip().is_loopback() && !env_bool("WAVRY_RELAY_ALLOW_PUBLIC_BIND", false) {
+        return Err(anyhow::anyhow!(
+            "refusing non-loopback relay bind without WAVRY_RELAY_ALLOW_PUBLIC_BIND=1"
+        ));
+    }
 
     // Initialize tracing
     let filter = format!("{},hyper=warn,tokio=warn", args.log_level);
@@ -566,6 +611,7 @@ async fn main() -> Result<()> {
             args.max_sessions,
             Duration::from_secs(args.idle_timeout),
             args.master_public_key.as_deref(),
+            args.allow_insecure_dev,
         )
         .await?,
     );

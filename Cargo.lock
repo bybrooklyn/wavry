@@ -1986,6 +1986,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "gethostname"
+version = "1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1bd49230192a3797a9a4d6abe9b3eed6f7fa4c8a8a4947977c6f80025f92cbd8"
+dependencies = [
+ "rustix",
+ "windows-link 0.2.1",
+]
+
+[[package]]
 name = "getrandom"
 version = "0.1.16"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7667,6 +7677,7 @@ dependencies = [
  "libc",
  "log",
  "once_cell",
+ "rand 0.8.5",
  "rift-core",
  "rift-crypto",
  "safer-ffi",
@@ -7686,12 +7697,16 @@ dependencies = [
  "axum",
  "base32",
  "base64 0.22.1",
+ "chacha20poly1305",
  "chrono",
  "dotenv",
  "futures",
+ "hex",
  "rand 0.8.5",
+ "rift-core",
  "serde",
  "serde_json",
+ "sha2",
  "sqlx",
  "tokio",
  "totp-rs",
@@ -7701,6 +7716,7 @@ dependencies = [
  "tracing-subscriber",
  "uuid",
  "wavry-common",
+ "wavry-web",
 ]
 
 [[package]]
@@ -7760,6 +7776,7 @@ dependencies = [
  "tokio",
  "tracing",
  "windows 0.58.0",
+ "x11rb",
 ]
 
 [[package]]
@@ -7776,6 +7793,7 @@ dependencies = [
  "tracing",
  "wavry-media",
  "windows 0.58.0",
+ "x11rb",
 ]
 
 [[package]]
@@ -7783,6 +7801,7 @@ name = "wavry-relay"
 version = "0.0.1"
 dependencies = [
  "anyhow",
+ "bytes",
  "chrono",
  "clap",
  "ed25519-dalek",
@@ -7845,6 +7864,18 @@ dependencies = [
  "wavry-vr",
  "windows 0.58.0",
  "x11",
+]
+
+[[package]]
+name = "wavry-web"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "bytes",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]
@@ -8710,6 +8741,23 @@ dependencies = [
  "once_cell",
  "pkg-config",
 ]
+
+[[package]]
+name = "x11rb"
+version = "0.13.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9993aa5be5a26815fe2c3eacfc1fde061fc1a1f094bf1ad2a18bf9c495dd7414"
+dependencies = [
+ "gethostname",
+ "rustix",
+ "x11rb-protocol",
+]
+
+[[package]]
+name = "x11rb-protocol"
+version = "0.13.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ea6fc2961e4ef194dcbfe56bb845534d0dc8098940c7e5c012a258bfec6701bd"
 
 [[package]]
 name = "x25519-dalek"

@@ -97,6 +97,25 @@ struct SessionsView: View {
             }
             .padding(.horizontal, .themeSpacing.xxl)
             .padding(.top, .themeSpacing.xl)
+
+            if !appState.errorMessage.isEmpty || !appState.statusMessage.isEmpty {
+                VStack(alignment: .leading, spacing: 6) {
+                    if !appState.errorMessage.isEmpty {
+                        Text(appState.errorMessage)
+                            .font(.caption)
+                            .foregroundColor(.accentDanger)
+                    }
+                    if !appState.statusMessage.isEmpty {
+                        Text(appState.statusMessage)
+                            .font(.caption)
+                            .foregroundColor(.accentSuccess)
+                    }
+                }
+                .padding()
+                .background(Color.bgElevation1)
+                .cornerRadius(10)
+                .padding(.horizontal, .themeSpacing.xxl)
+            }
             
             ScrollView {
                 VStack(alignment: .leading, spacing: .themeSpacing.xxl) {
@@ -137,13 +156,23 @@ struct SessionsView: View {
                                 }
                                 .buttonStyle(.plain)
                             } else {
+                                if appState.isHost {
+                                    Text("Hosting is active. Stop hosting before starting a client connection.")
+                                        .font(.caption)
+                                        .foregroundColor(.textSecondary)
+                                        .padding(.bottom, 4)
+                                }
+
                                 // Connect via ID (Cloud Mode)
                                 if appState.connectivityMode != .direct {
                                     HStack {
                                         TextField("Username or ID", text: $remoteUsername)
                                             .textFieldStyle(RoundedBorderTextFieldStyle())
                                         
-                                        Button(action: { appState.connectViaId(username: remoteUsername) }) {
+                                        Button(action: {
+                                            appState.clearMessages()
+                                            appState.connectViaId(username: remoteUsername)
+                                        }) {
                                             Text("Connect via ID")
                                                 .padding(.horizontal, 20)
                                                 .padding(.vertical, 8)
@@ -152,6 +181,7 @@ struct SessionsView: View {
                                                 .cornerRadius(8)
                                         }
                                         .buttonStyle(.plain)
+                                        .disabled(appState.isConnectingClient || remoteUsername.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || appState.isHost)
                                     }
                                     .padding()
                                     .background(Color.bgElevation1)
@@ -165,8 +195,11 @@ struct SessionsView: View {
                                     TextField("Host IP", text: $remoteIP)
                                         .textFieldStyle(RoundedBorderTextFieldStyle())
                                     
-                                    Button(action: { appState.connectToHost(ip: remoteIP) }) {
-                                        Text("Connect Directly")
+                                    Button(action: {
+                                        appState.clearMessages()
+                                        appState.connectToHost(ip: remoteIP)
+                                    }) {
+                                        Text(appState.isConnectingClient ? "Connecting..." : "Connect Directly")
                                             .padding(.horizontal, 20)
                                             .padding(.vertical, 8)
                                             .background(Color.accentPrimary.opacity(appState.connectivityMode == .direct ? 1.0 : 0.6))
@@ -174,6 +207,7 @@ struct SessionsView: View {
                                             .cornerRadius(8)
                                     }
                                     .buttonStyle(.plain)
+                                    .disabled(appState.isConnectingClient || remoteIP.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || appState.isHost)
                                 }
                                 .padding()
                                 .background(Color.bgElevation1)
@@ -197,7 +231,7 @@ struct HostCard: View {
             // Preview / Thumbnail
             ZStack {
                 Color.bgElevation2
-                if appState.isConnected && appState.isHost {
+                if appState.isHost {
                     // Live indicator
                     VStack {
                         Spacer()
@@ -238,21 +272,23 @@ struct HostCard: View {
                         .foregroundColor(.textSecondary)
                 } else {
                     Button(action: {
-                        if appState.isConnected {
+                        appState.clearMessages()
+                        if appState.isHost {
                             appState.stopSession()
                         } else {
                             appState.startHosting()
                         }
                     }) {
-                        Text(appState.isConnected ? "Stop Hosting" : "Start Hosting")
+                        Text(appState.isHost ? "Stop Hosting" : (appState.isStartingHost ? "Starting..." : "Start Hosting"))
                             .fontWeight(.bold)
                             .padding(.horizontal, .themeSpacing.xl)
                             .padding(.vertical, 8)
-                            .background(appState.isConnected ? Color.accentDanger : Color.accentPrimary)
+                            .background(appState.isHost ? Color.accentDanger : Color.accentPrimary)
                             .foregroundColor(.white)
                             .cornerRadius(.themeRadius.sm)
                     }
                     .buttonStyle(.plain)
+                    .disabled(appState.isStartingHost || appState.isConnectingClient)
                 }
             }
             .padding(.themeSpacing.lg)
@@ -299,4 +335,3 @@ struct VideoPlayerView: NSViewRepresentable {
         }
     }
 }
-

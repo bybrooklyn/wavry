@@ -36,6 +36,26 @@ This document defines reproducible test setups for validating Wavry's performanc
 
 ---
 
+## Runbook: Linux Display Selection Smoke Test
+
+1. **Run Preflight**:
+   - `./scripts/linux-display-smoke.sh`
+2. **Launch Desktop with Logs**:
+   - `cd crates/wavry-desktop`
+   - `RUST_LOG=info npm run tauri dev`
+3. **Validate Monitor Selection**:
+   - In **Sessions -> Local Host**, confirm monitor dropdown is populated.
+   - Start host with monitor A, stop, switch to monitor B, start again.
+4. **Validate Resilience**:
+   - Change connected monitors while app is open (disable/unplug one).
+   - Refresh monitor list and confirm selection auto-clamps to a valid monitor.
+   - Start host again and confirm capture still starts.
+5. **Expected Logs**:
+   - Wayland capture path should log `Selected Wayland display stream`.
+   - Invalid/stale monitor ID should log a fallback warning and continue.
+
+---
+
 ## Runbook: Encrypted Handshake Verification
 
 To verify the Noise-based secure transport without a GUI:

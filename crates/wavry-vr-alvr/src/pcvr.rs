@@ -15,8 +15,8 @@ mod linux {
     use std::thread;
     use std::time::{Duration, Instant};
 
-    use ash::{vk, Entry as VkEntry};
     use ash::vk::Handle;
+    use ash::{vk, Entry as VkEntry};
     use glow::HasContext;
     use openxr as xr;
     use x11::{glx, xlib};
@@ -25,7 +25,10 @@ mod linux {
     use gstreamer::prelude::*;
     use gstreamer_app as gst_app;
 
-    use wavry_vr::types::{GamepadAxis, GamepadButton, GamepadInput, Pose, StreamConfig, VideoCodec, VrTiming};
+    use wavry_vr::types::{
+        GamepadAxis, GamepadButton, GamepadInput, HandPose, Pose, StreamConfig, VideoCodec,
+        VrTiming,
+    };
 
     const VIEW_COUNT: usize = 2;
     const INPUT_SEND_INTERVAL: Duration = Duration::from_millis(20);
@@ -44,7 +47,9 @@ mod linux {
     struct InputActions {
         action_set: xr::ActionSet,
         trigger: xr::Action<f32>,
+        trigger_click: xr::Action<bool>,
         grip: xr::Action<f32>,
+        grip_click: xr::Action<bool>,
         stick: xr::Action<xr::Vector2f>,
         primary: xr::Action<bool>,
         secondary: xr::Action<bool>,
@@ -71,9 +76,15 @@ mod linux {
             let trigger = action_set
                 .create_action("trigger", "Trigger", &subaction_paths)
                 .map_err(|e| VrError::Adapter(format!("OpenXR action trigger: {e:?}")))?;
+            let trigger_click = action_set
+                .create_action("trigger_click", "Trigger Click", &subaction_paths)
+                .map_err(|e| VrError::Adapter(format!("OpenXR action trigger_click: {e:?}")))?;
             let grip = action_set
                 .create_action("grip", "Grip", &subaction_paths)
                 .map_err(|e| VrError::Adapter(format!("OpenXR action grip: {e:?}")))?;
+            let grip_click = action_set
+                .create_action("grip_click", "Grip Click", &subaction_paths)
+                .map_err(|e| VrError::Adapter(format!("OpenXR action grip_click: {e:?}")))?;
             let stick = action_set
                 .create_action("thumbstick", "Thumbstick", &subaction_paths)
                 .map_err(|e| VrError::Adapter(format!("OpenXR action thumbstick: {e:?}")))?;
@@ -89,14 +100,32 @@ mod linux {
                 "/interaction_profiles/oculus/touch_controller",
                 "/interaction_profiles/valve/index_controller",
                 "/interaction_profiles/microsoft/motion_controller",
+                "/interaction_profiles/htc/vive_controller",
             ];
 
             for profile in profile_paths {
                 let profile_path = instance
                     .string_to_path(profile)
                     .map_err(|e| VrError::Adapter(format!("OpenXR profile path: {e:?}")))?;
-                let bindings = Self::bindings_for_profile(instance, &trigger, &grip, &stick, &primary, &secondary)?;
-                let _ = instance.suggest_interaction_profile_bindings(profile_path, &bindings);
+                let bindings = Self::bindings_for_profile(
+                    instance,
+                    profile,
+                    &trigger,
+                    &trigger_click,
+                    &grip,
+                    &grip_click,
+                    &stick,
+                    &primary,
+                    &secondary,
+                )?;
+                if let Err(err) =
+                    instance.suggest_interaction_profile_bindings(profile_path, &bindings)
+                {
+                    eprintln!(
+                        "OpenXR binding suggestion rejected for {}: {:?}",
+                        profile, err
+                    );
+                }
             }
 
             session
@@ -106,7 +135,9 @@ mod linux {
             Ok(Self {
                 action_set,
                 trigger,
+                trigger_click,
                 grip,
+                grip_click,
                 stick,
                 primary,
                 secondary,
@@ -119,54 +150,110 @@ mod linux {
 
         fn bindings_for_profile(
             instance: &xr::Instance,
+            profile: &str,
             trigger: &xr::Action<f32>,
+            trigger_click: &xr::Action<bool>,
             grip: &xr::Action<f32>,
+            grip_click: &xr::Action<bool>,
             stick: &xr::Action<xr::Vector2f>,
             primary: &xr::Action<bool>,
             secondary: &xr::Action<bool>,
         ) -> VrResult<Vec<xr::Binding<'_>>> {
-            let mut bindings = Vec::with_capacity(12);
-            if let Ok(path) = instance.string_to_path("/user/hand/left/input/trigger/value") {
-                bindings.push(xr::Binding::new(trigger, path));
+            let mut bindings = Vec::with_capacity(24);
+            macro_rules! bind_f32 {
+                ($action:expr, $path:expr) => {
+                    if let Ok(path) = instance.string_to_path($path) {
+                        bindings.push(xr::Binding::new($action, path));
+                    }
+                };
             }
-            if let Ok(path) = instance.string_to_path("/user/hand/right/input/trigger/value") {
-                bindings.push(xr::Binding::new(trigger, path));
+            macro_rules! bind_vec2 {
+                ($action:expr, $path:expr) => {
+                    if let Ok(path) = instance.string_to_path($path) {
+                        bindings.push(xr::Binding::new($action, path));
+                    }
+                };
             }
-            if let Ok(path) = instance.string_to_path("/user/hand/left/input/squeeze/value") {
-                bindings.push(xr::Binding::new(grip, path));
+            macro_rules! bind_bool {
+                ($action:expr, $path:expr) => {
+                    if let Ok(path) = instance.string_to_path($path) {
+                        bindings.push(xr::Binding::new($action, path));
+                    }
+                };
             }
-            if let Ok(path) = instance.string_to_path("/user/hand/right/input/squeeze/value") {
-                bindings.push(xr::Binding::new(grip, path));
-            }
-            if let Ok(path) = instance.string_to_path("/user/hand/left/input/thumbstick") {
-                bindings.push(xr::Binding::new(stick, path));
-            }
-            if let Ok(path) = instance.string_to_path("/user/hand/right/input/thumbstick") {
-                bindings.push(xr::Binding::new(stick, path));
-            }
-            if let Ok(path) = instance.string_to_path("/user/hand/left/input/trackpad") {
-                bindings.push(xr::Binding::new(stick, path));
-            }
-            if let Ok(path) = instance.string_to_path("/user/hand/right/input/trackpad") {
-                bindings.push(xr::Binding::new(stick, path));
-            }
-            if let Ok(path) = instance.string_to_path("/user/hand/left/input/x/click") {
-                bindings.push(xr::Binding::new(primary, path));
-            }
-            if let Ok(path) = instance.string_to_path("/user/hand/right/input/a/click") {
-                bindings.push(xr::Binding::new(primary, path));
-            }
-            if let Ok(path) = instance.string_to_path("/user/hand/left/input/y/click") {
-                bindings.push(xr::Binding::new(secondary, path));
-            }
-            if let Ok(path) = instance.string_to_path("/user/hand/right/input/b/click") {
-                bindings.push(xr::Binding::new(secondary, path));
+
+            match profile {
+                "/interaction_profiles/khr/simple_controller" => {
+                    bind_bool!(trigger_click, "/user/hand/left/input/select/click");
+                    bind_bool!(trigger_click, "/user/hand/right/input/select/click");
+                    bind_bool!(primary, "/user/hand/left/input/select/click");
+                    bind_bool!(primary, "/user/hand/right/input/select/click");
+                    bind_bool!(secondary, "/user/hand/left/input/menu/click");
+                    bind_bool!(secondary, "/user/hand/right/input/menu/click");
+                }
+                "/interaction_profiles/oculus/touch_controller" => {
+                    bind_f32!(trigger, "/user/hand/left/input/trigger/value");
+                    bind_f32!(trigger, "/user/hand/right/input/trigger/value");
+                    bind_f32!(grip, "/user/hand/left/input/squeeze/value");
+                    bind_f32!(grip, "/user/hand/right/input/squeeze/value");
+                    bind_vec2!(stick, "/user/hand/left/input/thumbstick");
+                    bind_vec2!(stick, "/user/hand/right/input/thumbstick");
+                    bind_bool!(primary, "/user/hand/left/input/x/click");
+                    bind_bool!(primary, "/user/hand/right/input/a/click");
+                    bind_bool!(secondary, "/user/hand/left/input/y/click");
+                    bind_bool!(secondary, "/user/hand/right/input/b/click");
+                }
+                "/interaction_profiles/valve/index_controller" => {
+                    bind_f32!(trigger, "/user/hand/left/input/trigger/value");
+                    bind_f32!(trigger, "/user/hand/right/input/trigger/value");
+                    bind_f32!(grip, "/user/hand/left/input/squeeze/value");
+                    bind_f32!(grip, "/user/hand/right/input/squeeze/value");
+                    bind_vec2!(stick, "/user/hand/left/input/thumbstick");
+                    bind_vec2!(stick, "/user/hand/right/input/thumbstick");
+                    bind_bool!(primary, "/user/hand/left/input/a/click");
+                    bind_bool!(primary, "/user/hand/right/input/a/click");
+                    bind_bool!(secondary, "/user/hand/left/input/b/click");
+                    bind_bool!(secondary, "/user/hand/right/input/b/click");
+                }
+                "/interaction_profiles/microsoft/motion_controller" => {
+                    bind_f32!(trigger, "/user/hand/left/input/trigger/value");
+                    bind_f32!(trigger, "/user/hand/right/input/trigger/value");
+                    bind_bool!(grip_click, "/user/hand/left/input/squeeze/click");
+                    bind_bool!(grip_click, "/user/hand/right/input/squeeze/click");
+                    bind_vec2!(stick, "/user/hand/left/input/thumbstick");
+                    bind_vec2!(stick, "/user/hand/right/input/thumbstick");
+                    bind_vec2!(stick, "/user/hand/left/input/trackpad");
+                    bind_vec2!(stick, "/user/hand/right/input/trackpad");
+                    bind_bool!(primary, "/user/hand/left/input/thumbstick/click");
+                    bind_bool!(primary, "/user/hand/right/input/thumbstick/click");
+                    bind_bool!(primary, "/user/hand/left/input/trackpad/click");
+                    bind_bool!(primary, "/user/hand/right/input/trackpad/click");
+                    bind_bool!(secondary, "/user/hand/left/input/menu/click");
+                    bind_bool!(secondary, "/user/hand/right/input/menu/click");
+                }
+                "/interaction_profiles/htc/vive_controller" => {
+                    bind_f32!(trigger, "/user/hand/left/input/trigger/value");
+                    bind_f32!(trigger, "/user/hand/right/input/trigger/value");
+                    bind_bool!(grip_click, "/user/hand/left/input/squeeze/click");
+                    bind_bool!(grip_click, "/user/hand/right/input/squeeze/click");
+                    bind_vec2!(stick, "/user/hand/left/input/trackpad");
+                    bind_vec2!(stick, "/user/hand/right/input/trackpad");
+                    bind_bool!(primary, "/user/hand/left/input/trackpad/click");
+                    bind_bool!(primary, "/user/hand/right/input/trackpad/click");
+                    bind_bool!(secondary, "/user/hand/left/input/menu/click");
+                    bind_bool!(secondary, "/user/hand/right/input/menu/click");
+                }
+                _ => {}
             }
 
             Ok(bindings)
         }
 
-        fn poll<G>(&mut self, session: &xr::Session<G>, timestamp_us: u64) -> VrResult<Vec<GamepadInput>> {
+        fn poll<G>(
+            &mut self,
+            session: &xr::Session<G>,
+            timestamp_us: u64,
+        ) -> VrResult<Vec<GamepadInput>> {
             session
                 .sync_actions(&[xr::ActiveActionSet::new(&self.action_set)])
                 .map_err(|e| VrError::Adapter(format!("OpenXR sync actions: {e:?}")))?;
@@ -177,13 +264,17 @@ mod linux {
 
             for (path, index) in hands {
                 let trigger = self.trigger.state(session, path).ok();
+                let trigger_click = self.trigger_click.state(session, path).ok();
                 let grip = self.grip.state(session, path).ok();
+                let grip_click = self.grip_click.state(session, path).ok();
                 let stick = self.stick.state(session, path).ok();
                 let primary = self.primary.state(session, path).ok();
                 let secondary = self.secondary.state(session, path).ok();
 
                 let active = trigger.as_ref().map(|s| s.is_active).unwrap_or(false)
+                    || trigger_click.as_ref().map(|s| s.is_active).unwrap_or(false)
                     || grip.as_ref().map(|s| s.is_active).unwrap_or(false)
+                    || grip_click.as_ref().map(|s| s.is_active).unwrap_or(false)
                     || stick.as_ref().map(|s| s.is_active).unwrap_or(false)
                     || primary.as_ref().map(|s| s.is_active).unwrap_or(false)
                     || secondary.as_ref().map(|s| s.is_active).unwrap_or(false);
@@ -191,13 +282,33 @@ mod linux {
                 let mut axes = [0.0f32; 4];
                 let mut buttons = [false; 2];
                 if active {
-                    let trigger_val = trigger.map(|s| s.current_state).unwrap_or(0.0);
-                    let grip_val = grip.map(|s| s.current_state).unwrap_or(0.0);
+                    let trigger_val = trigger.map(|s| s.current_state).unwrap_or(0.0).max(
+                        if trigger_click.map(|s| s.current_state).unwrap_or(false) {
+                            1.0
+                        } else {
+                            0.0
+                        },
+                    );
+                    let grip_val = grip.map(|s| s.current_state).unwrap_or(0.0).max(
+                        if grip_click.map(|s| s.current_state).unwrap_or(false) {
+                            1.0
+                        } else {
+                            0.0
+                        },
+                    );
                     let stick_val = stick
                         .map(|s| s.current_state)
                         .unwrap_or(xr::Vector2f { x: 0.0, y: 0.0 });
-                    let stick_x = if stick_val.x.abs() < STICK_DEADZONE { 0.0 } else { stick_val.x };
-                    let stick_y = if stick_val.y.abs() < STICK_DEADZONE { 0.0 } else { stick_val.y };
+                    let stick_x = if stick_val.x.abs() < STICK_DEADZONE {
+                        0.0
+                    } else {
+                        stick_val.x
+                    };
+                    let stick_y = if stick_val.y.abs() < STICK_DEADZONE {
+                        0.0
+                    } else {
+                        stick_val.y
+                    };
                     axes = [stick_x, stick_y, trigger_val, grip_val];
                     buttons = [
                         primary.map(|s| s.current_state).unwrap_or(false),
@@ -211,20 +322,43 @@ mod linux {
                     active,
                 };
 
-                let should_send = Self::should_send(snapshot, self.last_sent[index], now, self.last_sent_at[index]);
+                let should_send = Self::should_send(
+                    snapshot,
+                    self.last_sent[index],
+                    now,
+                    self.last_sent_at[index],
+                );
                 if should_send {
                     self.last_sent[index] = snapshot;
                     self.last_sent_at[index] = now;
 
                     let axes_out = vec![
-                        GamepadAxis { axis: 0, value: axes[0] },
-                        GamepadAxis { axis: 1, value: axes[1] },
-                        GamepadAxis { axis: 2, value: axes[2] },
-                        GamepadAxis { axis: 3, value: axes[3] },
+                        GamepadAxis {
+                            axis: 0,
+                            value: axes[0],
+                        },
+                        GamepadAxis {
+                            axis: 1,
+                            value: axes[1],
+                        },
+                        GamepadAxis {
+                            axis: 2,
+                            value: axes[2],
+                        },
+                        GamepadAxis {
+                            axis: 3,
+                            value: axes[3],
+                        },
                     ];
                     let buttons_out = vec![
-                        GamepadButton { button: 0, pressed: buttons[0] },
-                        GamepadButton { button: 1, pressed: buttons[1] },
+                        GamepadButton {
+                            button: 0,
+                            pressed: buttons[0],
+                        },
+                        GamepadButton {
+                            button: 1,
+                            pressed: buttons[1],
+                        },
                     ];
                     outputs.push(GamepadInput {
                         timestamp_us,
@@ -306,8 +440,7 @@ mod linux {
             ];
 
             let mut fbcount = 0;
-            let fb_configs =
-                glx::glXChooseFBConfig(display, screen, attrs.as_ptr(), &mut fbcount);
+            let fb_configs = glx::glXChooseFBConfig(display, screen, attrs.as_ptr(), &mut fbcount);
             if fb_configs.is_null() || fbcount == 0 {
                 xlib::XCloseDisplay(display);
                 return Err(VrError::Adapter("glXChooseFBConfig failed".to_string()));
@@ -318,12 +451,15 @@ mod linux {
             if visual_info.is_null() {
                 xlib::XFree(fb_configs as *mut _);
                 xlib::XCloseDisplay(display);
-                return Err(VrError::Adapter("glXGetVisualFromFBConfig failed".to_string()));
+                return Err(VrError::Adapter(
+                    "glXGetVisualFromFBConfig failed".to_string(),
+                ));
             }
             let visualid = (*visual_info).visualid;
 
             let root = xlib::XDefaultRootWindow(display);
-            let colormap = xlib::XCreateColormap(display, root, (*visual_info).visual, xlib::AllocNone);
+            let colormap =
+                xlib::XCreateColormap(display, root, (*visual_info).visual, xlib::AllocNone);
 
             let mut swa: xlib::XSetWindowAttributes = std::mem::zeroed();
             swa.colormap = colormap;
@@ -346,7 +482,13 @@ mod linux {
             xlib::XStoreName(display, window, title.as_ptr());
             xlib::XMapWindow(display, window);
 
-            let context = glx::glXCreateNewContext(display, fb_config, glx::GLX_RGBA_TYPE, ptr::null_mut(), 1);
+            let context = glx::glXCreateNewContext(
+                display,
+                fb_config,
+                glx::GLX_RGBA_TYPE,
+                ptr::null_mut(),
+                1,
+            );
             if context.is_null() {
                 xlib::XFree(visual_info as *mut _);
                 xlib::XFree(fb_configs as *mut _);
@@ -434,9 +576,15 @@ mod linux {
                 .map_err(|_| VrError::Adapter("gst appsink type mismatch".to_string()))?;
 
             let caps_str = match config.codec {
-                VideoCodec::Av1 => "video/x-av1,stream-format=(string)obu-stream,alignment=(string)tu",
-                VideoCodec::Hevc => "video/x-h265,stream-format=(string)byte-stream,alignment=(string)au",
-                VideoCodec::H264 => "video/x-h264,stream-format=(string)byte-stream,alignment=(string)au",
+                VideoCodec::Av1 => {
+                    "video/x-av1,stream-format=(string)obu-stream,alignment=(string)tu"
+                }
+                VideoCodec::Hevc => {
+                    "video/x-h265,stream-format=(string)byte-stream,alignment=(string)au"
+                }
+                VideoCodec::H264 => {
+                    "video/x-h264,stream-format=(string)byte-stream,alignment=(string)au"
+                }
             };
             let caps = gst::Caps::from_str(caps_str)
                 .map_err(|e| VrError::Adapter(format!("gst caps: {e}")))?;
@@ -527,7 +675,9 @@ mod linux {
 
             let instance_exts = xr_instance
                 .vulkan_legacy_instance_extensions(system)
-                .map_err(|e| VrError::Adapter(format!("OpenXR Vulkan instance extensions: {e:?}")))?;
+                .map_err(|e| {
+                    VrError::Adapter(format!("OpenXR Vulkan instance extensions: {e:?}"))
+                })?;
             let instance_exts = parse_extension_list(&instance_exts);
             let instance_ext_ptrs: Vec<*const i8> =
                 instance_exts.iter().map(|s| s.as_ptr()).collect();
@@ -552,7 +702,9 @@ mod linux {
             let physical_device = unsafe {
                 xr_instance
                     .vulkan_graphics_device(system, instance.handle().as_raw())
-                    .map_err(|e| VrError::Adapter(format!("OpenXR Vulkan graphics device: {e:?}")))?
+                    .map_err(|e| {
+                        VrError::Adapter(format!("OpenXR Vulkan graphics device: {e:?}"))
+                    })?
             };
             let physical_device = vk::PhysicalDevice::from_raw(physical_device);
 
@@ -562,8 +714,7 @@ mod linux {
                 .vulkan_legacy_device_extensions(system)
                 .map_err(|e| VrError::Adapter(format!("OpenXR Vulkan device extensions: {e:?}")))?;
             let device_exts = parse_extension_list(&device_exts);
-            let device_ext_ptrs: Vec<*const i8> =
-                device_exts.iter().map(|s| s.as_ptr()).collect();
+            let device_ext_ptrs: Vec<*const i8> = device_exts.iter().map(|s| s.as_ptr()).collect();
 
             let priorities = [1.0f32];
             let queue_info = vk::DeviceQueueCreateInfo::builder()
@@ -588,7 +739,9 @@ mod linux {
             let command_pool = unsafe {
                 device
                     .create_command_pool(&command_pool_info, None)
-                    .map_err(|e| VrError::Adapter(format!("Vulkan command pool create failed: {e}")))?
+                    .map_err(|e| {
+                        VrError::Adapter(format!("Vulkan command pool create failed: {e}"))
+                    })?
             };
 
             let command_buffer_info = vk::CommandBufferAllocateInfo::builder()
@@ -598,11 +751,12 @@ mod linux {
             let command_buffer = unsafe {
                 device
                     .allocate_command_buffers(&command_buffer_info)
-                    .map_err(|e| VrError::Adapter(format!("Vulkan command buffer alloc failed: {e}")))?
+                    .map_err(|e| {
+                        VrError::Adapter(format!("Vulkan command buffer alloc failed: {e}"))
+                    })?
             }[0];
 
-            let fence_info =
-                vk::FenceCreateInfo::builder().flags(vk::FenceCreateFlags::SIGNALED);
+            let fence_info = vk::FenceCreateInfo::builder().flags(vk::FenceCreateFlags::SIGNALED);
             let upload_fence = unsafe {
                 device
                     .create_fence(&fence_info, None)
@@ -646,9 +800,9 @@ mod linux {
                 .usage(vk::BufferUsageFlags::TRANSFER_SRC)
                 .sharing_mode(vk::SharingMode::EXCLUSIVE);
             let staging_buffer = unsafe {
-                self.device
-                    .create_buffer(&buffer_info, None)
-                    .map_err(|e| VrError::Adapter(format!("Vulkan staging buffer create failed: {e}")))?
+                self.device.create_buffer(&buffer_info, None).map_err(|e| {
+                    VrError::Adapter(format!("Vulkan staging buffer create failed: {e}"))
+                })?
             };
             let req = unsafe { self.device.get_buffer_memory_requirements(staging_buffer) };
             let memory_type_index = find_memory_type(
@@ -715,7 +869,9 @@ mod linux {
                             unsafe {
                                 self.device
                                     .reset_fences(&[self.upload_fence])
-                                    .map_err(|e| VrError::Adapter(format!("Vulkan fence reset failed: {e}")))?;
+                                    .map_err(|e| {
+                                        VrError::Adapter(format!("Vulkan fence reset failed: {e}"))
+                                    })?;
                             }
                             self.fence_in_use = false;
                             self.fence_skip_count = 0;
@@ -724,7 +880,9 @@ mod linux {
                             return Ok(old_layout);
                         }
                         Err(err) => {
-                            return Err(VrError::Adapter(format!("Vulkan fence wait failed: {err}")));
+                            return Err(VrError::Adapter(format!(
+                                "Vulkan fence wait failed: {err}"
+                            )));
                         }
                     }
                 }
@@ -747,13 +905,10 @@ mod linux {
             self.ensure_staging(size)?;
 
             unsafe {
-                let ptr = self.device.map_memory(
-                    self.staging_memory,
-                    0,
-                    size,
-                    vk::MemoryMapFlags::empty(),
-                )
-                .map_err(|e| VrError::Adapter(format!("Vulkan map memory failed: {e}")))?;
+                let ptr = self
+                    .device
+                    .map_memory(self.staging_memory, 0, size, vk::MemoryMapFlags::empty())
+                    .map_err(|e| VrError::Adapter(format!("Vulkan map memory failed: {e}")))?;
                 let dst = ptr.cast::<u8>();
                 if src_width == copy_width && src_height == copy_height && src_offset_x == 0 {
                     std::ptr::copy_nonoverlapping(data.as_ptr(), dst, size as usize);
@@ -772,13 +927,17 @@ mod linux {
 
                 self.device
                     .reset_command_buffer(self.command_buffer, vk::CommandBufferResetFlags::empty())
-                    .map_err(|e| VrError::Adapter(format!("Vulkan reset command buffer failed: {e}")))?;
+                    .map_err(|e| {
+                        VrError::Adapter(format!("Vulkan reset command buffer failed: {e}"))
+                    })?;
 
                 let begin_info = vk::CommandBufferBeginInfo::builder()
                     .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
                 self.device
                     .begin_command_buffer(self.command_buffer, &begin_info)
-                    .map_err(|e| VrError::Adapter(format!("Vulkan begin command buffer failed: {e}")))?;
+                    .map_err(|e| {
+                        VrError::Adapter(format!("Vulkan begin command buffer failed: {e}"))
+                    })?;
 
                 let subresource_range = vk::ImageSubresourceRange {
                     aspect_mask: vk::ImageAspectFlags::COLOR,
@@ -832,7 +991,8 @@ mod linux {
                     .new_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
                     .src_access_mask(vk::AccessFlags::TRANSFER_WRITE)
                     .dst_access_mask(
-                        vk::AccessFlags::COLOR_ATTACHMENT_READ | vk::AccessFlags::COLOR_ATTACHMENT_WRITE,
+                        vk::AccessFlags::COLOR_ATTACHMENT_READ
+                            | vk::AccessFlags::COLOR_ATTACHMENT_WRITE,
                     )
                     .image(image)
                     .subresource_range(subresource_range);
@@ -849,12 +1009,18 @@ mod linux {
 
                 self.device
                     .end_command_buffer(self.command_buffer)
-                    .map_err(|e| VrError::Adapter(format!("Vulkan end command buffer failed: {e}")))?;
+                    .map_err(|e| {
+                        VrError::Adapter(format!("Vulkan end command buffer failed: {e}"))
+                    })?;
 
                 let submit_info = vk::SubmitInfo::builder()
                     .command_buffers(std::slice::from_ref(&self.command_buffer));
                 self.device
-                    .queue_submit(self.queue, std::slice::from_ref(&submit_info), self.upload_fence)
+                    .queue_submit(
+                        self.queue,
+                        std::slice::from_ref(&submit_info),
+                        self.upload_fence,
+                    )
                     .map_err(|e| VrError::Adapter(format!("Vulkan queue submit failed: {e}")))?;
                 self.fence_in_use = true;
                 self.fence_skip_count = 0;
@@ -897,7 +1063,8 @@ mod linux {
         instance: &ash::Instance,
         physical_device: vk::PhysicalDevice,
     ) -> VrResult<u32> {
-        let families = unsafe { instance.get_physical_device_queue_family_properties(physical_device) };
+        let families =
+            unsafe { instance.get_physical_device_queue_family_properties(physical_device) };
         families
             .iter()
             .enumerate()
@@ -943,14 +1110,117 @@ mod linux {
             .map_err(|e| VrError::Adapter(format!("thread spawn: {e}")))
     }
 
-    fn choose_swapchain_format(formats: &[u32]) -> u32 {
-        let mut preferred = vec![glow::SRGB8_ALPHA8, glow::RGBA8];
-        for fmt in preferred.drain(..) {
-            if formats.contains(&fmt) {
-                return fmt;
-            }
+    fn describe_gl_swapchain_format(format: u32) -> (&'static str, bool) {
+        match format {
+            glow::RGBA8 => ("GL_RGBA8", false),
+            glow::SRGB8_ALPHA8 => ("GL_SRGB8_ALPHA8", true),
+            _ => ("UNKNOWN_GL_FORMAT", false),
         }
-        formats.first().copied().unwrap_or(glow::RGBA8)
+    }
+
+    fn choose_gl_swapchain_format(formats: &[u32]) -> (u32, &'static str, bool) {
+        // Prefer linear UNORM for video passthrough to avoid implicit gamma transforms.
+        let preferred = [glow::RGBA8, glow::SRGB8_ALPHA8];
+        if let Some(format) = preferred.iter().copied().find(|fmt| formats.contains(fmt)) {
+            let (name, srgb) = describe_gl_swapchain_format(format);
+            return (format, name, srgb);
+        }
+        let fallback = formats.first().copied().unwrap_or(glow::RGBA8);
+        let (name, srgb) = describe_gl_swapchain_format(fallback);
+        (fallback, name, srgb)
+    }
+
+    fn describe_vk_swapchain_format(format: i64) -> (&'static str, bool) {
+        if format == vk::Format::R8G8B8A8_UNORM.as_raw() as i64 {
+            ("VK_FORMAT_R8G8B8A8_UNORM", false)
+        } else if format == vk::Format::B8G8R8A8_UNORM.as_raw() as i64 {
+            ("VK_FORMAT_B8G8R8A8_UNORM", false)
+        } else if format == vk::Format::R8G8B8A8_SRGB.as_raw() as i64 {
+            ("VK_FORMAT_R8G8B8A8_SRGB", true)
+        } else if format == vk::Format::B8G8R8A8_SRGB.as_raw() as i64 {
+            ("VK_FORMAT_B8G8R8A8_SRGB", true)
+        } else {
+            ("UNKNOWN_VK_FORMAT", false)
+        }
+    }
+
+    fn choose_vk_swapchain_format(formats: &[i64]) -> (i64, &'static str, bool) {
+        let preferred = [
+            vk::Format::R8G8B8A8_UNORM.as_raw() as i64,
+            vk::Format::B8G8R8A8_UNORM.as_raw() as i64,
+            vk::Format::R8G8B8A8_SRGB.as_raw() as i64,
+            vk::Format::B8G8R8A8_SRGB.as_raw() as i64,
+        ];
+        if let Some(format) = preferred.iter().copied().find(|fmt| formats.contains(fmt)) {
+            let (name, srgb) = describe_vk_swapchain_format(format);
+            return (format, name, srgb);
+        }
+        let fallback = formats
+            .first()
+            .copied()
+            .unwrap_or(vk::Format::R8G8B8A8_UNORM.as_raw() as i64);
+        let (name, srgb) = describe_vk_swapchain_format(fallback);
+        (fallback, name, srgb)
+    }
+
+    fn log_swapchain_validation_u32(
+        instance: &xr::Instance,
+        backend: &str,
+        available: &[u32],
+        selected: u32,
+        selected_name: &str,
+        selected_srgb: bool,
+    ) {
+        let runtime = instance.properties().ok();
+        let runtime_name = runtime
+            .as_ref()
+            .map(|p| p.runtime_name.as_str())
+            .unwrap_or("unknown-runtime");
+        let gamma_mode = if selected_srgb {
+            "sRGB (runtime gamma conversion)"
+        } else {
+            "linear UNORM (passthrough)"
+        };
+        eprintln!(
+            "OpenXR swapchain validation [{}]: runtime='{}' selected={} (0x{:X}) gamma_mode={} available={:?}",
+            backend, runtime_name, selected_name, selected, gamma_mode, available
+        );
+        if selected_srgb {
+            eprintln!(
+                "OpenXR swapchain validation [{}]: selected sRGB fallback; monitor scene gamma for double/under correction.",
+                backend
+            );
+        }
+    }
+
+    fn log_swapchain_validation_i64(
+        instance: &xr::Instance,
+        backend: &str,
+        available: &[i64],
+        selected: i64,
+        selected_name: &str,
+        selected_srgb: bool,
+    ) {
+        let runtime = instance.properties().ok();
+        let runtime_name = runtime
+            .as_ref()
+            .map(|p| p.runtime_name.as_str())
+            .unwrap_or("unknown-runtime");
+        let gamma_mode = if selected_srgb {
+            "sRGB (runtime gamma conversion)"
+        } else {
+            "linear UNORM (passthrough)"
+        };
+        eprintln!(
+            "OpenXR swapchain validation [{}]: runtime='{}' selected={} ({}) gamma_mode={} available={:?}",
+            backend, runtime_name, selected_name, selected, gamma_mode, available
+        );
+        if selected_srgb {
+            eprintln!(
+                "OpenXR swapchain validation [{}]: selected sRGB fallback; monitor scene gamma for double/under correction.",
+                backend
+            );
+        }
     }
 
     struct EyeLayout {
@@ -974,8 +1244,99 @@ mod linux {
     fn to_pose(pose: xr::Posef) -> Pose {
         Pose {
             position: [pose.position.x, pose.position.y, pose.position.z],
-            orientation: [pose.orientation.x, pose.orientation.y, pose.orientation.z, pose.orientation.w],
+            orientation: [
+                pose.orientation.x,
+                pose.orientation.y,
+                pose.orientation.z,
+                pose.orientation.w,
+            ],
         }
+    }
+
+    struct HandTrackingState {
+        left: xr::HandTracker,
+        right: xr::HandTracker,
+    }
+
+    impl HandTrackingState {
+        fn new<G>(session: &xr::Session<G>) -> VrResult<Self> {
+            let left = session
+                .create_hand_tracker(xr::Hand::LEFT)
+                .map_err(|e| VrError::Adapter(format!("OpenXR create hand tracker left: {e:?}")))?;
+            let right = session.create_hand_tracker(xr::Hand::RIGHT).map_err(|e| {
+                VrError::Adapter(format!("OpenXR create hand tracker right: {e:?}"))
+            })?;
+            Ok(Self { left, right })
+        }
+
+        fn poll(&self, reference_space: &xr::Space, time: xr::Time) -> Vec<HandPose> {
+            let mut out = Vec::with_capacity(2);
+            if let Ok(Some((locations, velocities))) =
+                reference_space.relate_hand_joints(&self.left, time)
+            {
+                if let Some(hand) = hand_pose_from_joints(0, &locations, &velocities) {
+                    out.push(hand);
+                }
+            }
+            if let Ok(Some((locations, velocities))) =
+                reference_space.relate_hand_joints(&self.right, time)
+            {
+                if let Some(hand) = hand_pose_from_joints(1, &locations, &velocities) {
+                    out.push(hand);
+                }
+            }
+            out
+        }
+    }
+
+    fn hand_pose_from_joints(
+        hand_id: u32,
+        locations: &xr::HandJointLocations,
+        velocities: &xr::HandJointVelocities,
+    ) -> Option<HandPose> {
+        let palm_location = locations[xr::HandJoint::PALM];
+        let has_position = palm_location
+            .location_flags
+            .contains(xr::SpaceLocationFlags::POSITION_VALID);
+        let has_orientation = palm_location
+            .location_flags
+            .contains(xr::SpaceLocationFlags::ORIENTATION_VALID);
+        if !has_position || !has_orientation {
+            return None;
+        }
+
+        let palm_velocity = velocities[xr::HandJoint::PALM];
+        let linear_velocity = if palm_velocity
+            .velocity_flags
+            .contains(xr::SpaceVelocityFlags::LINEAR_VALID)
+        {
+            [
+                palm_velocity.linear_velocity.x,
+                palm_velocity.linear_velocity.y,
+                palm_velocity.linear_velocity.z,
+            ]
+        } else {
+            [0.0; 3]
+        };
+        let angular_velocity = if palm_velocity
+            .velocity_flags
+            .contains(xr::SpaceVelocityFlags::ANGULAR_VALID)
+        {
+            [
+                palm_velocity.angular_velocity.x,
+                palm_velocity.angular_velocity.y,
+                palm_velocity.angular_velocity.z,
+            ]
+        } else {
+            [0.0; 3]
+        };
+
+        Some(HandPose {
+            hand_id,
+            pose: to_pose(palm_location.pose),
+            linear_velocity,
+            angular_velocity,
+        })
     }
 
     // X11 path: OpenXR + OpenGL via GLX.
@@ -997,10 +1358,15 @@ mod linux {
             .enumerate_extensions()
             .map_err(|e| VrError::Adapter(format!("OpenXR ext enumerate: {e:?}")))?;
         if !available_exts.khr_opengl_enable {
-            return Err(VrError::Unavailable("OpenXR KHR_opengl_enable not available".to_string()));
+            return Err(VrError::Unavailable(
+                "OpenXR KHR_opengl_enable not available".to_string(),
+            ));
         }
         let mut exts = xr::ExtensionSet::default();
         exts.khr_opengl_enable = true;
+        if available_exts.ext_hand_tracking {
+            exts.ext_hand_tracking = true;
+        }
 
         let app_info = xr::ApplicationInfo {
             application_name: "Wavry",
@@ -1030,13 +1396,27 @@ mod linux {
         };
         wavry_vr::set_pcvr_status("PCVR: Linux X11 OpenGL runtime active".to_string());
         let mut input_actions = InputActions::new(&instance, &session).ok();
+        let hand_tracking = if available_exts.ext_hand_tracking {
+            HandTrackingState::new(&session).ok()
+        } else {
+            None
+        };
 
         let reference_space = session
             .create_reference_space(
                 xr::ReferenceSpaceType::LOCAL,
                 xr::Posef {
-                    orientation: xr::Quaternionf { x: 0.0, y: 0.0, z: 0.0, w: 1.0 },
-                    position: xr::Vector3f { x: 0.0, y: 0.0, z: 0.0 },
+                    orientation: xr::Quaternionf {
+                        x: 0.0,
+                        y: 0.0,
+                        z: 0.0,
+                        w: 1.0,
+                    },
+                    position: xr::Vector3f {
+                        x: 0.0,
+                        y: 0.0,
+                        z: 0.0,
+                    },
                 },
             )
             .map_err(|e| VrError::Adapter(format!("OpenXR reference space: {e:?}")))?;
@@ -1052,19 +1432,22 @@ mod linux {
         loop {
             while let Some(event) = instance
                 .poll_event(&mut event_buffer)
-                .map_err(|e| VrError::Adapter(format!("OpenXR poll_event: {e:?}")))? {
+                .map_err(|e| VrError::Adapter(format!("OpenXR poll_event: {e:?}")))?
+            {
                 if let xr::Event::SessionStateChanged(e) = event {
                     match e.state() {
                         xr::SessionState::READY => {
                             session
                                 .begin(xr::ViewConfigurationType::PRIMARY_STEREO)
-                                .map_err(|e| VrError::Adapter(format!("OpenXR session begin: {e:?}")))?;
+                                .map_err(|e| {
+                                    VrError::Adapter(format!("OpenXR session begin: {e:?}"))
+                                })?;
                             session_running = true;
                         }
                         xr::SessionState::STOPPING => {
-                            session
-                                .end()
-                                .map_err(|e| VrError::Adapter(format!("OpenXR session end: {e:?}")))?;
+                            session.end().map_err(|e| {
+                                VrError::Adapter(format!("OpenXR session end: {e:?}"))
+                            })?;
                             session_running = false;
                         }
                         xr::SessionState::EXITING | xr::SessionState::LOSS_PENDING => {
@@ -1113,6 +1496,13 @@ mod linux {
                         }
                     }
                 }
+                if let Some(tracking) = hand_tracking.as_ref() {
+                    for hand_pose in
+                        tracking.poll(&reference_space, frame_state.predicted_display_time)
+                    {
+                        state.callbacks.on_hand_pose_update(hand_pose, timestamp_us);
+                    }
+                }
             }
 
             let period_ns = frame_state.predicted_display_period.as_nanos();
@@ -1145,10 +1535,18 @@ mod linux {
             if swapchains.is_none() {
                 if let Some(cfg) = state.stream_config.lock().ok().and_then(|c| *c) {
                     let layout = eye_layout(cfg);
-                    let formats = session
-                        .enumerate_swapchain_formats()
-                        .map_err(|e| VrError::Adapter(format!("OpenXR swapchain formats: {e:?}")))?;
-                    let format = choose_swapchain_format(&formats);
+                    let formats = session.enumerate_swapchain_formats().map_err(|e| {
+                        VrError::Adapter(format!("OpenXR swapchain formats: {e:?}"))
+                    })?;
+                    let (format, format_name, format_srgb) = choose_gl_swapchain_format(&formats);
+                    log_swapchain_validation_u32(
+                        &instance,
+                        "linux-gl",
+                        &formats,
+                        format,
+                        format_name,
+                        format_srgb,
+                    );
 
                     let create_info = xr::SwapchainCreateInfo {
                         create_flags: xr::SwapchainCreateFlags::EMPTY,
@@ -1161,21 +1559,41 @@ mod linux {
                         array_size: 1,
                         mip_count: 1,
                     };
-                    let sc0 = session.create_swapchain(&create_info)
+                    let sc0 = session
+                        .create_swapchain(&create_info)
                         .map_err(|e| VrError::Adapter(format!("OpenXR swapchain: {e:?}")))?;
-                    let sc1 = session.create_swapchain(&create_info)
+                    let sc1 = session
+                        .create_swapchain(&create_info)
                         .map_err(|e| VrError::Adapter(format!("OpenXR swapchain: {e:?}")))?;
-                    let imgs0 = sc0.enumerate_images()
+                    let imgs0 = sc0
+                        .enumerate_images()
                         .map_err(|e| VrError::Adapter(format!("OpenXR swapchain images: {e:?}")))?;
-                    let imgs1 = sc1.enumerate_images()
+                    let imgs1 = sc1
+                        .enumerate_images()
                         .map_err(|e| VrError::Adapter(format!("OpenXR swapchain images: {e:?}")))?;
                     for tex in imgs0.iter().chain(imgs1.iter()) {
                         unsafe {
                             gl.bind_texture(glow::TEXTURE_2D, Some(*tex));
-                            gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_MIN_FILTER, glow::LINEAR as i32);
-                            gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_MAG_FILTER, glow::LINEAR as i32);
-                            gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_WRAP_S, glow::CLAMP_TO_EDGE as i32);
-                            gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_WRAP_T, glow::CLAMP_TO_EDGE as i32);
+                            gl.tex_parameter_i32(
+                                glow::TEXTURE_2D,
+                                glow::TEXTURE_MIN_FILTER,
+                                glow::LINEAR as i32,
+                            );
+                            gl.tex_parameter_i32(
+                                glow::TEXTURE_2D,
+                                glow::TEXTURE_MAG_FILTER,
+                                glow::LINEAR as i32,
+                            );
+                            gl.tex_parameter_i32(
+                                glow::TEXTURE_2D,
+                                glow::TEXTURE_WRAP_S,
+                                glow::CLAMP_TO_EDGE as i32,
+                            );
+                            gl.tex_parameter_i32(
+                                glow::TEXTURE_2D,
+                                glow::TEXTURE_WRAP_T,
+                                glow::CLAMP_TO_EDGE as i32,
+                            );
                         }
                     }
                     swapchains = Some([sc0, sc1]);
@@ -1189,12 +1607,18 @@ mod linux {
                 let cfg = state.stream_config.lock().ok().and_then(|c| *c);
                 let layout = cfg.map(eye_layout);
                 let (width, height, is_sbs) = match layout {
-                    Some(layout) => (layout.eye_width as i32, layout.eye_height as i32, layout.is_sbs),
+                    Some(layout) => (
+                        layout.eye_width as i32,
+                        layout.eye_height as i32,
+                        layout.is_sbs,
+                    ),
                     None => (0, 0, false),
                 };
 
-                let mut layer_views: [xr::CompositionLayerProjectionView<xr::OpenGL>; VIEW_COUNT] =
-                    [xr::CompositionLayerProjectionView::new(), xr::CompositionLayerProjectionView::new()];
+                let mut layer_views: [xr::CompositionLayerProjectionView<xr::OpenGL>; VIEW_COUNT] = [
+                    xr::CompositionLayerProjectionView::new(),
+                    xr::CompositionLayerProjectionView::new(),
+                ];
 
                 for i in 0..VIEW_COUNT {
                     let image_index = swapchains[i]
@@ -1208,9 +1632,19 @@ mod linux {
                         let tex = swapchain_images[i][image_index as usize];
                         let eye_width = width.max(0) as u32;
                         let eye_height = height.max(0) as u32;
-                        let sbs_available = is_sbs && decoded.width >= eye_width * 2 && decoded.height >= eye_height;
-                        let src_offset_x = if sbs_available { eye_width * i as u32 } else { 0 };
-                        let copy_width = if sbs_available { eye_width } else { decoded.width.min(eye_width) };
+                        let sbs_available = is_sbs
+                            && decoded.width >= eye_width * 2
+                            && decoded.height >= eye_height;
+                        let src_offset_x = if sbs_available {
+                            eye_width * i as u32
+                        } else {
+                            0
+                        };
+                        let copy_width = if sbs_available {
+                            eye_width
+                        } else {
+                            decoded.width.min(eye_width)
+                        };
                         let copy_height = decoded.height.min(eye_height);
                         unsafe {
                             gl.bind_texture(glow::TEXTURE_2D, Some(tex));
@@ -1293,6 +1727,9 @@ mod linux {
         if available_exts.khr_vulkan_enable2 {
             exts.khr_vulkan_enable2 = true;
         }
+        if available_exts.ext_hand_tracking {
+            exts.ext_hand_tracking = true;
+        }
 
         let app_info = xr::ApplicationInfo {
             application_name: "Wavry",
@@ -1324,13 +1761,27 @@ mod linux {
         };
         wavry_vr::set_pcvr_status("PCVR: Linux Wayland Vulkan runtime active".to_string());
         let mut input_actions = InputActions::new(&instance, &session).ok();
+        let hand_tracking = if available_exts.ext_hand_tracking {
+            HandTrackingState::new(&session).ok()
+        } else {
+            None
+        };
 
         let reference_space = session
             .create_reference_space(
                 xr::ReferenceSpaceType::LOCAL,
                 xr::Posef {
-                    orientation: xr::Quaternionf { x: 0.0, y: 0.0, z: 0.0, w: 1.0 },
-                    position: xr::Vector3f { x: 0.0, y: 0.0, z: 0.0 },
+                    orientation: xr::Quaternionf {
+                        x: 0.0,
+                        y: 0.0,
+                        z: 0.0,
+                        w: 1.0,
+                    },
+                    position: xr::Vector3f {
+                        x: 0.0,
+                        y: 0.0,
+                        z: 0.0,
+                    },
                 },
             )
             .map_err(|e| VrError::Adapter(format!("OpenXR reference space: {e:?}")))?;
@@ -1347,19 +1798,22 @@ mod linux {
         loop {
             while let Some(event) = instance
                 .poll_event(&mut event_buffer)
-                .map_err(|e| VrError::Adapter(format!("OpenXR poll_event: {e:?}")))? {
+                .map_err(|e| VrError::Adapter(format!("OpenXR poll_event: {e:?}")))?
+            {
                 if let xr::Event::SessionStateChanged(e) = event {
                     match e.state() {
                         xr::SessionState::READY => {
                             session
                                 .begin(xr::ViewConfigurationType::PRIMARY_STEREO)
-                                .map_err(|e| VrError::Adapter(format!("OpenXR session begin: {e:?}")))?;
+                                .map_err(|e| {
+                                    VrError::Adapter(format!("OpenXR session begin: {e:?}"))
+                                })?;
                             session_running = true;
                         }
                         xr::SessionState::STOPPING => {
-                            session
-                                .end()
-                                .map_err(|e| VrError::Adapter(format!("OpenXR session end: {e:?}")))?;
+                            session.end().map_err(|e| {
+                                VrError::Adapter(format!("OpenXR session end: {e:?}"))
+                            })?;
                             session_running = false;
                         }
                         xr::SessionState::EXITING | xr::SessionState::LOSS_PENDING => {
@@ -1408,6 +1862,13 @@ mod linux {
                         }
                     }
                 }
+                if let Some(tracking) = hand_tracking.as_ref() {
+                    for hand_pose in
+                        tracking.poll(&reference_space, frame_state.predicted_display_time)
+                    {
+                        state.callbacks.on_hand_pose_update(hand_pose, timestamp_us);
+                    }
+                }
             }
 
             let period_ns = frame_state.predicted_display_period.as_nanos();
@@ -1440,18 +1901,18 @@ mod linux {
             if swapchains.is_none() {
                 if let Some(cfg) = state.stream_config.lock().ok().and_then(|c| *c) {
                     let layout = eye_layout(cfg);
-                    let formats = session
-                        .enumerate_swapchain_formats()
-                        .map_err(|e| VrError::Adapter(format!("OpenXR swapchain formats: {e:?}")))?;
-                    let preferred = [
-                        vk::Format::R8G8B8A8_UNORM.as_raw() as i64,
-                        vk::Format::B8G8R8A8_UNORM.as_raw() as i64,
-                    ];
-                    let format = preferred
-                        .iter()
-                        .copied()
-                        .find(|f| formats.contains(f))
-                        .unwrap_or_else(|| formats[0]);
+                    let formats = session.enumerate_swapchain_formats().map_err(|e| {
+                        VrError::Adapter(format!("OpenXR swapchain formats: {e:?}"))
+                    })?;
+                    let (format, format_name, format_srgb) = choose_vk_swapchain_format(&formats);
+                    log_swapchain_validation_i64(
+                        &instance,
+                        "linux-vulkan",
+                        &formats,
+                        format,
+                        format_name,
+                        format_srgb,
+                    );
 
                     let create_info = xr::SwapchainCreateInfo {
                         create_flags: xr::SwapchainCreateFlags::EMPTY,
@@ -1501,12 +1962,18 @@ mod linux {
                 let cfg = state.stream_config.lock().ok().and_then(|c| *c);
                 let layout = cfg.map(eye_layout);
                 let (width, height, is_sbs) = match layout {
-                    Some(layout) => (layout.eye_width as i32, layout.eye_height as i32, layout.is_sbs),
+                    Some(layout) => (
+                        layout.eye_width as i32,
+                        layout.eye_height as i32,
+                        layout.is_sbs,
+                    ),
                     None => (0, 0, false),
                 };
 
-                let mut layer_views: [xr::CompositionLayerProjectionView<xr::Vulkan>; VIEW_COUNT] =
-                    [xr::CompositionLayerProjectionView::new(), xr::CompositionLayerProjectionView::new()];
+                let mut layer_views: [xr::CompositionLayerProjectionView<xr::Vulkan>; VIEW_COUNT] = [
+                    xr::CompositionLayerProjectionView::new(),
+                    xr::CompositionLayerProjectionView::new(),
+                ];
 
                 for i in 0..VIEW_COUNT {
                     let image_index = swapchains[i]
@@ -1521,9 +1988,19 @@ mod linux {
                         let old_layout = image_layouts[i][image_index as usize];
                         let eye_width = width.max(0) as u32;
                         let eye_height = height.max(0) as u32;
-                        let sbs_available = is_sbs && decoded.width >= eye_width * 2 && decoded.height >= eye_height;
-                        let src_offset_x = if sbs_available { eye_width * i as u32 } else { 0 };
-                        let copy_width = if sbs_available { eye_width } else { decoded.width.min(eye_width) };
+                        let sbs_available = is_sbs
+                            && decoded.width >= eye_width * 2
+                            && decoded.height >= eye_height;
+                        let src_offset_x = if sbs_available {
+                            eye_width * i as u32
+                        } else {
+                            0
+                        };
+                        let copy_width = if sbs_available {
+                            eye_width
+                        } else {
+                            decoded.width.min(eye_width)
+                        };
                         let copy_height = decoded.height.min(eye_height);
                         let new_layout = vk_ctx.upload_rgba_region(
                             image,
@@ -1603,13 +2080,18 @@ mod windows {
     use std::time::{Duration, Instant};
 
     use openxr as xr;
-    use wavry_vr::types::{GamepadAxis, GamepadButton, GamepadInput, Pose, StreamConfig, VideoCodec, VrTiming};
+    use wavry_vr::types::{
+        GamepadAxis, GamepadButton, GamepadInput, HandPose, Pose, StreamConfig, VideoCodec,
+        VrTiming,
+    };
     use windows::core::ComInterface;
     use windows::Win32::Foundation::E_FAIL;
     use windows::Win32::Graphics::Direct3D11::*;
     use windows::Win32::Graphics::Dxgi::*;
     use windows::Win32::Media::MediaFoundation::*;
-    use windows::Win32::System::Com::{CoInitializeEx, CoTaskMemFree, CoUninitialize, COINIT_MULTITHREADED};
+    use windows::Win32::System::Com::{
+        CoInitializeEx, CoTaskMemFree, CoUninitialize, COINIT_MULTITHREADED,
+    };
     use windows::Win32::System::WinRT::Direct3D11::IDirect3DDxgiInterfaceAccess;
 
     const VIEW_COUNT: usize = 2;
@@ -1627,7 +2109,9 @@ mod windows {
     struct InputActions {
         action_set: xr::ActionSet,
         trigger: xr::Action<f32>,
+        trigger_click: xr::Action<bool>,
         grip: xr::Action<f32>,
+        grip_click: xr::Action<bool>,
         stick: xr::Action<xr::Vector2f>,
         primary: xr::Action<bool>,
         secondary: xr::Action<bool>,
@@ -1654,9 +2138,15 @@ mod windows {
             let trigger = action_set
                 .create_action("trigger", "Trigger", &subaction_paths)
                 .map_err(|e| VrError::Adapter(format!("OpenXR action trigger: {e:?}")))?;
+            let trigger_click = action_set
+                .create_action("trigger_click", "Trigger Click", &subaction_paths)
+                .map_err(|e| VrError::Adapter(format!("OpenXR action trigger_click: {e:?}")))?;
             let grip = action_set
                 .create_action("grip", "Grip", &subaction_paths)
                 .map_err(|e| VrError::Adapter(format!("OpenXR action grip: {e:?}")))?;
+            let grip_click = action_set
+                .create_action("grip_click", "Grip Click", &subaction_paths)
+                .map_err(|e| VrError::Adapter(format!("OpenXR action grip_click: {e:?}")))?;
             let stick = action_set
                 .create_action("thumbstick", "Thumbstick", &subaction_paths)
                 .map_err(|e| VrError::Adapter(format!("OpenXR action thumbstick: {e:?}")))?;
@@ -1672,14 +2162,32 @@ mod windows {
                 "/interaction_profiles/oculus/touch_controller",
                 "/interaction_profiles/valve/index_controller",
                 "/interaction_profiles/microsoft/motion_controller",
+                "/interaction_profiles/htc/vive_controller",
             ];
 
             for profile in profile_paths {
                 let profile_path = instance
                     .string_to_path(profile)
                     .map_err(|e| VrError::Adapter(format!("OpenXR profile path: {e:?}")))?;
-                let bindings = Self::bindings_for_profile(instance, &trigger, &grip, &stick, &primary, &secondary)?;
-                let _ = instance.suggest_interaction_profile_bindings(profile_path, &bindings);
+                let bindings = Self::bindings_for_profile(
+                    instance,
+                    profile,
+                    &trigger,
+                    &trigger_click,
+                    &grip,
+                    &grip_click,
+                    &stick,
+                    &primary,
+                    &secondary,
+                )?;
+                if let Err(err) =
+                    instance.suggest_interaction_profile_bindings(profile_path, &bindings)
+                {
+                    eprintln!(
+                        "OpenXR binding suggestion rejected for {}: {:?}",
+                        profile, err
+                    );
+                }
             }
 
             session
@@ -1689,7 +2197,9 @@ mod windows {
             Ok(Self {
                 action_set,
                 trigger,
+                trigger_click,
                 grip,
+                grip_click,
                 stick,
                 primary,
                 secondary,
@@ -1702,54 +2212,110 @@ mod windows {
 
         fn bindings_for_profile(
             instance: &xr::Instance,
+            profile: &str,
             trigger: &xr::Action<f32>,
+            trigger_click: &xr::Action<bool>,
             grip: &xr::Action<f32>,
+            grip_click: &xr::Action<bool>,
             stick: &xr::Action<xr::Vector2f>,
             primary: &xr::Action<bool>,
             secondary: &xr::Action<bool>,
         ) -> VrResult<Vec<xr::Binding<'_>>> {
-            let mut bindings = Vec::with_capacity(12);
-            if let Ok(path) = instance.string_to_path("/user/hand/left/input/trigger/value") {
-                bindings.push(xr::Binding::new(trigger, path));
+            let mut bindings = Vec::with_capacity(24);
+            macro_rules! bind_f32 {
+                ($action:expr, $path:expr) => {
+                    if let Ok(path) = instance.string_to_path($path) {
+                        bindings.push(xr::Binding::new($action, path));
+                    }
+                };
             }
-            if let Ok(path) = instance.string_to_path("/user/hand/right/input/trigger/value") {
-                bindings.push(xr::Binding::new(trigger, path));
+            macro_rules! bind_vec2 {
+                ($action:expr, $path:expr) => {
+                    if let Ok(path) = instance.string_to_path($path) {
+                        bindings.push(xr::Binding::new($action, path));
+                    }
+                };
             }
-            if let Ok(path) = instance.string_to_path("/user/hand/left/input/squeeze/value") {
-                bindings.push(xr::Binding::new(grip, path));
+            macro_rules! bind_bool {
+                ($action:expr, $path:expr) => {
+                    if let Ok(path) = instance.string_to_path($path) {
+                        bindings.push(xr::Binding::new($action, path));
+                    }
+                };
             }
-            if let Ok(path) = instance.string_to_path("/user/hand/right/input/squeeze/value") {
-                bindings.push(xr::Binding::new(grip, path));
-            }
-            if let Ok(path) = instance.string_to_path("/user/hand/left/input/thumbstick") {
-                bindings.push(xr::Binding::new(stick, path));
-            }
-            if let Ok(path) = instance.string_to_path("/user/hand/right/input/thumbstick") {
-                bindings.push(xr::Binding::new(stick, path));
-            }
-            if let Ok(path) = instance.string_to_path("/user/hand/left/input/trackpad") {
-                bindings.push(xr::Binding::new(stick, path));
-            }
-            if let Ok(path) = instance.string_to_path("/user/hand/right/input/trackpad") {
-                bindings.push(xr::Binding::new(stick, path));
-            }
-            if let Ok(path) = instance.string_to_path("/user/hand/left/input/x/click") {
-                bindings.push(xr::Binding::new(primary, path));
-            }
-            if let Ok(path) = instance.string_to_path("/user/hand/right/input/a/click") {
-                bindings.push(xr::Binding::new(primary, path));
-            }
-            if let Ok(path) = instance.string_to_path("/user/hand/left/input/y/click") {
-                bindings.push(xr::Binding::new(secondary, path));
-            }
-            if let Ok(path) = instance.string_to_path("/user/hand/right/input/b/click") {
-                bindings.push(xr::Binding::new(secondary, path));
+
+            match profile {
+                "/interaction_profiles/khr/simple_controller" => {
+                    bind_bool!(trigger_click, "/user/hand/left/input/select/click");
+                    bind_bool!(trigger_click, "/user/hand/right/input/select/click");
+                    bind_bool!(primary, "/user/hand/left/input/select/click");
+                    bind_bool!(primary, "/user/hand/right/input/select/click");
+                    bind_bool!(secondary, "/user/hand/left/input/menu/click");
+                    bind_bool!(secondary, "/user/hand/right/input/menu/click");
+                }
+                "/interaction_profiles/oculus/touch_controller" => {
+                    bind_f32!(trigger, "/user/hand/left/input/trigger/value");
+                    bind_f32!(trigger, "/user/hand/right/input/trigger/value");
+                    bind_f32!(grip, "/user/hand/left/input/squeeze/value");
+                    bind_f32!(grip, "/user/hand/right/input/squeeze/value");
+                    bind_vec2!(stick, "/user/hand/left/input/thumbstick");
+                    bind_vec2!(stick, "/user/hand/right/input/thumbstick");
+                    bind_bool!(primary, "/user/hand/left/input/x/click");
+                    bind_bool!(primary, "/user/hand/right/input/a/click");
+                    bind_bool!(secondary, "/user/hand/left/input/y/click");
+                    bind_bool!(secondary, "/user/hand/right/input/b/click");
+                }
+                "/interaction_profiles/valve/index_controller" => {
+                    bind_f32!(trigger, "/user/hand/left/input/trigger/value");
+                    bind_f32!(trigger, "/user/hand/right/input/trigger/value");
+                    bind_f32!(grip, "/user/hand/left/input/squeeze/value");
+                    bind_f32!(grip, "/user/hand/right/input/squeeze/value");
+                    bind_vec2!(stick, "/user/hand/left/input/thumbstick");
+                    bind_vec2!(stick, "/user/hand/right/input/thumbstick");
+                    bind_bool!(primary, "/user/hand/left/input/a/click");
+                    bind_bool!(primary, "/user/hand/right/input/a/click");
+                    bind_bool!(secondary, "/user/hand/left/input/b/click");
+                    bind_bool!(secondary, "/user/hand/right/input/b/click");
+                }
+                "/interaction_profiles/microsoft/motion_controller" => {
+                    bind_f32!(trigger, "/user/hand/left/input/trigger/value");
+                    bind_f32!(trigger, "/user/hand/right/input/trigger/value");
+                    bind_bool!(grip_click, "/user/hand/left/input/squeeze/click");
+                    bind_bool!(grip_click, "/user/hand/right/input/squeeze/click");
+                    bind_vec2!(stick, "/user/hand/left/input/thumbstick");
+                    bind_vec2!(stick, "/user/hand/right/input/thumbstick");
+                    bind_vec2!(stick, "/user/hand/left/input/trackpad");
+                    bind_vec2!(stick, "/user/hand/right/input/trackpad");
+                    bind_bool!(primary, "/user/hand/left/input/thumbstick/click");
+                    bind_bool!(primary, "/user/hand/right/input/thumbstick/click");
+                    bind_bool!(primary, "/user/hand/left/input/trackpad/click");
+                    bind_bool!(primary, "/user/hand/right/input/trackpad/click");
+                    bind_bool!(secondary, "/user/hand/left/input/menu/click");
+                    bind_bool!(secondary, "/user/hand/right/input/menu/click");
+                }
+                "/interaction_profiles/htc/vive_controller" => {
+                    bind_f32!(trigger, "/user/hand/left/input/trigger/value");
+                    bind_f32!(trigger, "/user/hand/right/input/trigger/value");
+                    bind_bool!(grip_click, "/user/hand/left/input/squeeze/click");
+                    bind_bool!(grip_click, "/user/hand/right/input/squeeze/click");
+                    bind_vec2!(stick, "/user/hand/left/input/trackpad");
+                    bind_vec2!(stick, "/user/hand/right/input/trackpad");
+                    bind_bool!(primary, "/user/hand/left/input/trackpad/click");
+                    bind_bool!(primary, "/user/hand/right/input/trackpad/click");
+                    bind_bool!(secondary, "/user/hand/left/input/menu/click");
+                    bind_bool!(secondary, "/user/hand/right/input/menu/click");
+                }
+                _ => {}
             }
 
             Ok(bindings)
         }
 
-        fn poll<G>(&mut self, session: &xr::Session<G>, timestamp_us: u64) -> VrResult<Vec<GamepadInput>> {
+        fn poll<G>(
+            &mut self,
+            session: &xr::Session<G>,
+            timestamp_us: u64,
+        ) -> VrResult<Vec<GamepadInput>> {
             session
                 .sync_actions(&[xr::ActiveActionSet::new(&self.action_set)])
                 .map_err(|e| VrError::Adapter(format!("OpenXR sync actions: {e:?}")))?;
@@ -1760,13 +2326,17 @@ mod windows {
 
             for (path, index) in hands {
                 let trigger = self.trigger.state(session, path).ok();
+                let trigger_click = self.trigger_click.state(session, path).ok();
                 let grip = self.grip.state(session, path).ok();
+                let grip_click = self.grip_click.state(session, path).ok();
                 let stick = self.stick.state(session, path).ok();
                 let primary = self.primary.state(session, path).ok();
                 let secondary = self.secondary.state(session, path).ok();
 
                 let active = trigger.as_ref().map(|s| s.is_active).unwrap_or(false)
+                    || trigger_click.as_ref().map(|s| s.is_active).unwrap_or(false)
                     || grip.as_ref().map(|s| s.is_active).unwrap_or(false)
+                    || grip_click.as_ref().map(|s| s.is_active).unwrap_or(false)
                     || stick.as_ref().map(|s| s.is_active).unwrap_or(false)
                     || primary.as_ref().map(|s| s.is_active).unwrap_or(false)
                     || secondary.as_ref().map(|s| s.is_active).unwrap_or(false);
@@ -1774,13 +2344,33 @@ mod windows {
                 let mut axes = [0.0f32; 4];
                 let mut buttons = [false; 2];
                 if active {
-                    let trigger_val = trigger.map(|s| s.current_state).unwrap_or(0.0);
-                    let grip_val = grip.map(|s| s.current_state).unwrap_or(0.0);
+                    let trigger_val = trigger.map(|s| s.current_state).unwrap_or(0.0).max(
+                        if trigger_click.map(|s| s.current_state).unwrap_or(false) {
+                            1.0
+                        } else {
+                            0.0
+                        },
+                    );
+                    let grip_val = grip.map(|s| s.current_state).unwrap_or(0.0).max(
+                        if grip_click.map(|s| s.current_state).unwrap_or(false) {
+                            1.0
+                        } else {
+                            0.0
+                        },
+                    );
                     let stick_val = stick
                         .map(|s| s.current_state)
                         .unwrap_or(xr::Vector2f { x: 0.0, y: 0.0 });
-                    let stick_x = if stick_val.x.abs() < STICK_DEADZONE { 0.0 } else { stick_val.x };
-                    let stick_y = if stick_val.y.abs() < STICK_DEADZONE { 0.0 } else { stick_val.y };
+                    let stick_x = if stick_val.x.abs() < STICK_DEADZONE {
+                        0.0
+                    } else {
+                        stick_val.x
+                    };
+                    let stick_y = if stick_val.y.abs() < STICK_DEADZONE {
+                        0.0
+                    } else {
+                        stick_val.y
+                    };
                     axes = [stick_x, stick_y, trigger_val, grip_val];
                     buttons = [
                         primary.map(|s| s.current_state).unwrap_or(false),
@@ -1794,20 +2384,43 @@ mod windows {
                     active,
                 };
 
-                let should_send = Self::should_send(snapshot, self.last_sent[index], now, self.last_sent_at[index]);
+                let should_send = Self::should_send(
+                    snapshot,
+                    self.last_sent[index],
+                    now,
+                    self.last_sent_at[index],
+                );
                 if should_send {
                     self.last_sent[index] = snapshot;
                     self.last_sent_at[index] = now;
 
                     let axes_out = vec![
-                        GamepadAxis { axis: 0, value: axes[0] },
-                        GamepadAxis { axis: 1, value: axes[1] },
-                        GamepadAxis { axis: 2, value: axes[2] },
-                        GamepadAxis { axis: 3, value: axes[3] },
+                        GamepadAxis {
+                            axis: 0,
+                            value: axes[0],
+                        },
+                        GamepadAxis {
+                            axis: 1,
+                            value: axes[1],
+                        },
+                        GamepadAxis {
+                            axis: 2,
+                            value: axes[2],
+                        },
+                        GamepadAxis {
+                            axis: 3,
+                            value: axes[3],
+                        },
                     ];
                     let buttons_out = vec![
-                        GamepadButton { button: 0, pressed: buttons[0] },
-                        GamepadButton { button: 1, pressed: buttons[1] },
+                        GamepadButton {
+                            button: 0,
+                            pressed: buttons[0],
+                        },
+                        GamepadButton {
+                            button: 1,
+                            pressed: buttons[1],
+                        },
                     ];
                     outputs.push(GamepadInput {
                         timestamp_us,
@@ -1864,6 +2477,67 @@ mod windows {
         }
     }
 
+    fn describe_dxgi_swapchain_format(format: i64) -> (&'static str, bool) {
+        if format == DXGI_FORMAT_B8G8R8A8_UNORM.0 as i64 {
+            ("DXGI_FORMAT_B8G8R8A8_UNORM", false)
+        } else if format == DXGI_FORMAT_R8G8B8A8_UNORM.0 as i64 {
+            ("DXGI_FORMAT_R8G8B8A8_UNORM", false)
+        } else if format == DXGI_FORMAT_B8G8R8A8_UNORM_SRGB.0 as i64 {
+            ("DXGI_FORMAT_B8G8R8A8_UNORM_SRGB", true)
+        } else if format == DXGI_FORMAT_R8G8B8A8_UNORM_SRGB.0 as i64 {
+            ("DXGI_FORMAT_R8G8B8A8_UNORM_SRGB", true)
+        } else {
+            ("UNKNOWN_DXGI_FORMAT", false)
+        }
+    }
+
+    fn choose_dxgi_swapchain_format(formats: &[i64]) -> (i64, &'static str, bool) {
+        let preferred = [
+            DXGI_FORMAT_B8G8R8A8_UNORM.0 as i64,
+            DXGI_FORMAT_R8G8B8A8_UNORM.0 as i64,
+            DXGI_FORMAT_B8G8R8A8_UNORM_SRGB.0 as i64,
+            DXGI_FORMAT_R8G8B8A8_UNORM_SRGB.0 as i64,
+        ];
+        if let Some(format) = preferred.iter().copied().find(|fmt| formats.contains(fmt)) {
+            let (name, srgb) = describe_dxgi_swapchain_format(format);
+            return (format, name, srgb);
+        }
+        let fallback = formats
+            .first()
+            .copied()
+            .unwrap_or(DXGI_FORMAT_B8G8R8A8_UNORM.0 as i64);
+        let (name, srgb) = describe_dxgi_swapchain_format(fallback);
+        (fallback, name, srgb)
+    }
+
+    fn log_swapchain_validation(
+        instance: &xr::Instance,
+        available: &[i64],
+        selected: i64,
+        selected_name: &str,
+        selected_srgb: bool,
+    ) {
+        let runtime = instance.properties().ok();
+        let runtime_name = runtime
+            .as_ref()
+            .map(|p| p.runtime_name.as_str())
+            .unwrap_or("unknown-runtime");
+        let gamma_mode = if selected_srgb {
+            "sRGB (runtime gamma conversion)"
+        } else {
+            "linear UNORM (passthrough)"
+        };
+        eprintln!(
+            "OpenXR swapchain validation [windows-d3d11]: runtime='{}' selected={} ({}) gamma_mode={} available={:?}",
+            runtime_name, selected_name, selected, gamma_mode, available
+        );
+        if selected_srgb {
+            eprintln!(
+                "OpenXR swapchain validation [windows-d3d11]: selected sRGB fallback; monitor scene gamma for double/under correction."
+            );
+        }
+    }
+
     struct MfDecoder {
         decoder: IMFTransform,
     }
@@ -1871,9 +2545,9 @@ mod windows {
     impl MfDecoder {
         fn new(device: &ID3D11Device, codec: VideoCodec) -> VrResult<Self> {
             unsafe {
-                MFStartup(MF_VERSION, MFSTARTUP_FULL).ok().map_err(|e| {
-                    VrError::Adapter(format!("MFStartup failed: {e:?}"))
-                })?;
+                MFStartup(MF_VERSION, MFSTARTUP_FULL)
+                    .ok()
+                    .map_err(|e| VrError::Adapter(format!("MFStartup failed: {e:?}")))?;
 
                 let input_guid = match codec {
                     VideoCodec::Av1 => MFVideoFormat_AV1,
@@ -1906,34 +2580,41 @@ mod windows {
                 let activate = std::slice::from_raw_parts(activate_list, count as usize)[0]
                     .as_ref()
                     .ok_or_else(|| VrError::Adapter("Decoder activation failed".to_string()))?;
-                let decoder: IMFTransform = activate.ActivateObject()
+                let decoder: IMFTransform = activate
+                    .ActivateObject()
                     .map_err(|e| VrError::Adapter(format!("ActivateObject failed: {e:?}")))?;
 
                 CoTaskMemFree(Some(activate_list as _));
 
                 let input_type: IMFMediaType = MFCreateMediaType()
                     .map_err(|e| VrError::Adapter(format!("MFCreateMediaType: {e:?}")))?;
-                input_type.SetGUID(&MF_MT_MAJOR_TYPE, &MFMediaType_Video).ok().map_err(|e| {
-                    VrError::Adapter(format!("MF set input major: {e:?}"))
-                })?;
-                input_type.SetGUID(&MF_MT_SUBTYPE, &input_guid).ok().map_err(|e| {
-                    VrError::Adapter(format!("MF set input subtype: {e:?}"))
-                })?;
-                decoder.SetInputType(0, Some(&input_type), 0).ok().map_err(|e| {
-                    VrError::Adapter(format!("MF set input type: {e:?}"))
-                })?;
+                input_type
+                    .SetGUID(&MF_MT_MAJOR_TYPE, &MFMediaType_Video)
+                    .ok()
+                    .map_err(|e| VrError::Adapter(format!("MF set input major: {e:?}")))?;
+                input_type
+                    .SetGUID(&MF_MT_SUBTYPE, &input_guid)
+                    .ok()
+                    .map_err(|e| VrError::Adapter(format!("MF set input subtype: {e:?}")))?;
+                decoder
+                    .SetInputType(0, Some(&input_type), 0)
+                    .ok()
+                    .map_err(|e| VrError::Adapter(format!("MF set input type: {e:?}")))?;
 
                 let output_type: IMFMediaType = MFCreateMediaType()
                     .map_err(|e| VrError::Adapter(format!("MFCreateMediaType: {e:?}")))?;
-                output_type.SetGUID(&MF_MT_MAJOR_TYPE, &MFMediaType_Video).ok().map_err(|e| {
-                    VrError::Adapter(format!("MF set output major: {e:?}"))
-                })?;
-                output_type.SetGUID(&MF_MT_SUBTYPE, &MFVideoFormat_RGB32).ok().map_err(|e| {
-                    VrError::Adapter(format!("MF set output subtype: {e:?}"))
-                })?;
-                decoder.SetOutputType(0, Some(&output_type), 0).ok().map_err(|e| {
-                    VrError::Adapter(format!("MF set output type: {e:?}"))
-                })?;
+                output_type
+                    .SetGUID(&MF_MT_MAJOR_TYPE, &MFMediaType_Video)
+                    .ok()
+                    .map_err(|e| VrError::Adapter(format!("MF set output major: {e:?}")))?;
+                output_type
+                    .SetGUID(&MF_MT_SUBTYPE, &MFVideoFormat_RGB32)
+                    .ok()
+                    .map_err(|e| VrError::Adapter(format!("MF set output subtype: {e:?}")))?;
+                decoder
+                    .SetOutputType(0, Some(&output_type), 0)
+                    .ok()
+                    .map_err(|e| VrError::Adapter(format!("MF set output type: {e:?}")))?;
 
                 if let Ok(attributes) = decoder.GetAttributes() {
                     let _ = attributes.SetUINT32(&MF_SA_D3D11_AWARE, 1);
@@ -1944,13 +2625,17 @@ mod windows {
                 MFCreateDXGIDeviceManager(&mut reset_token, &mut device_manager)
                     .ok()
                     .map_err(|e| VrError::Adapter(format!("MFCreateDXGIDeviceManager: {e:?}")))?;
-                let device_manager =
-                    device_manager.ok_or_else(|| VrError::Adapter("MF device manager missing".to_string()))?;
-                device_manager.ResetDevice(device, reset_token).ok().map_err(|e| {
-                    VrError::Adapter(format!("MF ResetDevice failed: {e:?}"))
-                })?;
+                let device_manager = device_manager
+                    .ok_or_else(|| VrError::Adapter("MF device manager missing".to_string()))?;
+                device_manager
+                    .ResetDevice(device, reset_token)
+                    .ok()
+                    .map_err(|e| VrError::Adapter(format!("MF ResetDevice failed: {e:?}")))?;
                 decoder
-                    .ProcessMessage(MFT_MESSAGE_SET_D3D_MANAGER, device_manager.as_raw() as usize)
+                    .ProcessMessage(
+                        MFT_MESSAGE_SET_D3D_MANAGER,
+                        device_manager.as_raw() as usize,
+                    )
                     .ok()
                     .map_err(|e| VrError::Adapter(format!("MF set D3D manager: {e:?}")))?;
 
@@ -1965,21 +2650,28 @@ mod windows {
                 let mut ptr = std::ptr::null_mut();
                 let mut max_length = 0;
                 let mut current_length = 0;
-                buffer.Lock(&mut ptr, Some(&mut max_length), Some(&mut current_length))
+                buffer
+                    .Lock(&mut ptr, Some(&mut max_length), Some(&mut current_length))
                     .ok()
                     .map_err(|e| VrError::Adapter(format!("MF buffer lock: {e:?}")))?;
                 std::ptr::copy_nonoverlapping(payload.as_ptr(), ptr, payload.len());
-                buffer.Unlock().ok().map_err(|e| VrError::Adapter(format!("MF buffer unlock: {e:?}")))?;
-                buffer.SetCurrentLength(payload.len() as u32)
+                buffer
+                    .Unlock()
+                    .ok()
+                    .map_err(|e| VrError::Adapter(format!("MF buffer unlock: {e:?}")))?;
+                buffer
+                    .SetCurrentLength(payload.len() as u32)
                     .ok()
                     .map_err(|e| VrError::Adapter(format!("MF buffer len: {e:?}")))?;
 
                 let sample = MFCreateSample()
                     .map_err(|e| VrError::Adapter(format!("MFCreateSample: {e:?}")))?;
-                sample.AddBuffer(&buffer)
+                sample
+                    .AddBuffer(&buffer)
                     .ok()
                     .map_err(|e| VrError::Adapter(format!("MF AddBuffer: {e:?}")))?;
-                sample.SetSampleTime(timestamp_us as i64 * 10)
+                sample
+                    .SetSampleTime(timestamp_us as i64 * 10)
                     .ok()
                     .map_err(|e| VrError::Adapter(format!("MF SetSampleTime: {e:?}")))?;
 
@@ -2001,12 +2693,12 @@ mod windows {
                             let buffer = sample.GetBufferByIndex(0).map_err(|e| {
                                 VrError::Adapter(format!("MF GetBufferByIndex: {e:?}"))
                             })?;
-                            let access: IDirect3DDxgiInterfaceAccess = buffer.cast().map_err(|e| {
-                                VrError::Adapter(format!("MF buffer cast: {e:?}"))
-                            })?;
-                            let texture: ID3D11Texture2D = access.GetInterface().map_err(|e| {
-                                VrError::Adapter(format!("MF GetInterface: {e:?}"))
-                            })?;
+                            let access: IDirect3DDxgiInterfaceAccess = buffer
+                                .cast()
+                                .map_err(|e| VrError::Adapter(format!("MF buffer cast: {e:?}")))?;
+                            let texture: ID3D11Texture2D = access
+                                .GetInterface()
+                                .map_err(|e| VrError::Adapter(format!("MF GetInterface: {e:?}")))?;
                             Ok(Some(texture))
                         } else {
                             Ok(None)
@@ -2041,8 +2733,99 @@ mod windows {
     fn to_pose(pose: xr::Posef) -> Pose {
         Pose {
             position: [pose.position.x, pose.position.y, pose.position.z],
-            orientation: [pose.orientation.x, pose.orientation.y, pose.orientation.z, pose.orientation.w],
+            orientation: [
+                pose.orientation.x,
+                pose.orientation.y,
+                pose.orientation.z,
+                pose.orientation.w,
+            ],
         }
+    }
+
+    struct HandTrackingState {
+        left: xr::HandTracker,
+        right: xr::HandTracker,
+    }
+
+    impl HandTrackingState {
+        fn new<G>(session: &xr::Session<G>) -> VrResult<Self> {
+            let left = session
+                .create_hand_tracker(xr::Hand::LEFT)
+                .map_err(|e| VrError::Adapter(format!("OpenXR create hand tracker left: {e:?}")))?;
+            let right = session.create_hand_tracker(xr::Hand::RIGHT).map_err(|e| {
+                VrError::Adapter(format!("OpenXR create hand tracker right: {e:?}"))
+            })?;
+            Ok(Self { left, right })
+        }
+
+        fn poll(&self, reference_space: &xr::Space, time: xr::Time) -> Vec<HandPose> {
+            let mut out = Vec::with_capacity(2);
+            if let Ok(Some((locations, velocities))) =
+                reference_space.relate_hand_joints(&self.left, time)
+            {
+                if let Some(hand) = hand_pose_from_joints(0, &locations, &velocities) {
+                    out.push(hand);
+                }
+            }
+            if let Ok(Some((locations, velocities))) =
+                reference_space.relate_hand_joints(&self.right, time)
+            {
+                if let Some(hand) = hand_pose_from_joints(1, &locations, &velocities) {
+                    out.push(hand);
+                }
+            }
+            out
+        }
+    }
+
+    fn hand_pose_from_joints(
+        hand_id: u32,
+        locations: &xr::HandJointLocations,
+        velocities: &xr::HandJointVelocities,
+    ) -> Option<HandPose> {
+        let palm_location = locations[xr::HandJoint::PALM];
+        let has_position = palm_location
+            .location_flags
+            .contains(xr::SpaceLocationFlags::POSITION_VALID);
+        let has_orientation = palm_location
+            .location_flags
+            .contains(xr::SpaceLocationFlags::ORIENTATION_VALID);
+        if !has_position || !has_orientation {
+            return None;
+        }
+
+        let palm_velocity = velocities[xr::HandJoint::PALM];
+        let linear_velocity = if palm_velocity
+            .velocity_flags
+            .contains(xr::SpaceVelocityFlags::LINEAR_VALID)
+        {
+            [
+                palm_velocity.linear_velocity.x,
+                palm_velocity.linear_velocity.y,
+                palm_velocity.linear_velocity.z,
+            ]
+        } else {
+            [0.0; 3]
+        };
+        let angular_velocity = if palm_velocity
+            .velocity_flags
+            .contains(xr::SpaceVelocityFlags::ANGULAR_VALID)
+        {
+            [
+                palm_velocity.angular_velocity.x,
+                palm_velocity.angular_velocity.y,
+                palm_velocity.angular_velocity.z,
+            ]
+        } else {
+            [0.0; 3]
+        };
+
+        Some(HandPose {
+            hand_id,
+            pose: to_pose(palm_location.pose),
+            linear_velocity,
+            angular_velocity,
+        })
     }
 
     fn run(state: Arc<SharedState>) -> VrResult<()> {
@@ -2069,7 +2852,8 @@ mod windows {
             .map_err(|e| VrError::Adapter(format!("D3D11CreateDevice: {e:?}")))?;
         }
         let device = device.ok_or_else(|| VrError::Adapter("D3D11 device missing".to_string()))?;
-        let context = context.ok_or_else(|| VrError::Adapter("D3D11 context missing".to_string()))?;
+        let context =
+            context.ok_or_else(|| VrError::Adapter("D3D11 context missing".to_string()))?;
 
         let entry = xr::Entry::load()
             .map_err(|e| VrError::Adapter(format!("OpenXR load failed: {e:?}")))?;
@@ -2077,10 +2861,15 @@ mod windows {
             .enumerate_extensions()
             .map_err(|e| VrError::Adapter(format!("OpenXR ext enumerate: {e:?}")))?;
         if !available_exts.khr_d3d11_enable {
-            return Err(VrError::Unavailable("OpenXR KHR_d3d11_enable not available".to_string()));
+            return Err(VrError::Unavailable(
+                "OpenXR KHR_d3d11_enable not available".to_string(),
+            ));
         }
         let mut exts = xr::ExtensionSet::default();
         exts.khr_d3d11_enable = true;
+        if available_exts.ext_hand_tracking {
+            exts.ext_hand_tracking = true;
+        }
 
         let app_info = xr::ApplicationInfo {
             application_name: "Wavry",
@@ -2106,13 +2895,27 @@ mod windows {
         };
         wavry_vr::set_pcvr_status("PCVR: Windows D3D11 runtime active".to_string());
         let mut input_actions = InputActions::new(&instance, &session).ok();
+        let hand_tracking = if available_exts.ext_hand_tracking {
+            HandTrackingState::new(&session).ok()
+        } else {
+            None
+        };
 
         let reference_space = session
             .create_reference_space(
                 xr::ReferenceSpaceType::LOCAL,
                 xr::Posef {
-                    orientation: xr::Quaternionf { x: 0.0, y: 0.0, z: 0.0, w: 1.0 },
-                    position: xr::Vector3f { x: 0.0, y: 0.0, z: 0.0 },
+                    orientation: xr::Quaternionf {
+                        x: 0.0,
+                        y: 0.0,
+                        z: 0.0,
+                        w: 1.0,
+                    },
+                    position: xr::Vector3f {
+                        x: 0.0,
+                        y: 0.0,
+                        z: 0.0,
+                    },
                 },
             )
             .map_err(|e| VrError::Adapter(format!("OpenXR reference space: {e:?}")))?;
@@ -2128,19 +2931,22 @@ mod windows {
         loop {
             while let Some(event) = instance
                 .poll_event(&mut event_buffer)
-                .map_err(|e| VrError::Adapter(format!("OpenXR poll_event: {e:?}")))? {
+                .map_err(|e| VrError::Adapter(format!("OpenXR poll_event: {e:?}")))?
+            {
                 if let xr::Event::SessionStateChanged(e) = event {
                     match e.state() {
                         xr::SessionState::READY => {
                             session
                                 .begin(xr::ViewConfigurationType::PRIMARY_STEREO)
-                                .map_err(|e| VrError::Adapter(format!("OpenXR session begin: {e:?}")))?;
+                                .map_err(|e| {
+                                    VrError::Adapter(format!("OpenXR session begin: {e:?}"))
+                                })?;
                             session_running = true;
                         }
                         xr::SessionState::STOPPING => {
-                            session
-                                .end()
-                                .map_err(|e| VrError::Adapter(format!("OpenXR session end: {e:?}")))?;
+                            session.end().map_err(|e| {
+                                VrError::Adapter(format!("OpenXR session end: {e:?}"))
+                            })?;
                             session_running = false;
                         }
                         xr::SessionState::EXITING | xr::SessionState::LOSS_PENDING => {
@@ -2191,6 +2997,13 @@ mod windows {
                         }
                     }
                 }
+                if let Some(tracking) = hand_tracking.as_ref() {
+                    for hand_pose in
+                        tracking.poll(&reference_space, frame_state.predicted_display_time)
+                    {
+                        state.callbacks.on_hand_pose_update(hand_pose, timestamp_us);
+                    }
+                }
             }
 
             let period_ns = frame_state.predicted_display_period.as_nanos();
@@ -2223,15 +3036,11 @@ mod windows {
             if swapchains.is_none() {
                 if let Some(cfg) = state.stream_config.lock().ok().and_then(|c| *c) {
                     let layout = eye_layout(cfg);
-                    let formats = session
-                        .enumerate_swapchain_formats()
-                        .map_err(|e| VrError::Adapter(format!("OpenXR swapchain formats: {e:?}")))?;
-                    let desired = DXGI_FORMAT_B8G8R8A8_UNORM.0 as i64;
-                    let format = formats
-                        .iter()
-                        .copied()
-                        .find(|f| *f == desired)
-                        .unwrap_or_else(|| formats[0]);
+                    let formats = session.enumerate_swapchain_formats().map_err(|e| {
+                        VrError::Adapter(format!("OpenXR swapchain formats: {e:?}"))
+                    })?;
+                    let (format, format_name, format_srgb) = choose_dxgi_swapchain_format(&formats);
+                    log_swapchain_validation(&instance, &formats, format, format_name, format_srgb);
 
                     let create_info = xr::SwapchainCreateInfo {
                         create_flags: xr::SwapchainCreateFlags::EMPTY,
@@ -2244,21 +3053,27 @@ mod windows {
                         array_size: 1,
                         mip_count: 1,
                     };
-                    let sc0 = session.create_swapchain(&create_info)
+                    let sc0 = session
+                        .create_swapchain(&create_info)
                         .map_err(|e| VrError::Adapter(format!("OpenXR swapchain: {e:?}")))?;
-                    let sc1 = session.create_swapchain(&create_info)
+                    let sc1 = session
+                        .create_swapchain(&create_info)
                         .map_err(|e| VrError::Adapter(format!("OpenXR swapchain: {e:?}")))?;
-                    let imgs0 = sc0.enumerate_images()
+                    let imgs0 = sc0
+                        .enumerate_images()
                         .map_err(|e| VrError::Adapter(format!("OpenXR swapchain images: {e:?}")))?;
-                    let imgs1 = sc1.enumerate_images()
+                    let imgs1 = sc1
+                        .enumerate_images()
                         .map_err(|e| VrError::Adapter(format!("OpenXR swapchain images: {e:?}")))?;
                     swapchains = Some([sc0, sc1]);
                     swapchain_images = Some([imgs0, imgs1]);
                 }
             }
 
-            let mut layer_views: [xr::CompositionLayerProjectionView<xr::D3D11>; VIEW_COUNT] =
-                [xr::CompositionLayerProjectionView::new(), xr::CompositionLayerProjectionView::new()];
+            let mut layer_views: [xr::CompositionLayerProjectionView<xr::D3D11>; VIEW_COUNT] = [
+                xr::CompositionLayerProjectionView::new(),
+                xr::CompositionLayerProjectionView::new(),
+            ];
 
             if frame_state.should_render && swapchains.is_some() && swapchain_images.is_some() {
                 let swapchains = swapchains.as_mut().unwrap();
@@ -2266,7 +3081,11 @@ mod windows {
                 let cfg = state.stream_config.lock().ok().and_then(|c| *c);
                 let layout = cfg.map(eye_layout);
                 let (width, height, is_sbs) = match layout {
-                    Some(layout) => (layout.eye_width as i32, layout.eye_height as i32, layout.is_sbs),
+                    Some(layout) => (
+                        layout.eye_width as i32,
+                        layout.eye_height as i32,
+                        layout.is_sbs,
+                    ),
                     None => (0, 0, false),
                 };
 
@@ -2281,8 +3100,11 @@ mod windows {
                     if let Some(tex) = last_texture.as_ref() {
                         let target = swapchain_images[i][image_index as usize];
                         unsafe {
-                            let target = windows::core::from_raw_borrowed::<ID3D11Texture2D>(&target)
-                                .ok_or_else(|| VrError::Adapter("Invalid swapchain texture".to_string()))?;
+                            let target =
+                                windows::core::from_raw_borrowed::<ID3D11Texture2D>(&target)
+                                    .ok_or_else(|| {
+                                        VrError::Adapter("Invalid swapchain texture".to_string())
+                                    })?;
                             if is_sbs && width > 0 && height > 0 {
                                 let eye_width = width as u32;
                                 let eye_height = height as u32;
@@ -2296,7 +3118,16 @@ mod windows {
                                     bottom: eye_height,
                                     back: 1,
                                 };
-                                context.CopySubresourceRegion(target, 0, 0, 0, 0, tex, 0, Some(&src_box));
+                                context.CopySubresourceRegion(
+                                    target,
+                                    0,
+                                    0,
+                                    0,
+                                    0,
+                                    tex,
+                                    0,
+                                    Some(&src_box),
+                                );
                             } else {
                                 context.CopyResource(target, tex);
                             }

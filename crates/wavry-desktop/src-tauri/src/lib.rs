@@ -1,28 +1,34 @@
+#[cfg(target_os = "linux")]
+use rift_core::Codec as RiftCodec;
 use serde::{Deserialize, Serialize};
 use std::net::SocketAddr;
 use std::str::FromStr;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 use tokio::sync::{mpsc, oneshot};
-use wavry_client::{run_client, ClientConfig};
+use wavry_client::{run_client_with_shutdown, ClientConfig};
 use wavry_media::{CapabilityProbe, Codec, EncodeConfig, Resolution};
-use rift_core::Codec as RiftCodec;
 
+#[cfg(target_os = "linux")]
+use wavry_media::{LinuxProbe, PipewireAudioCapturer, PipewireEncoder};
 #[cfg(target_os = "macos")]
 use wavry_media::{MacAudioCapturer, MacProbe, MacScreenEncoder};
-#[cfg(target_os = "linux")]
-use wavry_media::{PipewireAudioCapturer, PipewireEncoder};
 #[cfg(target_os = "windows")]
 use wavry_media::{WindowsAudioCapturer, WindowsEncoder, WindowsProbe};
 
+#[cfg(target_os = "linux")]
 fn local_supported_encoders() -> Vec<Codec> {
     #[cfg(target_os = "windows")]
     {
-        return WindowsProbe.supported_encoders().unwrap_or_else(|_| vec![Codec::H264]);
+        return WindowsProbe
+            .supported_encoders()
+            .unwrap_or_else(|_| vec![Codec::H264]);
     }
     #[cfg(target_os = "macos")]
     {
-        return MacProbe.supported_encoders().unwrap_or_else(|_| vec![Codec::H264]);
+        MacProbe
+            .supported_encoders()
+            .unwrap_or_else(|_| vec![Codec::H264])
     }
     #[cfg(target_os = "linux")]
     {
@@ -36,6 +42,7 @@ fn local_supported_encoders() -> Vec<Codec> {
     }
 }
 
+#[cfg(target_os = "linux")]
 fn choose_rift_codec(hello: &rift_core::Hello) -> RiftCodec {
     let local_supported = local_supported_encoders();
 
@@ -72,12 +79,48 @@ struct SessionState {
     cc_state: Arc<Mutex<String>>,
 }
 
+struct ClientSessionState {
+    stop_tx: Option<oneshot::Sender<()>>,
+}
+
 static SESSION_STATE: Mutex<Option<SessionState>> = Mutex::new(None);
+static CLIENT_SESSION_STATE: Mutex<Option<ClientSessionState>> = Mutex::new(None);
 static AUTH_STATE: Mutex<Option<AuthState>> = Mutex::new(None);
 static IDENTITY_KEY: Mutex<Option<rift_crypto::IdentityKeypair>> = Mutex::new(None);
 
 struct AuthState {
     token: String,
+}
+
+fn register_client_session(stop_tx: oneshot::Sender<()>) -> Result<(), String> {
+    let mut state = CLIENT_SESSION_STATE.lock().unwrap();
+    if state.is_some() {
+        return Err("Client session already active".into());
+    }
+    *state = Some(ClientSessionState {
+        stop_tx: Some(stop_tx),
+    });
+    Ok(())
+}
+
+fn clear_client_session() {
+    if let Ok(mut state) = CLIENT_SESSION_STATE.lock() {
+        *state = None;
+    }
+}
+
+fn spawn_client_session(config: ClientConfig) -> Result<(), String> {
+    let (stop_tx, stop_rx) = oneshot::channel::<()>();
+    register_client_session(stop_tx)?;
+
+    tauri::async_runtime::spawn(async move {
+        if let Err(e) = run_client_with_shutdown(config, None, stop_rx).await {
+            log::error!("Client error: {}", e);
+        }
+        clear_client_session();
+    });
+
+    Ok(())
 }
 
 fn get_or_create_identity(
@@ -287,6 +330,8 @@ async fn start_session(
     resolution_mode: String,
     width: Option<u32>,
     height: Option<u32>,
+    gamepad_enabled: Option<bool>,
+    gamepad_deadzone: Option<f32>,
 ) -> Result<String, String> {
     let socket_addr = if let Ok(s) = SocketAddr::from_str(&addr) {
         Some(s)
@@ -318,15 +363,13 @@ async fn start_session(
         identity_key: None,
         relay_info: None,
         max_resolution,
+        gamepad_enabled: gamepad_enabled.unwrap_or(true),
+        gamepad_deadzone: gamepad_deadzone.unwrap_or(0.1).clamp(0.0, 0.95),
         vr_adapter: None,
+        runtime_stats: None,
     };
 
-    // Spawn client in background
-    tauri::async_runtime::spawn(async move {
-        if let Err(e) = run_client(config, None).await {
-            log::error!("Client error: {}", e);
-        }
-    });
+    spawn_client_session(config)?;
 
     Ok("Session started".into())
 }
@@ -338,9 +381,9 @@ async fn list_monitors() -> Result<Vec<wavry_media::DisplayInfo>, String> {
     #[cfg(target_os = "windows")]
     let probe = WindowsProbe;
     #[cfg(target_os = "linux")]
-    return Ok(vec![]); // TODO: Linux probe
+    let probe = LinuxProbe;
 
-    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
     probe.enumerate_displays().map_err(|e| e.to_string())
 }
 
@@ -423,14 +466,13 @@ async fn connect_via_id(target_username: String) -> Result<String, String> {
                     identity_key: None,
                     relay_info,
                     max_resolution: None,
+                    gamepad_enabled: true,
+                    gamepad_deadzone: 0.1,
                     vr_adapter: None,
+                    runtime_stats: None,
                 };
 
-                tauri::async_runtime::spawn(async move {
-                    if let Err(e) = wavry_client::run_client(config, None).await {
-                        log::error!("Client error: {}", e);
-                    }
-                });
+                spawn_client_session(config)?;
 
                 return Ok("Connected".into());
             }
@@ -457,7 +499,7 @@ async fn connect_via_id(target_username: String) -> Result<String, String> {
 
 #[cfg(target_os = "linux")]
 #[tauri::command]
-async fn start_host(port: u16) -> Result<String, String> {
+async fn start_host(port: u16, display_id: Option<u32>) -> Result<String, String> {
     use bytes::Bytes;
     use std::net::UdpSocket;
     use std::thread;
@@ -498,6 +540,7 @@ async fn start_host(port: u16) -> Result<String, String> {
         fps: 60,
         bitrate_kbps: 8000,
         keyframe_interval_ms: 2000,
+        display_id,
     };
 
     let video_encoder = PipewireEncoder::new(config)
@@ -869,9 +912,14 @@ async fn start_host(port: u16, display_id: Option<u32>) -> Result<String, String
     let video_encoder = MacScreenEncoder::new(config)
         .await
         .map_err(|e| e.to_string())?;
-    let mut audio_capturer = MacAudioCapturer::new()
-        .await
-        .map_err(|e| e.to_string())?;
+    let mut audio_capturer = MacAudioCapturer::new().await.map_err(|e| e.to_string())?;
+
+    // Bind before spawning worker threads so start_host returns a real error on failure.
+    let socket = UdpSocket::bind(format!("0.0.0.0:{}", port))
+        .map_err(|e| format!("Failed to bind socket on {}: {}", port, e))?;
+    socket
+        .set_nonblocking(true)
+        .map_err(|e| format!("Failed to set nonblocking socket: {}", e))?;
 
     // Store state
     {
@@ -887,14 +935,6 @@ async fn start_host(port: u16, display_id: Option<u32>) -> Result<String, String
     // Spawn host thread
     thread::spawn(move || {
         let mut video_encoder = video_encoder;
-        let socket = match UdpSocket::bind(format!("0.0.0.0:{}", port)) {
-            Ok(s) => s,
-            Err(e) => {
-                log::error!("Failed to bind socket: {}", e);
-                return;
-            }
-        };
-        socket.set_nonblocking(true).ok();
 
         // Similar loop to Windows/Linux below...
         // For brevity and parity, this would ideally be factored out, but for now we follow the existing pattern.
@@ -1350,6 +1390,26 @@ async fn stop_host() -> Result<(), String> {
     }
 }
 
+#[tauri::command]
+async fn stop_session() -> Result<(), String> {
+    let stop_tx = {
+        let mut state = CLIENT_SESSION_STATE.lock().unwrap();
+        state.as_mut().and_then(|s| s.stop_tx.take())
+    };
+
+    if let Some(tx) = stop_tx {
+        let _ = tx.send(());
+        Ok(())
+    } else {
+        let state = CLIENT_SESSION_STATE.lock().unwrap();
+        if state.is_some() {
+            Err("Client session is already stopping".into())
+        } else {
+            Err("No active client session".into())
+        }
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -1361,6 +1421,7 @@ pub fn run() {
             connect_via_id,
             start_host,
             stop_host,
+            stop_session,
             login_full,
             set_signaling_token,
             register,

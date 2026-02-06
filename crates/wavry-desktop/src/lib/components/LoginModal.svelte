@@ -10,6 +10,16 @@
     let isLoading = $state(false);
     let errorMessage = $state("");
 
+    function normalizeError(error: unknown): string {
+        if (error instanceof Error && error.message) return error.message;
+        if (typeof error === "string") return error;
+        try {
+            return JSON.stringify(error);
+        } catch {
+            return "Unexpected authentication error.";
+        }
+    }
+
     function close() {
         appState.showLoginModal = false;
     }
@@ -18,7 +28,21 @@
         isLoading = true;
         errorMessage = "";
 
-        const server = showAdvanced ? customServer : "https://auth.wavry.dev";
+        const server = showAdvanced ? customServer.trim() : "https://auth.wavry.dev";
+        if (showAdvanced) {
+            try {
+                const parsed = new URL(server);
+                if (!["http:", "https:"].includes(parsed.protocol)) {
+                    errorMessage = "Server URL must start with http:// or https://";
+                    isLoading = false;
+                    return;
+                }
+            } catch {
+                errorMessage = "Server URL is invalid.";
+                isLoading = false;
+                return;
+            }
+        }
         appState.authServer = server;
 
         try {
@@ -35,8 +59,8 @@
                 await appState.login({ email, password });
                 close();
             }
-        } catch (e: any) {
-            errorMessage = e.toString();
+        } catch (e: unknown) {
+            errorMessage = normalizeError(e);
         } finally {
             isLoading = false;
         }
@@ -55,6 +79,7 @@
         onclick={(e) => e.stopPropagation()}
         role="dialog"
         aria-modal="true"
+        tabindex="-1"
         onkeydown={(e) => e.stopPropagation()}
     >
         <button class="close-btn" onclick={close}>✕</button>
@@ -134,6 +159,7 @@
                 <div
                     class="message"
                     class:success={errorMessage.includes("created")}
+                    aria-live="polite"
                 >
                     {errorMessage}
                 </div>

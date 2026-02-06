@@ -215,7 +215,27 @@ async fn handle_signal_message(msg: SignalMessage) {
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn wavry_connect_signaling(
+pub unsafe extern "C" fn wavry_connect_signaling(token_ptr: *const c_char) -> i32 {
+    if token_ptr.is_null() {
+        return -1;
+    }
+
+    let c_token = CStr::from_ptr(token_ptr);
+    let token = match c_token.to_str() {
+        Ok(s) => s.to_string(),
+        Err(_) => return -2,
+    };
+
+    let default_url = "wss://auth.wavry.dev/ws".to_string();
+    RUNTIME.spawn(async move {
+        start_signaling_bg(default_url, token).await;
+    });
+
+    0
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn wavry_connect_signaling_with_url(
     url_ptr: *const c_char,
     token_ptr: *const c_char,
 ) -> i32 {

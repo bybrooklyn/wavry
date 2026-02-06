@@ -1,9 +1,11 @@
 use std::fs;
+use std::future::Future;
 use std::os::fd::{AsRawFd, OwnedFd};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::thread;
+use std::time::Duration;
 
 use anyhow::{anyhow, Context, Result};
 use ashpd::desktop::{
@@ -29,13 +31,36 @@ use gstreamer_app as gst_app;
 use gstreamer_video as gst_video;
 use tokio::runtime::Builder as RuntimeBuilder;
 use tokio::sync::mpsc;
+use tokio::time::sleep;
+use x11rb::protocol::xproto::{ConnectionExt as X11ConnectionExt, Window};
+use x11rb::protocol::xtest::ConnectionExt as XTestExt;
 
 use wavry_media::{FrameData, FrameFormat, RawFrame};
 
 use crate::{FrameCapturer, InputInjector};
 
+fn element_available(name: &str) -> bool {
+    gst::ElementFactory::find(name).is_some()
+}
+
+fn require_elements(names: &[&str]) -> Result<()> {
+    let missing: Vec<&str> = names
+        .iter()
+        .copied()
+        .filter(|name| !element_available(name))
+        .collect();
+    if missing.is_empty() {
+        Ok(())
+    } else {
+        Err(anyhow!(
+            "missing GStreamer elements: {}",
+            missing.join(", ")
+        ))
+    }
+}
+
 pub struct PipewireCapturer {
-    _fd: OwnedFd,
+    _fd: Option<OwnedFd>,
     #[allow(dead_code)]
     pipeline: gst::Pipeline,
     appsink: gst_app::AppSink,
@@ -44,12 +69,28 @@ pub struct PipewireCapturer {
 impl PipewireCapturer {
     pub async fn new() -> Result<Self> {
         gst::init()?;
-        let (fd, node_id) = open_portal_stream().await?;
-        let pipeline_str = format!(
-            "pipewiresrc fd={} path={} do-timestamp=true ! videoconvert ! video/x-raw,format=RGBA ! appsink name=sink max-buffers=1 drop=true sync=false",
-            fd.as_raw_fd(),
-            node_id
-        );
+        let portal = open_portal_stream().await;
+        let (pipeline_str, fd_opt) = match portal {
+            Ok((fd, node_id)) => {
+                require_elements(&["pipewiresrc", "videoconvert", "appsink"])?;
+                let pipeline_str = format!(
+                    "pipewiresrc fd={} path={} do-timestamp=true ! videoconvert ! video/x-raw,format=RGBA ! appsink name=sink max-buffers=1 drop=true sync=false",
+                    fd.as_raw_fd(),
+                    node_id
+                );
+                (pipeline_str, Some(fd))
+            }
+            Err(err) => {
+                if std::env::var_os("DISPLAY").is_some() {
+                    require_elements(&["ximagesrc", "videoconvert", "appsink"])?;
+                    tracing::warn!("PipeWire portal failed, falling back to X11 capture: {}", err);
+                    let pipeline_str = "ximagesrc use-damage=0 ! videoconvert ! video/x-raw,format=RGBA ! appsink name=sink max-buffers=1 drop=true sync=false".to_string();
+                    (pipeline_str, None)
+                } else {
+                    return Err(err);
+                }
+            }
+        };
 
         let pipeline = gst::parse::launch(&pipeline_str)?
             .downcast::<gst::Pipeline>()
@@ -63,7 +104,7 @@ impl PipewireCapturer {
         pipeline.set_state(gst::State::Playing)?;
 
         Ok(Self {
-            _fd: fd,
+            _fd: fd_opt,
             pipeline,
             appsink,
         })
@@ -101,6 +142,7 @@ impl FrameCapturer for PipewireCapturer {
 pub enum UinputInjector {
     Uinput(UinputInner),
     Portal(PortalInjector),
+    X11(X11Injector),
 }
 
 impl UinputInjector {
@@ -110,7 +152,19 @@ impl UinputInjector {
                 return Ok(UinputInjector::Portal(portal));
             }
         }
-        Ok(UinputInjector::Uinput(UinputInner::new()?))
+
+        match UinputInner::new() {
+            Ok(inner) => Ok(UinputInjector::Uinput(inner)),
+            Err(err) => {
+                if std::env::var_os("DISPLAY").is_some() {
+                    if let Ok(x11) = X11Injector::new() {
+                        tracing::warn!("uinput init failed, falling back to X11 input: {}", err);
+                        return Ok(UinputInjector::X11(x11));
+                    }
+                }
+                Err(err)
+            }
+        }
     }
 }
 
@@ -119,6 +173,7 @@ impl InputInjector for UinputInjector {
         match self {
             UinputInjector::Uinput(inner) => inner.key(keycode, pressed),
             UinputInjector::Portal(portal) => portal.key(keycode, pressed),
+            UinputInjector::X11(x11) => x11.key(keycode, pressed),
         }
     }
 
@@ -126,6 +181,7 @@ impl InputInjector for UinputInjector {
         match self {
             UinputInjector::Uinput(inner) => inner.mouse_button(button, pressed),
             UinputInjector::Portal(portal) => portal.mouse_button(button, pressed),
+            UinputInjector::X11(x11) => x11.mouse_button(button, pressed),
         }
     }
 
@@ -133,6 +189,7 @@ impl InputInjector for UinputInjector {
         match self {
             UinputInjector::Uinput(inner) => inner.mouse_motion(dx, dy),
             UinputInjector::Portal(portal) => portal.mouse_motion(dx, dy),
+            UinputInjector::X11(x11) => x11.mouse_motion(dx, dy),
         }
     }
 
@@ -140,6 +197,7 @@ impl InputInjector for UinputInjector {
         match self {
             UinputInjector::Uinput(inner) => inner.mouse_absolute(x, y),
             UinputInjector::Portal(portal) => portal.mouse_absolute(x, y),
+            UinputInjector::X11(x11) => x11.mouse_absolute(x, y),
         }
     }
 }
@@ -189,7 +247,11 @@ impl UinputInner {
 impl InputInjector for UinputInner {
     fn key(&mut self, keycode: u32, pressed: bool) -> Result<()> {
         let value = if pressed { 1 } else { 0 };
-        self.emit(InputEvent::new(EventType::KEY, keycode.try_into().unwrap(), value))?;
+        let code = match u16::try_from(keycode) {
+            Ok(code) => code,
+            Err(_) => return Ok(()),
+        };
+        self.emit(InputEvent::new(EventType::KEY, code, value))?;
         self.sync()
     }
 
@@ -222,6 +284,90 @@ impl InputInjector for UinputInner {
     }
 }
 
+struct X11Injector {
+    conn: x11rb::rust_connection::RustConnection,
+    root: Window,
+}
+
+impl X11Injector {
+    fn new() -> Result<Self> {
+        let (conn, screen_num) = x11rb::connect(None)?;
+        let root = conn.setup().roots[screen_num].root;
+        Ok(Self { conn, root })
+    }
+
+    fn to_x_keycode(keycode: u32) -> Option<u8> {
+        let code = keycode.saturating_add(8);
+        u8::try_from(code).ok()
+    }
+
+    fn clamp_i16(value: i32) -> i16 {
+        value.clamp(i16::MIN as i32, i16::MAX as i32) as i16
+    }
+
+    fn motion_absolute(&self, x: i32, y: i32) -> Result<()> {
+        let x = Self::clamp_i16(x);
+        let y = Self::clamp_i16(y);
+        self.conn
+            .xtest_fake_input(
+                x11rb::protocol::xproto::MOTION_NOTIFY,
+                0,
+                0,
+                self.root,
+                x,
+                y,
+                0,
+            )?;
+        self.conn.flush()?;
+        Ok(())
+    }
+
+    fn motion_relative(&self, dx: i32, dy: i32) -> Result<()> {
+        let pointer = self.conn.query_pointer(self.root)?.reply()?;
+        let x = pointer.root_x as i32 + dx;
+        let y = pointer.root_y as i32 + dy;
+        self.motion_absolute(x, y)
+    }
+}
+
+impl InputInjector for X11Injector {
+    fn key(&mut self, keycode: u32, pressed: bool) -> Result<()> {
+        let code = match Self::to_x_keycode(keycode) {
+            Some(code) => code,
+            None => return Ok(()),
+        };
+        let event = if pressed {
+            x11rb::protocol::xproto::KEY_PRESS
+        } else {
+            x11rb::protocol::xproto::KEY_RELEASE
+        };
+        self.conn
+            .xtest_fake_input(event, code, 0, self.root, 0, 0, 0)?;
+        self.conn.flush()?;
+        Ok(())
+    }
+
+    fn mouse_button(&mut self, button: u8, pressed: bool) -> Result<()> {
+        let event = if pressed {
+            x11rb::protocol::xproto::BUTTON_PRESS
+        } else {
+            x11rb::protocol::xproto::BUTTON_RELEASE
+        };
+        self.conn
+            .xtest_fake_input(event, button, 0, self.root, 0, 0, 0)?;
+        self.conn.flush()?;
+        Ok(())
+    }
+
+    fn mouse_motion(&mut self, dx: i32, dy: i32) -> Result<()> {
+        self.motion_relative(dx, dy)
+    }
+
+    fn mouse_absolute(&mut self, x: i32, y: i32) -> Result<()> {
+        self.motion_absolute(x, y)
+    }
+}
+
 enum PortalEvent {
     Key { keycode: u32, pressed: bool },
     Button { button: i32, pressed: bool },
@@ -242,76 +388,71 @@ impl PortalInjector {
         let ready_flag = ready.clone();
 
         thread::spawn(move || {
-            let runtime = RuntimeBuilder::new_current_thread()
-                .enable_all()
-                .build();
-            let runtime = match runtime {
-                Ok(rt) => rt,
-                Err(err) => {
-                    tracing::warn!("Wayland input runtime init failed: {}", err);
-                    return;
-                }
-            };
-
-            runtime.block_on(async move {
-                let proxy = match RemoteDesktop::new().await {
-                    Ok(proxy) => proxy,
+            let mut backoff_ms = 500u64;
+            loop {
+                ready_flag.store(false, Ordering::SeqCst);
+                let runtime = RuntimeBuilder::new_current_thread().enable_all().build();
+                let runtime = match runtime {
+                    Ok(rt) => rt,
                     Err(err) => {
-                        tracing::warn!("RemoteDesktop init failed: {}", err);
-                        return;
+                        tracing::warn!("Wayland input runtime init failed: {}", err);
+                        thread::sleep(Duration::from_millis(backoff_ms));
+                        backoff_ms = (backoff_ms * 2).min(4_000);
+                        continue;
                     }
                 };
 
-                let session = match proxy.create_session().await {
-                    Ok(session) => session,
-                    Err(err) => {
-                        tracing::warn!("RemoteDesktop session failed: {}", err);
-                        return;
-                    }
-                };
+                let result: Result<()> = runtime.block_on(async {
+                    let proxy = RemoteDesktop::new().await?;
+                    let session = proxy.create_session().await?;
 
-                let types = DeviceType::Pointer | DeviceType::Keyboard;
-                if let Ok(request) = proxy
-                    .select_devices(&session, types, None, PersistMode::DoNot)
-                    .await
-                {
-                    let _ = request.response();
+                    let types = DeviceType::Pointer | DeviceType::Keyboard;
+                    let request = proxy
+                        .select_devices(&session, types, None, PersistMode::DoNot)
+                        .await?;
+                    if request.response().is_err() {
+                        return Err(anyhow!("RemoteDesktop device selection denied"));
+                    }
+
+                    let request = proxy.start(&session, None).await?;
+                    if request.response().is_err() {
+                        return Err(anyhow!("RemoteDesktop start denied"));
+                    }
+
+                    ready_flag.store(true, Ordering::SeqCst);
+
+                    while let Some(event) = rx.recv().await {
+                        match event {
+                            PortalEvent::Key { keycode, pressed } => {
+                                let state = if pressed { KeyState::Pressed } else { KeyState::Released };
+                                let _ = proxy.notify_keyboard_keycode(&session, keycode as i32, state).await;
+                            }
+                            PortalEvent::Button { button, pressed } => {
+                                let state = if pressed { KeyState::Pressed } else { KeyState::Released };
+                                let _ = proxy.notify_pointer_button(&session, button, state).await;
+                            }
+                            PortalEvent::Motion { dx, dy } => {
+                                let _ = proxy.notify_pointer_motion(&session, dx, dy).await;
+                            }
+                            PortalEvent::Axis { dx, dy } => {
+                                let _ = proxy.notify_pointer_axis(&session, dx, dy, true).await;
+                            }
+                        }
+                    }
+                    Ok(())
+                });
+
+                if let Err(err) = result {
+                    tracing::warn!("RemoteDesktop session failed: {}", err);
                 }
 
-                match proxy.start(&session, None).await {
-                    Ok(request) => {
-                        if request.response().is_err() {
-                            tracing::warn!("RemoteDesktop start denied");
-                            return;
-                        }
-                    }
-                    Err(err) => {
-                        tracing::warn!("RemoteDesktop start failed: {}", err);
-                        return;
-                    }
+                if rx.is_closed() {
+                    break;
                 }
 
-                ready_flag.store(true, Ordering::SeqCst);
-
-                while let Some(event) = rx.recv().await {
-                    match event {
-                        PortalEvent::Key { keycode, pressed } => {
-                            let state = if pressed { KeyState::Pressed } else { KeyState::Released };
-                            let _ = proxy.notify_keyboard_keycode(&session, keycode as i32, state).await;
-                        }
-                        PortalEvent::Button { button, pressed } => {
-                            let state = if pressed { KeyState::Pressed } else { KeyState::Released };
-                            let _ = proxy.notify_pointer_button(&session, button, state).await;
-                        }
-                        PortalEvent::Motion { dx, dy } => {
-                            let _ = proxy.notify_pointer_motion(&session, dx, dy).await;
-                        }
-                        PortalEvent::Axis { dx, dy } => {
-                            let _ = proxy.notify_pointer_axis(&session, dx, dy, true).await;
-                        }
-                    }
-                }
-            });
+                thread::sleep(Duration::from_millis(backoff_ms));
+                backoff_ms = (backoff_ms * 2).min(4_000);
+            }
         });
 
         Ok(Self {
@@ -384,6 +525,10 @@ fn is_wayland_session() -> bool {
 }
 
 async fn open_portal_stream() -> Result<(OwnedFd, u32)> {
+    with_portal_retry("screencast", open_portal_stream_inner).await
+}
+
+async fn open_portal_stream_inner() -> Result<(OwnedFd, u32)> {
     let proxy = Screencast::new().await?;
     let session = proxy.create_session().await?;
     let restore_token = load_restore_token();
@@ -407,6 +552,43 @@ async fn open_portal_stream() -> Result<(OwnedFd, u32)> {
         .get(0)
         .ok_or_else(|| anyhow!("no screencast streams returned"))?;
     Ok((fd, stream.pipe_wire_node_id()))
+}
+
+async fn with_portal_retry<F, Fut, T>(label: &str, mut op: F) -> Result<T>
+where
+    F: FnMut() -> Fut,
+    Fut: Future<Output = Result<T>>,
+{
+    const MAX_ATTEMPTS: usize = 3;
+    const BASE_DELAY_MS: u64 = 500;
+
+    let mut last_err = None;
+    for attempt in 1..=MAX_ATTEMPTS {
+        match op().await {
+            Ok(result) => return Ok(result),
+            Err(err) => {
+                tracing::warn!(
+                    "Portal {} attempt {}/{} failed: {}",
+                    label,
+                    attempt,
+                    MAX_ATTEMPTS,
+                    err
+                );
+                last_err = Some(err);
+                if attempt < MAX_ATTEMPTS {
+                    let delay = BASE_DELAY_MS * (1u64 << (attempt - 1));
+                    sleep(Duration::from_millis(delay)).await;
+                }
+            }
+        }
+    }
+    let err = last_err.unwrap_or_else(|| anyhow!("unknown portal error"));
+    Err(anyhow!(
+        "Portal {} failed after {} attempts. Check permissions and portal availability: {}",
+        label,
+        MAX_ATTEMPTS,
+        err
+    ))
 }
 
 fn load_restore_token() -> Option<String> {

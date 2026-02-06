@@ -63,6 +63,7 @@ const K_CG_SESSION_EVENT_TAP: u32 = 1;
 pub struct MacInputInjector {
     width: f32,
     height: f32,
+    gamepad_deadzone: f32,
 }
 
 impl MacInputInjector {
@@ -70,11 +71,39 @@ impl MacInputInjector {
         Self {
             width: width as f32,
             height: height as f32,
+            gamepad_deadzone: 0.1,
         }
+    }
+
+    pub fn with_gamepad_deadzone(width: u32, height: u32, deadzone: f32) -> Self {
+        Self {
+            width: width as f32,
+            height: height as f32,
+            gamepad_deadzone: normalize_gamepad_deadzone(deadzone),
+        }
+    }
+
+    pub fn set_gamepad_deadzone(&mut self, deadzone: f32) {
+        self.gamepad_deadzone = normalize_gamepad_deadzone(deadzone);
     }
 }
 
 unsafe impl Send for MacInputInjector {}
+
+fn normalize_gamepad_deadzone(deadzone: f32) -> f32 {
+    deadzone.clamp(0.0, 0.95)
+}
+
+fn apply_gamepad_deadzone(value: f32, deadzone: f32) -> f32 {
+    let deadzone = normalize_gamepad_deadzone(deadzone);
+    let abs = value.abs();
+    if abs <= deadzone {
+        0.0
+    } else {
+        let scaled = (abs - deadzone) / (1.0 - deadzone);
+        scaled.copysign(value).clamp(-1.0, 1.0)
+    }
+}
 
 impl crate::InputInjector for MacInputInjector {
     fn inject(&mut self, event: InputEvent) -> Result<()> {
@@ -124,8 +153,16 @@ impl crate::InputInjector for MacInputInjector {
                 InputEvent::KeyUp { key_code } => {
                     CGEventCreateKeyboardEvent(null(), key_code as u16, false)
                 }
-                InputEvent::Gamepad { .. } => {
-                    // TODO: Implement macOS gamepad injection (requires Foohid/VHID)
+                InputEvent::Gamepad { axes, buttons, .. } => {
+                    // macOS gamepad injection is still pending (Foohid/VHID), but we still
+                    // apply deadzone filtering here so noisy axes are ignored consistently.
+                    let has_axis_activity = axes.iter().any(|axis| {
+                        apply_gamepad_deadzone(axis.value, self.gamepad_deadzone) != 0.0
+                    });
+                    let has_button_activity = buttons.iter().any(|button| button.pressed);
+                    if has_axis_activity || has_button_activity {
+                        log::debug!("macOS gamepad event received, injection not yet implemented");
+                    }
                     std::ptr::null_mut()
                 }
                 _ => std::ptr::null_mut(),

@@ -1,11 +1,10 @@
 //! Integration tests for encrypted connection over UDP.
 
-use std::net::SocketAddr;
 use std::time::Duration;
 use tokio::net::UdpSocket;
 use tokio::time::timeout;
 
-use rift_crypto::connection::{handshake_type, SecureClient, SecureServer};
+use rift_crypto::connection::{SecureClient, SecureServer};
 
 /// Test full Noise XX handshake over UDP sockets
 #[tokio::test]

@@ -18,8 +18,16 @@ mod host {
     #[cfg(not(target_os = "linux"))]
     use wavry_media::DummyEncoder as VideoEncoder;
     #[cfg(target_os = "linux")]
+    use wavry_media::LinuxProbe;
+    #[cfg(target_os = "macos")]
+    use wavry_media::MacProbe;
+    #[cfg(target_os = "linux")]
     use wavry_media::PipewireEncoder as VideoEncoder;
-    use wavry_media::{Codec, EncodeConfig, EncodedFrame, Resolution as MediaResolution};
+    #[cfg(target_os = "windows")]
+    use wavry_media::WindowsProbe;
+    use wavry_media::{
+        CapabilityProbe, Codec, EncodeConfig, EncodedFrame, Resolution as MediaResolution,
+    };
 
     use bytes::Bytes;
     use socket2::SockRef;
@@ -43,13 +51,22 @@ mod host {
     #[derive(Parser, Debug)]
     #[command(name = "wavry-server")]
     struct Args {
-        #[arg(long, default_value = "0.0.0.0:5000")]
+        #[arg(long, default_value = "127.0.0.1:5000")]
         listen: SocketAddr,
 
         /// Disable encryption (for testing/debugging)
         #[arg(long, default_value = "false")]
         no_encrypt: bool,
+    }
 
+    fn env_bool(name: &str, default: bool) -> bool {
+        match std::env::var(name) {
+            Ok(value) => matches!(
+                value.trim().to_ascii_lowercase().as_str(),
+                "1" | "true" | "yes" | "on"
+            ),
+            Err(_) => default,
+        }
     }
 
     /// Crypto state for a peer
@@ -162,6 +179,67 @@ mod host {
         } else {
             Codec::H264
         }
+    }
+
+    fn filter_realtime_codecs(
+        caps: Vec<wavry_media::VideoCodecCapability>,
+        fallback: Vec<Codec>,
+    ) -> Vec<Codec> {
+        let mut preferred: Vec<Codec> = caps
+            .into_iter()
+            .filter(|cap| cap.codec != Codec::Av1 || cap.hardware_accelerated)
+            .map(|cap| cap.codec)
+            .collect();
+
+        if preferred.is_empty() {
+            preferred = fallback
+                .into_iter()
+                .filter(|codec| *codec != Codec::Av1)
+                .collect();
+        }
+
+        if !preferred.contains(&Codec::H264) {
+            preferred.push(Codec::H264);
+        }
+        preferred
+    }
+
+    #[cfg(target_os = "linux")]
+    fn local_supported_encoders() -> Vec<Codec> {
+        let probe = LinuxProbe;
+        filter_realtime_codecs(
+            probe.encoder_capabilities().unwrap_or_default(),
+            probe
+                .supported_encoders()
+                .unwrap_or_else(|_| vec![Codec::H264]),
+        )
+    }
+
+    #[cfg(target_os = "macos")]
+    fn local_supported_encoders() -> Vec<Codec> {
+        let probe = MacProbe;
+        filter_realtime_codecs(
+            probe.encoder_capabilities().unwrap_or_default(),
+            probe
+                .supported_encoders()
+                .unwrap_or_else(|_| vec![Codec::H264]),
+        )
+    }
+
+    #[cfg(target_os = "windows")]
+    fn local_supported_encoders() -> Vec<Codec> {
+        let probe = WindowsProbe;
+        filter_realtime_codecs(
+            probe.encoder_capabilities().unwrap_or_default(),
+            probe
+                .supported_encoders()
+                .unwrap_or_else(|_| vec![Codec::H264]),
+        )
+    }
+
+    #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
+    fn local_supported_encoders() -> Vec<Codec> {
+        vec![Codec::H264]
     }
 
     impl PeerState {
@@ -298,6 +376,12 @@ mod host {
         let args = Args::parse();
         tracing_subscriber::fmt().with_env_filter("info").init();
 
+        if !args.listen.ip().is_loopback() && !env_bool("WAVRY_SERVER_ALLOW_PUBLIC_BIND", false) {
+            return Err(anyhow!(
+                "refusing non-loopback server bind without WAVRY_SERVER_ALLOW_PUBLIC_BIND=1"
+            ));
+        }
+
         let socket = UdpSocket::bind(args.listen).await?;
         if let Err(e) = SockRef::from(&socket).set_tos_v4(DSCP_EF) {
             debug!("failed to set DSCP/TOS: {}", e);
@@ -327,18 +411,8 @@ mod host {
         let mut active_peer: Option<SocketAddr> = None;
         let mut frame_rx: Option<mpsc::Receiver<FrameIn>> = None;
         let mut selected_codec: Option<Codec> = None;
-        let local_supported = {
-            #[cfg(target_os = "linux")]
-            {
-                wavry_media::LinuxProbe
-                    .supported_encoders()
-                    .unwrap_or_else(|_| vec![Codec::H264])
-            }
-            #[cfg(not(target_os = "linux"))]
-            {
-                vec![Codec::H264]
-            }
-        };
+        let local_supported = local_supported_encoders();
+        info!("Local encoder candidates: {:?}", local_supported);
         let no_encrypt = args.no_encrypt;
 
         loop {
@@ -472,7 +546,15 @@ mod host {
 
                 let msg =
                     decode_msg(&plaintext).map_err(|e| anyhow!("Proto decode error: {}", e))?;
-                handle_rift_msg(socket, peer_state, active_peer, peer, msg, injector, local_supported)
+                handle_rift_msg(
+                    socket,
+                    peer_state,
+                    active_peer,
+                    peer,
+                    msg,
+                    injector,
+                    local_supported,
+                )
                 .await
             }
         }
@@ -629,6 +711,9 @@ mod host {
                     }
                     rift_core::control_message::Content::PoseUpdate(pose) => {
                         let _ = pose;
+                    }
+                    rift_core::control_message::Content::HandPoseUpdate(hand_pose) => {
+                        let _ = hand_pose;
                     }
                     rift_core::control_message::Content::VrTiming(_timing) => {
                         // Reserved for VR timing hints.

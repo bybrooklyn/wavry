@@ -4,10 +4,11 @@
 
 ### PCVR (Linux/Windows)
 - [x] **OpenXR PCVR adapter**: Linux Wayland (Vulkan) + X11 (OpenGL), Windows D3D11.
-- [ ] **Stereo submission**: per-eye swapchain layout and view-specific transforms.
-- [ ] **Controller/hand input**: OpenXR action bindings for tracked devices.
-- [ ] **Vulkan upload optimization**: staging reuse + async submit (avoid queue-wait per frame).
-- [ ] **Frame format + color space**: confirm swapchain format selection and gamma handling.
+- [x] **Stereo submission**: per-eye swapchain layout and view-specific transforms.
+- [x] **Controller/hand input**: OpenXR action bindings for tracked devices.
+- [x] **OpenXR hand tracking**: `XR_EXT_hand_tracking` + RIFT hand-pose control message path.
+- [x] **Vulkan upload optimization**: staging reuse + async submit (avoid queue-wait per frame).
+- [x] **Frame format + color space**: runtime validation of swapchain format/gamma per runtime + headset.
 
 ### macOS Audio
 - [x] **Implement `MacAudioCapturer` Logic**:
@@ -17,27 +18,37 @@
     - [x] Decode Opus packets and play via `cpal` with a short buffer.
 
 ### Gamepad Support
-- [ ] **Connect Gamepad UI to Backend**:
-    - [ ] Update `start_session` command to accept `gamepad_enabled` and `deadzone` from `appState`.
-    - [ ] Pass these settings to `ClientConfig` and `InputInjector`.
-    - [ ] Implement deadzone filtering in `MacInputInjector` and `WindowsInputInjector`.
+- [x] **Connect Gamepad UI to Backend**:
+    - [x] Update `start_session` command to accept `gamepad_enabled` and `deadzone` from `appState`.
+    - [x] Pass these settings to `ClientConfig` and input capture/injector paths.
+    - [x] Implement deadzone filtering in `MacInputInjector` and `WindowsInputInjector`.
 
 ### Host Integration
-- [ ] **Monitor Selection**:
-    - [ ] Implement `enumerate_displays` in `MacProbe` (currently returns empty).
-    - [ ] expose display list to `wavry-desktop` UI.
-    - [ ] Allow user to select which display to capture in `start_host`.
+- [x] **Monitor Selection (macOS/Windows desktop app)**:
+    - [x] Implement `enumerate_displays` in `MacProbe`.
+    - [x] Expose display list to `wavry-desktop` UI.
+    - [x] Allow user to select which display to capture in `start_host`.
+    - [x] Linux display probe (`list_monitors`) via Wayland portal metadata + X11 RandR fallback.
 
 ## Future Phases
 
+### Web Client (Hybrid Transport)
+- [x] **WebTransport runtime binding**: feature-gated dev runtime implementation wired to the WebTransport skeleton.
+- [x] **WebRTC signaling skeleton in gateway**: minimal HTTP/WS handlers for SDP + ICE exchange.
+- [x] **Browser reference client stub**: minimal web app for connect/input/control signaling.
+
 ### Mobile & Native Clients
 - [ ] Android Core (NDK) implementation.
+    - [x] JNI bridge + Rust FFI bindings baseline (`apps/android/app/src/main/cpp`).
+    - [ ] Quest/OpenXR integration and Android media/input paths.
 - [ ] Android UI (Jetpack Compose).
+    - [x] Compose control-plane shell (host/client controls + live stats).
+    - [ ] Permissions flow, onboarding, and Quest-safe immersive layouts.
 - [ ] Native macOS Client (SwiftUI) for better performance than Tauri.
 
 ### Infrastructure & Optimization
-- [ ] **AV1 Support**: Add AV1 hardware encoding support for M3/M4 Macs and supported GPUs.
-- [ ] **10-bit HDR**: Investigate pipeline support for 10-bit color.
+- [x] **AV1 Support**: Hardware-gated AV1 encode support added for M3/M4 Macs and supported GPUs.
+- [ ] **10-bit HDR**: Wire end-to-end 10-bit/HDR transport path (capability detection now in place).
 
 ## Research Notes: macOS Audio Capture
 

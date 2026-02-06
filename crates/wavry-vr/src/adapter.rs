@@ -1,11 +1,18 @@
 use std::sync::Arc;
 
-use crate::{types::{EncoderControl, GamepadInput, NetworkStats, Pose, StreamConfig, VideoFrame, VrTiming}, VrResult};
+use crate::{
+    types::{
+        EncoderControl, GamepadInput, HandPose, NetworkStats, Pose, StreamConfig, VideoFrame,
+        VrTiming,
+    },
+    VrResult,
+};
 
 pub trait VrAdapterCallbacks: Send + Sync {
     // ALVR -> Wavry
     fn on_video_frame(&self, frame: VideoFrame, timestamp_us: u64, frame_id: u64);
     fn on_pose_update(&self, pose: Pose, timestamp_us: u64);
+    fn on_hand_pose_update(&self, hand_pose: HandPose, timestamp_us: u64);
     fn on_vr_timing(&self, timing: VrTiming);
     fn on_gamepad_input(&self, input: GamepadInput);
 }

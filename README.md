@@ -54,6 +54,7 @@ graph TD
 | **`wavry-desktop`** | **Integration** | Tauri-based host and client application for Windows and Linux. |
 | **`wavry-gateway`** | **Signaling** | Real-time signaling gateway for peer coordination and SDP exchange. |
 | **`wavry-relay`** | **Transport** | Blind UDP forwarder for encrypted traffic. |
+| **`wavry-web`** | **Web** | WebTransport/WebRTC hybrid control plane types and integration skeleton. |
 
 ---
 
@@ -107,6 +108,37 @@ cargo build --release --workspace
     cargo run --bin wavry-relay -- --master-url http://localhost:8080
     ```
 
+### Linux Capture Smoke Test
+```bash
+./scripts/linux-display-smoke.sh
+```
+See `docs/WAVRY_TESTING.md` for the manual Linux monitor-selection validation matrix.
+
+### Android Bring-Up (NDK + Compose)
+One-command build:
+```bash
+./scripts/dev-android.sh
+```
+This script:
+1. Builds Android Rust FFI static libs.
+2. Auto-detects Java from Android Studio when possible.
+3. Uses `gradle` if present, otherwise auto-downloads a local Gradle.
+4. Runs `:app:assembleDebug`.
+
+FFI-only mode:
+```bash
+./scripts/dev-android.sh --ffi-only
+```
+See `apps/android/README.md` for details.
+
+### Auth Admin Panel
+- Set `ADMIN_PANEL_TOKEN` before starting `wavry-gateway`.
+- Open `http://localhost:3000/admin`.
+- The panel calls:
+  - `GET /admin/api/overview`
+  - `POST /admin/api/sessions/revoke`
+- Send `Authorization: Bearer <token>` or `x-admin-token: <token>`.
+
 ---
 
 ## Contributing
@@ -138,3 +170,14 @@ See `TERMS.md` for the minimal hosted service policy.
 ## License
 
 Wavry is licensed under the **GNU Affero General Public License v3.0 (AGPL-3.0)**. See [`LICENSE`](LICENSE) for details.
+## Web Clients (Hybrid Path)
+
+Web clients are an on-ramp and compatibility layer. They do **not** speak RIFT directly.
+
+- **Control/Input:** WebTransport (QUIC datagrams + streams)
+- **Media:** WebRTC (SRTP video + audio)
+- **Fallback:** WebRTC DataChannel is used only if WebTransport is unavailable
+
+Native clients continue using full RIFT for maximum performance.
+
+See `docs/WEB_CLIENT.md` for message formats and connection flow.

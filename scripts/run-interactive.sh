@@ -7,6 +7,9 @@ REPO_ROOT="$(dirname "$SCRIPT_DIR")"
 
 cd "$REPO_ROOT"
 
+# Keep Rust/C dependency deployment target aligned with the Swift package target.
+export MACOSX_DEPLOYMENT_TARGET="${MACOSX_DEPLOYMENT_TARGET:-14.0}"
+
 # 1. Build Rust FFI
 echo "🦀 Building Wavry Core (Rust FFI)..."
 cargo build -p wavry-ffi

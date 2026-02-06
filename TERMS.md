@@ -1,9 +1,10 @@
 # Hosted Service Terms (Minimal)
 
-Wavry operates an official hosted service that provides:
+Wavry operates an official hosted service (wavry.dev) that provides:
 - authentication
 - matchmaking
 - fallback relay
+These services are provided on a **best-effort uptime** basis.
 
 ## Usage Policy
 - **Personal / non-commercial use:** free and unlimited.

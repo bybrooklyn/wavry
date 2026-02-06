@@ -1,20 +1,21 @@
 use crate::db::{self, Session, User};
+use crate::security;
 use argon2::{
     password_hash::{rand_core::OsRng, PasswordHash, PasswordHasher, PasswordVerifier, SaltString},
     Argon2,
 };
 use axum::{
-    extract::{Json, State},
-    http::StatusCode,
+    extract::{ConnectInfo, Json, State},
+    http::{header, HeaderMap, StatusCode},
     response::IntoResponse,
 };
 use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
+use std::net::SocketAddr;
 
 use rand::{thread_rng, Rng};
 use totp_rs::{Algorithm, TOTP};
 
-// DTOs
 #[derive(Deserialize)]
 pub struct RegisterRequest {
     pub email: String,
@@ -29,6 +30,14 @@ pub struct LoginRequest {
     pub email: String,
     pub password: String,
     pub totp_code: Option<String>,
+}
+
+#[derive(Deserialize)]
+pub struct EnableTotpRequest {
+    pub email: String,
+    pub password: String,
+    pub secret: String,
+    pub code: String,
 }
 
 #[derive(Serialize)]
@@ -48,40 +57,100 @@ pub struct ErrorResponse {
     pub error: String,
 }
 
-// Routes
+#[derive(Serialize)]
+pub struct LogoutResponse {
+    pub revoked: bool,
+}
+
+fn error_response(status: StatusCode, message: impl Into<String>) -> axum::response::Response {
+    (
+        status,
+        Json(ErrorResponse {
+            error: message.into(),
+        }),
+    )
+        .into_response()
+}
+
+fn rate_limit_key(scope: &str, addr: SocketAddr) -> String {
+    format!("{scope}:{}", addr.ip())
+}
+
+fn ensure_auth_rate_limit(scope: &str, addr: SocketAddr) -> bool {
+    security::allow_auth_request(&rate_limit_key(scope, addr))
+}
+
+fn is_reasonable_password_input(password: &str) -> bool {
+    !password.is_empty() && password.len() <= 128
+}
+
+fn decode_totp_secret(secret: &str) -> Result<Vec<u8>, &'static str> {
+    base32::decode(base32::Alphabet::Rfc4648 { padding: false }, secret)
+        .ok_or("Invalid TOTP secret encoding")
+}
+
+fn totp_from_secret(secret: &str) -> Result<TOTP, &'static str> {
+    let decoded = decode_totp_secret(secret)?;
+    TOTP::new(
+        Algorithm::SHA1,
+        6,
+        1,
+        30,
+        decoded,
+        None,
+        "wavry".to_string(),
+    )
+    .map_err(|_| "Failed to initialize TOTP")
+}
+
+fn extract_session_token(headers: &HeaderMap) -> Option<String> {
+    if let Some(value) = headers.get("x-session-token") {
+        if let Ok(token) = value.to_str() {
+            let trimmed = token.trim();
+            if !trimmed.is_empty() {
+                return Some(trimmed.to_string());
+            }
+        }
+    }
+
+    headers
+        .get(header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|raw| raw.strip_prefix("Bearer "))
+        .map(str::trim)
+        .filter(|token| !token.is_empty())
+        .map(ToOwned::to_owned)
+}
 
 pub async fn register(
     State(pool): State<SqlitePool>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
     Json(payload): Json<RegisterRequest>,
 ) -> impl IntoResponse {
-    // 1. Check if user exists
-    if let Ok(Some(_)) = db::get_user_by_email(&pool, &payload.email).await {
-        return (
-            StatusCode::CONFLICT,
-            Json(ErrorResponse {
-                error: "Email already exists".into(),
-            }),
-        )
-            .into_response();
+    if !ensure_auth_rate_limit("register", addr) {
+        return error_response(StatusCode::TOO_MANY_REQUESTS, "Too many requests");
     }
 
-    // 2. Hash Password
+    if !security::is_valid_email(&payload.email)
+        || !security::is_valid_password(&payload.password)
+        || !security::is_valid_display_name(&payload.display_name)
+        || !security::is_valid_username(&payload.username)
+        || !security::is_valid_public_key_hex(&payload.public_key)
+    {
+        return error_response(StatusCode::BAD_REQUEST, "Invalid registration payload");
+    }
+
+    if let Ok(Some(_)) = db::get_user_by_email(&pool, &payload.email).await {
+        return error_response(StatusCode::CONFLICT, "Email already exists");
+    }
+
     let salt = SaltString::generate(&mut OsRng);
     let argon2 = Argon2::default();
     let password_hash = match argon2.hash_password(payload.password.as_bytes(), &salt) {
         Ok(hash) => hash.to_string(),
-        Err(_) => {
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(ErrorResponse {
-                    error: "Hashing failed".into(),
-                }),
-            )
-                .into_response()
-        }
+        Err(_) => return error_response(StatusCode::INTERNAL_SERVER_ERROR, "Hashing failed"),
     };
 
-    // 3. Create User
     let user = match db::create_user(
         &pool,
         &payload.email,
@@ -92,32 +161,18 @@ pub async fn register(
     )
     .await
     {
-        Ok(u) => u,
-        Err(e) => {
-            tracing::error!("Failed to create user: {}", e);
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(ErrorResponse {
-                    error: "Database error".into(),
-                }),
-            )
-                .into_response();
+        Ok(user) => user,
+        Err(err) => {
+            tracing::error!("failed to create user: {}", err);
+            return error_response(StatusCode::INTERNAL_SERVER_ERROR, "Database error");
         }
     };
 
-    // 4. Create Session
-    let session = match db::create_session(&pool, &user.id, None).await {
-        // TODO: Get IP from header
-        Ok(s) => s,
-        Err(e) => {
-            tracing::error!("Failed to create session: {}", e);
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(ErrorResponse {
-                    error: "Session creation failed".into(),
-                }),
-            )
-                .into_response();
+    let session = match db::create_session(&pool, &user.id, Some(addr.ip().to_string())).await {
+        Ok(session) => session,
+        Err(err) => {
+            tracing::error!("failed to create session: {}", err);
+            return error_response(StatusCode::INTERNAL_SERVER_ERROR, "Session creation failed");
         }
     };
 
@@ -126,108 +181,79 @@ pub async fn register(
 
 pub async fn login(
     State(pool): State<SqlitePool>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
     Json(payload): Json<LoginRequest>,
 ) -> impl IntoResponse {
-    // 1. Get User
+    if !ensure_auth_rate_limit("login", addr) {
+        return error_response(StatusCode::TOO_MANY_REQUESTS, "Too many requests");
+    }
+
+    if !security::is_valid_email(&payload.email) || !is_reasonable_password_input(&payload.password)
+    {
+        return error_response(StatusCode::BAD_REQUEST, "Invalid login payload");
+    }
+
     let user = match db::get_user_by_email(&pool, &payload.email).await {
-        Ok(Some(u)) => u,
-        Ok(None) => {
-            return (
-                StatusCode::UNAUTHORIZED,
-                Json(ErrorResponse {
-                    error: "Invalid credentials".into(),
-                }),
-            )
-                .into_response()
-        }
-        Err(e) => {
-            tracing::error!("Database error: {}", e);
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(ErrorResponse {
-                    error: "Database error".into(),
-                }),
-            )
-                .into_response();
+        Ok(Some(user)) => user,
+        Ok(None) => return error_response(StatusCode::UNAUTHORIZED, "Invalid credentials"),
+        Err(err) => {
+            tracing::error!("database error during login: {}", err);
+            return error_response(StatusCode::INTERNAL_SERVER_ERROR, "Database error");
         }
     };
 
-    // 2. Verify Password
     let parsed_hash = match PasswordHash::new(&user.password_hash) {
-        Ok(h) => h,
-        Err(_) => {
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(ErrorResponse {
-                    error: "Invalid stored hash".into(),
-                }),
-            )
-                .into_response()
-        }
+        Ok(hash) => hash,
+        Err(_) => return error_response(StatusCode::INTERNAL_SERVER_ERROR, "Invalid stored hash"),
     };
 
-    let argon2 = Argon2::default();
-    if argon2
+    if Argon2::default()
         .verify_password(payload.password.as_bytes(), &parsed_hash)
         .is_err()
     {
-        return (
-            StatusCode::UNAUTHORIZED,
-            Json(ErrorResponse {
-                error: "Invalid credentials".into(),
-            }),
-        )
-            .into_response();
+        return error_response(StatusCode::UNAUTHORIZED, "Invalid credentials");
     }
 
-    // 2.5 Verify TOTP if enabled
-    if let Some(secret) = &user.totp_secret {
-        match payload.totp_code {
-            Some(code) => {
-                let totp = TOTP::new(
-                    Algorithm::SHA1,
-                    6,
-                    1,
-                    30,
-                    secret.clone().into_bytes().to_vec(),
-                    None,
-                    "wavry".to_string(),
-                )
-                .unwrap();
-                if !totp.check_current(&code).unwrap_or(false) {
-                    return (
-                        StatusCode::UNAUTHORIZED,
-                        Json(ErrorResponse {
-                            error: "Invalid 2FA code".into(),
-                        }),
-                    )
-                        .into_response();
-                }
+    if let Some(stored_secret) = &user.totp_secret {
+        let Some(code) = payload.totp_code.as_deref() else {
+            return error_response(StatusCode::UNAUTHORIZED, "2FA required");
+        };
+
+        if !security::is_valid_totp_code(code) {
+            return error_response(StatusCode::UNAUTHORIZED, "Invalid 2FA code");
+        }
+
+        let secret = match security::decrypt_totp_secret(stored_secret) {
+            Ok(secret) => secret,
+            Err(err) => {
+                tracing::error!("unable to decrypt stored TOTP secret: {}", err);
+                return error_response(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "2FA verification unavailable",
+                );
             }
-            None => {
-                return (
-                    StatusCode::UNAUTHORIZED,
-                    Json(ErrorResponse {
-                        error: "2FA required".into(),
-                    }),
+        };
+
+        let totp = match totp_from_secret(&secret) {
+            Ok(totp) => totp,
+            Err(_) => {
+                return error_response(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "2FA verification unavailable",
                 )
-                    .into_response();
             }
+        };
+
+        if !totp.check_current(code).unwrap_or(false) {
+            return error_response(StatusCode::UNAUTHORIZED, "Invalid 2FA code");
         }
     }
 
-    // 3. Create Session
-    let session = match db::create_session(&pool, &user.id, None).await {
-        Ok(s) => s,
-        Err(e) => {
-            tracing::error!("Failed to create session: {}", e);
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(ErrorResponse {
-                    error: "Session creation failed".into(),
-                }),
-            )
-                .into_response();
+    let session = match db::create_session(&pool, &user.id, Some(addr.ip().to_string())).await {
+        Ok(session) => session,
+        Err(err) => {
+            tracing::error!("failed to create session: {}", err);
+            return error_response(StatusCode::INTERNAL_SERVER_ERROR, "Session creation failed");
         }
     };
 
@@ -236,43 +262,40 @@ pub async fn login(
 
 pub async fn setup_totp(
     State(pool): State<SqlitePool>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
     Json(payload): Json<LoginRequest>,
 ) -> impl IntoResponse {
-    // 1. Verify User credentials again
+    if !ensure_auth_rate_limit("totp_setup", addr) {
+        return error_response(StatusCode::TOO_MANY_REQUESTS, "Too many requests");
+    }
+
+    if !security::is_valid_email(&payload.email) || !is_reasonable_password_input(&payload.password)
+    {
+        return error_response(StatusCode::BAD_REQUEST, "Invalid 2FA setup payload");
+    }
+
     let user = match db::get_user_by_email(&pool, &payload.email).await {
-        Ok(Some(u)) => u,
-        _ => {
-            return (
-                StatusCode::UNAUTHORIZED,
-                Json(ErrorResponse {
-                    error: "Auth failed".into(),
-                }),
-            )
-                .into_response()
-        }
+        Ok(Some(user)) => user,
+        _ => return error_response(StatusCode::UNAUTHORIZED, "Auth failed"),
     };
 
-    // Check password
-    let parsed_hash = PasswordHash::new(&user.password_hash).unwrap();
+    let parsed_hash = match PasswordHash::new(&user.password_hash) {
+        Ok(v) => v,
+        Err(_) => return error_response(StatusCode::INTERNAL_SERVER_ERROR, "Invalid stored hash"),
+    };
+
     if Argon2::default()
         .verify_password(payload.password.as_bytes(), &parsed_hash)
         .is_err()
     {
-        return (
-            StatusCode::UNAUTHORIZED,
-            Json(ErrorResponse {
-                error: "Auth failed".into(),
-            }),
-        )
-            .into_response();
+        return error_response(StatusCode::UNAUTHORIZED, "Auth failed");
     }
 
-    // 2. Generate Secret
     let mut secret_bytes = [0u8; 20];
     thread_rng().fill(&mut secret_bytes);
     let secret_vec = secret_bytes.to_vec();
 
-    let totp = TOTP::new(
+    let totp = match TOTP::new(
         Algorithm::SHA1,
         6,
         1,
@@ -280,107 +303,147 @@ pub async fn setup_totp(
         secret_vec,
         Some("Wavry".to_string()),
         payload.email.clone(),
-    )
-    .unwrap();
+    ) {
+        Ok(totp) => totp,
+        Err(err) => {
+            tracing::error!("failed to create TOTP secret: {}", err);
+            return error_response(StatusCode::INTERNAL_SERVER_ERROR, "2FA setup failed");
+        }
+    };
 
     let secret_encoded = totp.get_secret_base32();
-
-    let qr = totp.get_qr_base64().unwrap();
+    let qr_png_base64 = match totp.get_qr_base64() {
+        Ok(qr) => qr,
+        Err(err) => {
+            tracing::error!("failed to create TOTP QR: {}", err);
+            return error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "2FA QR generation failed",
+            );
+        }
+    };
 
     (
         StatusCode::OK,
         Json(TotpSetupResponse {
             secret: secret_encoded,
-            qr_png_base64: qr,
+            qr_png_base64,
         }),
     )
         .into_response()
-}
-
-#[derive(Deserialize)]
-pub struct EnableTotpRequest {
-    pub email: String,
-    pub password: String,
-    pub secret: String,
-    pub code: String,
 }
 
 pub async fn enable_totp(
     State(pool): State<SqlitePool>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
     Json(payload): Json<EnableTotpRequest>,
 ) -> impl IntoResponse {
-    // 1. Verify User
+    if !ensure_auth_rate_limit("totp_enable", addr) {
+        return error_response(StatusCode::TOO_MANY_REQUESTS, "Too many requests");
+    }
+
+    if !security::is_valid_email(&payload.email)
+        || !is_reasonable_password_input(&payload.password)
+        || !security::is_valid_totp_code(&payload.code)
+    {
+        return error_response(StatusCode::BAD_REQUEST, "Invalid 2FA enable payload");
+    }
+
     let user = match db::get_user_by_email(&pool, &payload.email).await {
-        Ok(Some(u)) => u,
-        _ => {
-            return (
-                StatusCode::UNAUTHORIZED,
-                Json(ErrorResponse {
-                    error: "Auth failed".into(),
-                }),
-            )
-                .into_response()
-        }
+        Ok(Some(user)) => user,
+        _ => return error_response(StatusCode::UNAUTHORIZED, "Auth failed"),
     };
 
-    // Check password
-    let parsed_hash = PasswordHash::new(&user.password_hash).unwrap();
+    let parsed_hash = match PasswordHash::new(&user.password_hash) {
+        Ok(v) => v,
+        Err(_) => return error_response(StatusCode::INTERNAL_SERVER_ERROR, "Invalid stored hash"),
+    };
+
     if Argon2::default()
         .verify_password(payload.password.as_bytes(), &parsed_hash)
         .is_err()
     {
-        return (
-            StatusCode::UNAUTHORIZED,
-            Json(ErrorResponse {
-                error: "Auth failed".into(),
-            }),
-        )
-            .into_response();
+        return error_response(StatusCode::UNAUTHORIZED, "Auth failed");
     }
 
-    // 2. Verify Code matches Secret
-    let totp = TOTP::new(
-        Algorithm::SHA1,
-        6,
-        1,
-        30,
-        payload.secret.clone().into_bytes().to_vec(),
-        None,
-        "wavry".to_string(),
-    )
-    .unwrap();
+    let totp = match totp_from_secret(&payload.secret) {
+        Ok(totp) => totp,
+        Err(_) => return error_response(StatusCode::BAD_REQUEST, "Invalid TOTP secret"),
+    };
 
     if !totp.check_current(&payload.code).unwrap_or(false) {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(ErrorResponse {
-                error: "Invalid code".into(),
-            }),
-        )
-            .into_response();
+        return error_response(StatusCode::BAD_REQUEST, "Invalid code");
     }
 
-    // 3. Enable in DB
-    if let Err(e) = db::enable_totp(&pool, &user.id, &payload.secret).await {
-        tracing::error!("DB error: {}", e);
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ErrorResponse {
-                error: "DB error".into(),
-            }),
-        )
-            .into_response();
+    let encrypted_secret = match security::encrypt_totp_secret(&payload.secret) {
+        Ok(secret) => secret,
+        Err(err) => {
+            tracing::error!("failed to encrypt TOTP secret: {}", err);
+            return error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "2FA secret encryption failed",
+            );
+        }
+    };
+
+    if let Err(err) = db::enable_totp(&pool, &user.id, &encrypted_secret).await {
+        tracing::error!("failed to enable TOTP in DB: {}", err);
+        return error_response(StatusCode::INTERNAL_SERVER_ERROR, "DB error");
     }
+
+    let refreshed_user = match db::get_user_by_email(&pool, &payload.email).await {
+        Ok(Some(user)) => user,
+        Ok(None) => {
+            return error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "User missing after 2FA update",
+            )
+        }
+        Err(err) => {
+            tracing::error!("failed to fetch refreshed user: {}", err);
+            return error_response(StatusCode::INTERNAL_SERVER_ERROR, "DB error");
+        }
+    };
+
+    let session = match db::create_session(&pool, &user.id, Some(addr.ip().to_string())).await {
+        Ok(session) => session,
+        Err(err) => {
+            tracing::error!("failed to create session: {}", err);
+            return error_response(StatusCode::INTERNAL_SERVER_ERROR, "Session creation failed");
+        }
+    };
 
     (
         StatusCode::OK,
         Json(AuthResponse {
-            user: db::get_user_by_email(&pool, &payload.email)
-                .await
-                .unwrap()
-                .unwrap(),
-            session: db::create_session(&pool, &user.id, None).await.unwrap(),
+            user: refreshed_user,
+            session,
         }),
     )
         .into_response()
+}
+
+pub async fn logout(
+    State(pool): State<SqlitePool>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+) -> impl IntoResponse {
+    if !ensure_auth_rate_limit("logout", addr) {
+        return error_response(StatusCode::TOO_MANY_REQUESTS, "Too many requests");
+    }
+
+    let Some(token) = extract_session_token(&headers) else {
+        return error_response(StatusCode::BAD_REQUEST, "Missing bearer token");
+    };
+    if !security::is_valid_session_token(&token) {
+        return error_response(StatusCode::BAD_REQUEST, "Invalid session token");
+    }
+
+    match db::revoke_session(&pool, &token).await {
+        Ok(revoked) => (StatusCode::OK, Json(LogoutResponse { revoked })).into_response(),
+        Err(err) => {
+            tracing::error!("failed to revoke session: {}", err);
+            error_response(StatusCode::INTERNAL_SERVER_ERROR, "Logout failed")
+        }
+    }
 }

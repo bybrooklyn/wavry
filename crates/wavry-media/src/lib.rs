@@ -87,10 +87,46 @@ pub struct DisplayInfo {
     pub resolution: Resolution,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub struct VideoCodecCapability {
+    pub codec: Codec,
+    pub hardware_accelerated: bool,
+    pub supports_10bit: bool,
+    pub supports_hdr10: bool,
+}
+
+impl VideoCodecCapability {
+    pub const fn sdr(codec: Codec, hardware_accelerated: bool) -> Self {
+        Self {
+            codec,
+            hardware_accelerated,
+            supports_10bit: false,
+            supports_hdr10: false,
+        }
+    }
+}
+
 pub trait CapabilityProbe: Send + Sync {
     fn supported_encoders(&self) -> Result<Vec<Codec>>;
     fn supported_decoders(&self) -> Result<Vec<Codec>>;
     fn enumerate_displays(&self) -> Result<Vec<DisplayInfo>>;
+
+    fn encoder_capabilities(&self) -> Result<Vec<VideoCodecCapability>> {
+        Ok(self
+            .supported_encoders()?
+            .into_iter()
+            .map(|codec| VideoCodecCapability::sdr(codec, false))
+            .collect())
+    }
+
+    fn supported_hardware_encoders(&self) -> Result<Vec<Codec>> {
+        Ok(self
+            .encoder_capabilities()?
+            .into_iter()
+            .filter(|cap| cap.hardware_accelerated)
+            .map(|cap| cap.codec)
+            .collect())
+    }
 }
 
 pub trait Renderer: Send {
@@ -172,7 +208,9 @@ mod linux;
 mod audio;
 
 #[cfg(target_os = "linux")]
-pub use linux::{GstAudioRenderer, GstVideoRenderer, LinuxProbe, PipewireAudioCapturer, PipewireEncoder};
+pub use linux::{
+    GstAudioRenderer, GstVideoRenderer, LinuxProbe, PipewireAudioCapturer, PipewireEncoder,
+};
 
 mod dummy;
 pub use dummy::{DummyEncoder, DummyRenderer};

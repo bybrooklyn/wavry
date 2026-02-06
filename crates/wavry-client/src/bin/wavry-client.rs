@@ -49,7 +49,10 @@ fn main() -> anyhow::Result<()> {
         identity_key: None,
         relay_info: None,
         max_resolution: None,
+        gamepad_enabled: true,
+        gamepad_deadzone: 0.1,
         vr_adapter,
+        runtime_stats: None,
     };
 
     tokio::runtime::Builder::new_multi_thread()
