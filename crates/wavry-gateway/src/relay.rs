@@ -1,8 +1,8 @@
+use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::net::UdpSocket;
 use tokio::sync::RwLock;
-use std::collections::HashMap;
 use tracing::{info, warn};
 use uuid::Uuid;
 
@@ -45,7 +45,7 @@ pub async fn run_relay_server(port: u16, state: RelayMap) -> anyhow::Result<()> 
         // Protocol:
         // 1. Handshake: 1 byte TYPE (0x01), 16 Bytes Token (UUID bytes)
         // 2. Data: Anything else is forwarded based on src_addr
-        
+
         if len == 17 && data[0] == 0x01 {
             // Handshake
             handle_handshake(&state, src_addr, &data[1..], &socket).await;
@@ -56,14 +56,19 @@ pub async fn run_relay_server(port: u16, state: RelayMap) -> anyhow::Result<()> 
     }
 }
 
-async fn handle_handshake(state: &RelayMap, src: SocketAddr, token_bytes: &[u8], socket: &UdpSocket) {
+async fn handle_handshake(
+    state: &RelayMap,
+    src: SocketAddr,
+    token_bytes: &[u8],
+    socket: &UdpSocket,
+) {
     let token_uuid = match Uuid::from_slice(token_bytes) {
         Ok(u) => u.to_string(),
         Err(_) => return,
     };
 
     let mut guard = state.write().await;
-    
+
     // We need to find which session this token belongs to
     // Simplified: Both Host and Client send the SAME token.
     // The first one to bind is stored as "HostAddr" (or just Peer A)
@@ -79,9 +84,12 @@ async fn handle_handshake(state: &RelayMap, src: SocketAddr, token_bytes: &[u8],
             // Avoid rebinding same addr
             if Some(src) != session.host_addr {
                 session.client_addr = Some(src);
-                info!("Relay: Peer B bonded for session {}. Ready to relay.", token_uuid);
+                info!(
+                    "Relay: Peer B bonded for session {}. Ready to relay.",
+                    token_uuid
+                );
                 let _ = socket.send_to(b"\x02OK", src).await;
-                
+
                 // Notify Peer A? Optional.
             }
         } else {
@@ -100,7 +108,7 @@ async fn handle_handshake(state: &RelayMap, src: SocketAddr, token_bytes: &[u8],
 
 async fn handle_forward(state: &RelayMap, src: SocketAddr, data: &[u8], socket: &UdpSocket) {
     // Reverse lookup: Src -> Target
-    // This is O(N) if we iterate. 
+    // This is O(N) if we iterate.
     // OPTIMIZATION: Maintain a separate `Addr -> TargetAddr` map for O(1) forwarding.
     // For MVP/Monolith, we can lock read and find.
     // Ideally `RelayMap` connects Token -> Session.
@@ -108,20 +116,20 @@ async fn handle_forward(state: &RelayMap, src: SocketAddr, data: &[u8], socket: 
     // Let's modify `run_relay_server` to keep a local fast-map `HashMap<SocketAddr, SocketAddr>`.
     // But `RelayMap` is modified by Signaling (to add tokens).
     // The shared state is tricky.
-    
+
     // Better: `RelayMap` stores the authoritative session state.
     // The Relay Loop maintains a local `FastMap`.
     // Periodically (or on handshake), `FastMap` is updated.
-    
+
     // Implementation for MVP: Write Lock + Find (Need write for rate limiting)
     let mut guard = state.write().await;
-    
+
     // Find session containing src
     // Note: iterating values_mut() allows modification
     for session in guard.values_mut() {
         let is_host = session.host_addr == Some(src);
         let is_client = session.client_addr == Some(src);
-        
+
         if is_host || is_client {
             // Check Rate Limit
             let now = std::time::Instant::now();
@@ -129,22 +137,26 @@ async fn handle_forward(state: &RelayMap, src: SocketAddr, data: &[u8], socket: 
                 session.bytes_sent = 0;
                 session.last_tick = now;
             }
-            
+
             if session.bytes_sent + data.len() > BANDWIDTH_LIMIT_BPS {
                 // Drop packet implies congestion or abuse
                 // debug!("Relay: Rate limit exceeded for session");
                 return;
             }
-            
+
             session.bytes_sent += data.len();
 
             // Forward
-            if let Some(target) = if is_host { session.client_addr } else { session.host_addr } {
-                 let _ = socket.send_to(data, target).await;
+            if let Some(target) = if is_host {
+                session.client_addr
+            } else {
+                session.host_addr
+            } {
+                let _ = socket.send_to(data, target).await;
             }
             return;
         }
     }
-    
+
     // debug!("Relay: packet dropped from unbonded source {}", src);
 }

@@ -36,13 +36,13 @@ pub enum SessionError {
 pub struct EncryptedSession {
     /// Noise transport session
     noise: NoiseSession,
-    
+
     /// Outgoing sequence number
     tx_seq: u64,
-    
+
     /// Sequence window for incoming packets
     rx_window: SequenceWindow,
-    
+
     /// Remote peer's public key (for identification)
     remote_public_key: [u8; 32],
 }
@@ -50,9 +50,7 @@ pub struct EncryptedSession {
 impl EncryptedSession {
     /// Create from an established Noise session.
     pub fn new(noise: NoiseSession) -> Result<Self, SessionError> {
-        let remote_public_key = noise
-            .remote_static()
-            .ok_or(SessionError::NotEstablished)?;
+        let remote_public_key = noise.remote_static().ok_or(SessionError::NotEstablished)?;
 
         Ok(Self {
             noise,

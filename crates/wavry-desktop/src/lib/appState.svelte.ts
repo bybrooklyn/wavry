@@ -37,6 +37,19 @@ export class AppState {
     isHosting = $state(false);
     isConnected = $state(false);
     connectionStatus = $state<"offline" | "ready" | "connecting" | "connected">("offline");
+    pcvrStatus = $state("PCVR: Unknown");
+
+    // Monitor state
+    monitors = $state<{ id: number, name: string, resolution: { width: number, height: number } }[]>([]);
+    selectedMonitorId = $state<number | null>(null);
+
+    // Resolution state
+    resolutionMode = $state<"native" | "client" | "custom">("native");
+    customResolution = $state<{ width: number, height: number }>({ width: 1920, height: 1080 });
+
+    // Gamepad state
+    gamepadEnabled = $state(true);
+    gamepadDeadzone = $state(0.1);
 
     // Settings
     authServer = $state("https://auth.wavry.dev");
@@ -111,6 +124,16 @@ export class AppState {
         }
     }
 
+    async refreshPcvrStatus() {
+        try {
+            const status = await invoke<string>("get_pcvr_status");
+            this.pcvrStatus = status;
+        } catch (e) {
+            console.error("Failed to get PCVR status:", e);
+            this.pcvrStatus = "PCVR: Status unavailable";
+        }
+    }
+
     private ccStatsInterval: any = null;
     startCCStatsPolling() {
         if (this.ccStatsInterval) return;
@@ -136,9 +159,44 @@ export class AppState {
         }
     }
 
+    async loadMonitors() {
+        try {
+            const list: any[] = await invoke("list_monitors");
+            this.monitors = list;
+            if (list.length > 0 && this.selectedMonitorId === null) {
+                this.selectedMonitorId = list[0].id;
+            }
+        } catch (e) {
+            console.error("Failed to list monitors:", e);
+        }
+    }
+
+    async connect(ip: string) {
+        if (!ip) throw new Error("IP address is required");
+        this.connectionStatus = "connecting";
+
+        let resolution = null;
+        if (this.resolutionMode === "custom") {
+            resolution = this.customResolution;
+        } else if (this.resolutionMode === "client") {
+            resolution = { width: window.innerWidth, height: window.innerHeight };
+        }
+
+        const result = await invoke("start_session", {
+            addr: ip,
+            resolution_mode: this.resolutionMode,
+            width: resolution?.width,
+            height: resolution?.height
+        });
+        this.connectionStatus = "connected";
+        this.isConnected = true;
+        this.startCCStatsPolling();
+        return result;
+    }
+
     async startHosting() {
         try {
-            await invoke("start_host", { port: this.hostPort });
+            await invoke("start_host", { port: this.hostPort, display_id: this.selectedMonitorId });
             this.isHosting = true;
             this.isConnected = true;
             this.startCCStatsPolling();
@@ -158,17 +216,6 @@ export class AppState {
         }
     }
 
-    // Client connection (invoked from +page.svelte)
-    async connect(ip: string) {
-        try {
-            await invoke("start_session", { addr: ip, name: this.displayName });
-            this.isConnected = true;
-            this.isHosting = false;
-        } catch (e: any) {
-            console.error("Failed to connect:", e);
-            throw e;
-        }
-    }
 
     async disconnect() {
         if (this.isHosting) {

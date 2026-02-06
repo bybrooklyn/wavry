@@ -1,8 +1,8 @@
 #![allow(dead_code)]
-use anyhow::{Result};
 use crate::{InputEvent, MouseButton};
-use std::ptr::null;
+use anyhow::Result;
 use std::ffi::c_void;
+use std::ptr::null;
 
 // Manual struct defs to avoid import issues
 #[repr(C)]
@@ -18,18 +18,18 @@ extern "C" {
         source: *const c_void, // CGEventSourceRef
         mouse_type: u32,       // CGEventType
         mouse_cursor_position: CGPoint,
-        mouse_button: u32      // CGMouseButton
+        mouse_button: u32, // CGMouseButton
     ) -> *mut c_void; // CGEventRef
 
     fn CGEventCreateKeyboardEvent(
         source: *const c_void,
         keycode: u16, // CGKeyCode
-        keydown: bool
+        keydown: bool,
     ) -> *mut c_void;
 
     fn CGEventPost(
         tap: u32, // CGEventTapLocation
-        event: *mut c_void
+        event: *mut c_void,
     );
 }
 
@@ -81,12 +81,17 @@ impl crate::InputInjector for MacInputInjector {
         unsafe {
             let event_ref = match event {
                 InputEvent::MouseMove { x, y } => {
-                    let point = CGPoint { 
-                        x: (x * self.width) as f64, 
-                        y: (y * self.height) as f64 
+                    let point = CGPoint {
+                        x: (x * self.width) as f64,
+                        y: (y * self.height) as f64,
                     };
-                    CGEventCreateMouseEvent(null(), K_CG_EVENT_MOUSE_MOVED, point, K_CG_MOUSE_BUTTON_LEFT)
-                },
+                    CGEventCreateMouseEvent(
+                        null(),
+                        K_CG_EVENT_MOUSE_MOVED,
+                        point,
+                        K_CG_MOUSE_BUTTON_LEFT,
+                    )
+                }
                 InputEvent::MouseDown { button } => {
                     let type_ = match button {
                         MouseButton::Left => K_CG_EVENT_LEFT_MOUSE_DOWN,
@@ -98,10 +103,10 @@ impl crate::InputInjector for MacInputInjector {
                         MouseButton::Right => K_CG_MOUSE_BUTTON_RIGHT,
                         _ => K_CG_MOUSE_BUTTON_CENTER,
                     };
-                     CGEventCreateMouseEvent(null(), type_, CGPoint { x: 0.0, y: 0.0 }, btn)
-                },
+                    CGEventCreateMouseEvent(null(), type_, CGPoint { x: 0.0, y: 0.0 }, btn)
+                }
                 InputEvent::MouseUp { button } => {
-                     let type_ = match button {
+                    let type_ = match button {
                         MouseButton::Left => K_CG_EVENT_LEFT_MOUSE_UP,
                         MouseButton::Right => K_CG_EVENT_RIGHT_MOUSE_UP,
                         _ => K_CG_EVENT_NULL,
@@ -112,13 +117,17 @@ impl crate::InputInjector for MacInputInjector {
                         _ => K_CG_MOUSE_BUTTON_CENTER,
                     };
                     CGEventCreateMouseEvent(null(), type_, CGPoint { x: 0.0, y: 0.0 }, btn)
-                },
+                }
                 InputEvent::KeyDown { key_code } => {
                     CGEventCreateKeyboardEvent(null(), key_code as u16, true)
-                },
+                }
                 InputEvent::KeyUp { key_code } => {
                     CGEventCreateKeyboardEvent(null(), key_code as u16, false)
-                },
+                }
+                InputEvent::Gamepad { .. } => {
+                    // TODO: Implement macOS gamepad injection (requires Foohid/VHID)
+                    std::ptr::null_mut()
+                }
                 _ => std::ptr::null_mut(),
             };
 

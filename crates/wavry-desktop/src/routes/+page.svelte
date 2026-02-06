@@ -20,6 +20,7 @@
 
   onMount(() => {
     appState.loadFromStorage();
+    appState.refreshPcvrStatus();
   });
 
   async function startSession() {
@@ -192,6 +193,8 @@
               <p>Configure your Wavry experience.</p>
             </div>
 
+            <div class="pcvr-banner">{appState.pcvrStatus}</div>
+
             <div class="scroll-area">
               <div class="settings-group">
                 <span class="group-label">IDENTITY</span>
@@ -224,6 +227,70 @@
                 <div class="setting-row checkbox">
                   <label>Enable UPnP</label>
                   <input type="checkbox" bind:checked={appState.upnpEnabled} />
+                </div>
+              </div>
+
+              <div class="settings-group">
+                <span class="group-label">DISPLAY</span>
+                <div class="setting-row">
+                  <label>Client Resolution</label>
+                  <select bind:value={appState.resolutionMode}>
+                    <option value="native">Use Host Native</option>
+                    <option value="client">Match This Client</option>
+                    <option value="custom">Custom Fixed</option>
+                  </select>
+                </div>
+
+                {#if appState.resolutionMode === "custom"}
+                  <div class="setting-row">
+                    <label>Width</label>
+                    <input
+                      type="number"
+                      bind:value={appState.customResolution.width}
+                    />
+                  </div>
+                  <div class="setting-row">
+                    <label>Height</label>
+                    <input
+                      type="number"
+                      bind:value={appState.customResolution.height}
+                    />
+                  </div>
+                {/if}
+              </div>
+
+              <div class="settings-group">
+                <span class="group-label">INPUT</span>
+                <div class="setting-row">
+                  <label>Gamepad Passthrough</label>
+                  <input
+                    type="checkbox"
+                    bind:checked={appState.gamepadEnabled}
+                  />
+                </div>
+                {#if appState.gamepadEnabled}
+                  <div class="setting-row">
+                    <label>Deadzone</label>
+                    <input
+                      type="range"
+                      min="0"
+                      max="0.5"
+                      step="0.05"
+                      bind:value={appState.gamepadDeadzone}
+                    />
+                    <span>{appState.gamepadDeadzone}</span>
+                  </div>
+                {/if}
+              </div>
+
+              <div class="settings-group">
+                <span class="group-label">VR / PCVR</span>
+                <div class="setting-row">
+                  <label>PCVR Adapter</label>
+                  <div class="setting-info">
+                    Linux/Windows OpenXR client. Wayland supported via Vulkan, X11 via OpenGL.
+                    Transport stays in Wavry/RIFT (no ALVR networking).
+                  </div>
                 </div>
               </div>
 
@@ -362,6 +429,16 @@
     color: var(--colors-text-secondary);
   }
 
+  .pcvr-banner {
+    margin: 0 var(--spacing-xxl) var(--spacing-xxl);
+    padding: var(--spacing-md) var(--spacing-lg);
+    border-radius: var(--radius-md);
+    background: var(--colors-bg-elevation2);
+    border: 1px solid var(--colors-border-subtle);
+    color: var(--colors-text-primary);
+    font-size: var(--font-size-caption);
+  }
+
   .scroll-area {
     display: flex;
     flex-direction: column;
@@ -466,6 +543,14 @@
   .setting-row label {
     color: var(--colors-text-primary);
     font-size: var(--font-size-body);
+  }
+
+  .setting-info {
+    max-width: 360px;
+    font-size: var(--font-size-caption);
+    color: var(--colors-text-secondary);
+    text-align: right;
+    line-height: 1.4;
   }
 
   .setting-row input[type="text"],

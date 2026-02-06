@@ -41,3 +41,6 @@ pnpm-lock.yaml linguist-generated=true
 # Documentation
 docs/ linguist-documentation=true
 LICENSE linguist-documentation=true
+
+# Hide language statistics for this repository
+* linguist-vendored

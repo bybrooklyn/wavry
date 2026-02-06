@@ -25,7 +25,7 @@ async fn test_encrypted_handshake_over_udp() {
 
         // Receive msg1
         let (len, peer) = server_socket.recv_from(&mut buf).await.unwrap();
-        
+
         // Process and send msg2
         let msg2 = server.process_client_hello(&buf[..len]).unwrap();
         server_socket.send_to(&msg2, peer).await.unwrap();
@@ -35,13 +35,13 @@ async fn test_encrypted_handshake_over_udp() {
         server.process_client_finish(&buf[..len]).unwrap();
 
         assert!(server.is_established());
-        
+
         // Receive encrypted data
         let (len, _) = server_socket.recv_from(&mut buf).await.unwrap();
         let packet_id = u64::from_le_bytes(buf[0..8].try_into().unwrap());
         let ciphertext = &buf[8..len];
         let plaintext = server.decrypt(packet_id, ciphertext).unwrap();
-        
+
         assert_eq!(&plaintext, b"Hello from client!");
 
         // Send encrypted response
@@ -91,7 +91,7 @@ async fn test_encrypted_handshake_over_udp() {
     let packet_id = u64::from_le_bytes(buf[0..8].try_into().unwrap());
     let ciphertext = &buf[8..len];
     let plaintext = client.decrypt(packet_id, ciphertext).unwrap();
-    
+
     assert_eq!(&plaintext, b"Hello from server!");
 
     // Wait for server
@@ -119,7 +119,7 @@ async fn test_encrypted_packet_sequence() {
         let msg = format!("Message {}", i);
         let packet_id = i as u64;
         let ciphertext = client.encrypt(packet_id, msg.as_bytes()).unwrap();
-        
+
         let decrypted = server.decrypt(packet_id, &ciphertext).unwrap();
         assert_eq!(decrypted, msg.as_bytes());
     }
@@ -129,7 +129,7 @@ async fn test_encrypted_packet_sequence() {
         let msg = format!("Response {}", i);
         let packet_id = i as u64;
         let ciphertext = server.encrypt(packet_id, msg.as_bytes()).unwrap();
-        
+
         let decrypted = client.decrypt(packet_id, &ciphertext).unwrap();
         assert_eq!(decrypted, msg.as_bytes());
     }

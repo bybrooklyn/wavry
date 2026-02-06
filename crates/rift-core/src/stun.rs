@@ -1,5 +1,5 @@
-use std::net::{SocketAddr, IpAddr, Ipv4Addr};
-use anyhow::{Result, anyhow};
+use anyhow::{anyhow, Result};
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
 pub const STUN_MAGIC_COOKIE: u32 = 0x2112A442;
 pub const BINDING_REQUEST: u16 = 0x0001;
@@ -59,10 +59,14 @@ impl StunMessage {
 
             // XOR-MAPPED-ADDRESS is 0x0020
             if attr_type == 0x0020 {
-                if attr_len < 8 { return Err(anyhow!("Invalid XOR-MAPPED-ADDRESS length")); }
-                let port = u16::from_be_bytes([buf[pos + 2], buf[pos + 3]]) ^ (STUN_MAGIC_COOKIE >> 16) as u16;
+                if attr_len < 8 {
+                    return Err(anyhow!("Invalid XOR-MAPPED-ADDRESS length"));
+                }
+                let port = u16::from_be_bytes([buf[pos + 2], buf[pos + 3]])
+                    ^ (STUN_MAGIC_COOKIE >> 16) as u16;
                 let family = buf[pos + 1];
-                if family == 0x01 { // IPv4
+                if family == 0x01 {
+                    // IPv4
                     let a = buf[pos + 4] ^ (STUN_MAGIC_COOKIE >> 24) as u8;
                     let b = buf[pos + 5] ^ (STUN_MAGIC_COOKIE >> 16) as u8;
                     let c = buf[pos + 6] ^ (STUN_MAGIC_COOKIE >> 8) as u8;
@@ -70,13 +74,16 @@ impl StunMessage {
                     return Ok(SocketAddr::new(IpAddr::V4(Ipv4Addr::new(a, b, c, d)), port));
                 }
             }
-            
+
             // MAPPED-ADDRESS is 0x0001
             if attr_type == 0x0001 {
-                if attr_len < 8 { return Err(anyhow!("Invalid MAPPED-ADDRESS length")); }
+                if attr_len < 8 {
+                    return Err(anyhow!("Invalid MAPPED-ADDRESS length"));
+                }
                 let port = u16::from_be_bytes([buf[pos + 2], buf[pos + 3]]);
                 let family = buf[pos + 1];
-                if family == 0x01 { // IPv4
+                if family == 0x01 {
+                    // IPv4
                     let ip = Ipv4Addr::new(buf[pos + 4], buf[pos + 5], buf[pos + 6], buf[pos + 7]);
                     return Ok(SocketAddr::new(IpAddr::V4(ip), port));
                 }

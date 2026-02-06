@@ -93,6 +93,18 @@ struct SettingsView: View {
                 Text("120 FPS").tag(120)
             }.labelsHidden().pickerStyle(.menu).frame(width: 150))
             SettingsRow(label: "Decoder", sublabel: "Preferred video decoding method.", control: Text("Hardware (VideoToolbox)").foregroundColor(.gray))
+
+            SettingsSectionHeader(title: "VR / PCVR")
+            SettingsRow(
+                label: "PCVR Adapter",
+                sublabel: "Linux/Windows clients use OpenXR via ALVR adapter. Wayland supported via Vulkan; X11 via OpenGL. Transport stays in Wavry/RIFT.",
+                control: Text("Info").foregroundColor(.gray)
+            )
+            SettingsRow(
+                label: "PCVR Status",
+                sublabel: "Runtime path on this machine.",
+                control: Text(appState.pcvrStatus).foregroundColor(.gray)
+            )
         }
     }
     

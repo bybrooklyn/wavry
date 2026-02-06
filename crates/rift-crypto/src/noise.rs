@@ -146,7 +146,9 @@ impl NoiseInitiator {
         buf.truncate(len);
 
         // Capture handshake hash before transition
-        let handshake_hash: [u8; 32] = handshake.get_handshake_hash().try_into()
+        let handshake_hash: [u8; 32] = handshake
+            .get_handshake_hash()
+            .try_into()
             .map_err(|_| NoiseError::InvalidMessage)?;
 
         // Transition to transport mode
@@ -165,23 +167,23 @@ impl NoiseInitiator {
     /// Get the responder's static public key (after handshake).
     pub fn get_remote_static(&self) -> Option<[u8; 32]> {
         match &self.state {
-            InitiatorState::Transport(t) => {
-                t.get_remote_static().map(|s| {
-                    let mut arr = [0u8; 32];
-                    arr.copy_from_slice(s);
-                    arr
-                })
-            }
+            InitiatorState::Transport(t) => t.get_remote_static().map(|s| {
+                let mut arr = [0u8; 32];
+                arr.copy_from_slice(s);
+                arr
+            }),
             _ => None,
         }
     }
 
     /// Convert to a NoiseSession for encrypted transport.
     pub fn into_session(self) -> Result<NoiseSession, NoiseError> {
-        let hash = self.handshake_hash.ok_or(NoiseError::HandshakeNotComplete)?;
+        let hash = self
+            .handshake_hash
+            .ok_or(NoiseError::HandshakeNotComplete)?;
         match self.state {
-            InitiatorState::Transport(t) => Ok(NoiseSession { 
-                transport: t, 
+            InitiatorState::Transport(t) => Ok(NoiseSession {
+                transport: t,
                 handshake_hash: hash,
             }),
             _ => Err(NoiseError::HandshakeNotComplete),
@@ -271,7 +273,9 @@ impl NoiseResponder {
         buf.truncate(len);
 
         // Capture handshake hash before transition
-        let handshake_hash: [u8; 32] = handshake.get_handshake_hash().try_into()
+        let handshake_hash: [u8; 32] = handshake
+            .get_handshake_hash()
+            .try_into()
             .map_err(|_| NoiseError::InvalidMessage)?;
 
         // Transition to transport mode
@@ -290,23 +294,23 @@ impl NoiseResponder {
     /// Get the initiator's static public key (after handshake).
     pub fn get_remote_static(&self) -> Option<[u8; 32]> {
         match &self.state {
-            ResponderState::Transport(t) => {
-                t.get_remote_static().map(|s| {
-                    let mut arr = [0u8; 32];
-                    arr.copy_from_slice(s);
-                    arr
-                })
-            }
+            ResponderState::Transport(t) => t.get_remote_static().map(|s| {
+                let mut arr = [0u8; 32];
+                arr.copy_from_slice(s);
+                arr
+            }),
             _ => None,
         }
     }
 
     /// Convert to a NoiseSession for encrypted transport.
     pub fn into_session(self) -> Result<NoiseSession, NoiseError> {
-        let hash = self.handshake_hash.ok_or(NoiseError::HandshakeNotComplete)?;
+        let hash = self
+            .handshake_hash
+            .ok_or(NoiseError::HandshakeNotComplete)?;
         match self.state {
-            ResponderState::Transport(t) => Ok(NoiseSession { 
-                transport: t, 
+            ResponderState::Transport(t) => Ok(NoiseSession {
+                transport: t,
                 handshake_hash: hash,
             }),
             _ => Err(NoiseError::HandshakeNotComplete),

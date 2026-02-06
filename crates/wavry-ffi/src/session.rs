@@ -13,22 +13,20 @@ use tokio::net::UdpSocket;
 use tokio::sync::oneshot;
 
 // Imports
-use wavry_media::{
-    EncodeConfig, Codec, Resolution, Renderer
-};
+use wavry_media::{Codec, EncodeConfig, Renderer, Resolution};
 
 #[cfg(target_os = "macos")]
 use wavry_media::{MacScreenEncoder, MacVideoRenderer};
 
-#[cfg(not(target_os = "macos"))]
-use wavry_media::DummyRenderer as MacVideoRenderer;
-use wavry_client::{run_client as run_rift_client, ClientConfig, RendererFactory};
+use rift_core::cc::{DeltaCC, DeltaConfig};
 #[allow(unused_imports)]
 use rift_core::{
-   decode_msg, encode_msg, PhysicalPacket,
-   ControlMessage as ProtoControl, Pong as ProtoPong, CongestionControl as ProtoCongestion,
-   Message as ProtoMessage, RIFT_MAGIC, RIFT_VERSION,
+    decode_msg, encode_msg, CongestionControl as ProtoCongestion, ControlMessage as ProtoControl,
+    Message as ProtoMessage, PhysicalPacket, Pong as ProtoPong, RIFT_MAGIC, RIFT_VERSION,
 };
+use wavry_client::{run_client as run_rift_client, ClientConfig, RendererFactory};
+#[cfg(not(target_os = "macos"))]
+use wavry_media::DummyRenderer as MacVideoRenderer;
 
 #[allow(dead_code)]
 const CONNECTION_TIMEOUT: Duration = Duration::from_secs(5);
@@ -60,13 +58,13 @@ impl SessionHandle {
 pub async fn run_host(
     port: u16,
     stats: Arc<SessionStats>,
-    mut _stop_rx: oneshot::Receiver<()>,
+    mut stop_rx: oneshot::Receiver<()>,
     init_tx: oneshot::Sender<Result<()>>,
 ) -> Result<()> {
     #![allow(unused_variables)]
     // 1. Setup UDP
     let addr = format!("0.0.0.0:{}", port);
-    
+
     let socket = match std::net::UdpSocket::bind(&addr) {
         Ok(s) => {
             let _ = s.set_nonblocking(true);
@@ -77,7 +75,7 @@ pub async fn run_host(
                     return Err(e.into());
                 }
             }
-        },
+        }
         Err(e) => {
             let _ = init_tx.send(Err(anyhow!("Failed to bind UDP: {}", e)));
             return Err(e.into());
@@ -88,12 +86,16 @@ pub async fn run_host(
     // 2. Setup Encoder
     let config = EncodeConfig {
         codec: Codec::H264,
-        resolution: Resolution { width: 1920, height: 1080 }, // TODO: Dynamic
+        resolution: Resolution {
+            width: 1920,
+            height: 1080,
+        }, // TODO: Dynamic
         fps: 60,
         bitrate_kbps: 8000,
         keyframe_interval_ms: 2000,
+        display_id: None,
     };
-    
+
     #[cfg(target_os = "macos")]
     {
         // 2. Setup Encoder (Mac Only)
@@ -107,18 +109,22 @@ pub async fn run_host(
 
         // Signal Init Success
         let _ = init_tx.send(Ok(()));
-        
+
         // Notify Signaling Layer
         crate::signaling_ffi::set_hosting(port);
 
         // 3. Client state
         let mut client_addr: Option<SocketAddr> = None;
         let mut sequence: u64 = 0;
-        
+
         // 4. DELTA Congestion Control
-        let mut cc = DeltaCC::new(DeltaConfig::default(), config.bitrate_kbps, config.fps as u32);
+        let mut cc = DeltaCC::new(
+            DeltaConfig::default(),
+            config.bitrate_kbps,
+            config.fps as u32,
+        );
         let mut last_target_bitrate = config.bitrate_kbps;
-        
+
         // Loop
         let mut fps_counter = 0;
         let mut last_fps_time = std::time::Instant::now();
@@ -140,7 +146,7 @@ pub async fn run_host(
                     crate::signaling_ffi::clear_hosting();
                     break;
                 }
-                
+
                 // Check for incoming packets (Control/Keepalive)
                 res = async {
                     let mut buf = [0u8; 2048];
@@ -157,7 +163,7 @@ pub async fn run_host(
                                 }
                                 last_packet_time = std::time::Instant::now();
                             }
-                            
+
                             // Parse RIFT message if this is a valid RIFT packet
                             if len >= 2 && buf[0..2] == RIFT_MAGIC {
                                 if let Ok(phys) = PhysicalPacket::decode(Bytes::copy_from_slice(&buf[..len])) {
@@ -194,7 +200,7 @@ pub async fn run_host(
                                                     };
                                                     cc.on_rtt_sample(report.rtt_us, loss_ratio, report.jitter_us);
                                                     stats.rtt_ms.store((report.rtt_us / 1000) as u32, Ordering::Relaxed);
-                                                    
+
                                                     // Check if bitrate target changed
                                                     let new_bitrate = cc.target_bitrate_kbps();
                                                     if new_bitrate != last_target_bitrate {
@@ -203,7 +209,7 @@ pub async fn run_host(
                                                             log::warn!("Failed to set encoder bitrate: {}", e);
                                                         }
                                                         last_target_bitrate = new_bitrate;
-                                                        
+
                                                         // Send CongestionControl to client
                                                         let cc_msg = ProtoMessage {
                                                             content: Some(rift_core::message::Content::Control(ProtoControl {
@@ -235,7 +241,7 @@ pub async fn run_host(
                         Err(e) => log::warn!("Socket recv error: {}", e),
                     }
                 }
-                
+
                 // Encode next frame
                 res = encoder.next_frame_async() => {
                     match res {
@@ -245,28 +251,28 @@ pub async fn run_host(
                                 let max_payload = 1400;
                                 let data = frame.data;
                                 let total_chunks = data.len().div_ceil(max_payload);
-                                
+
                                 for i in 0..total_chunks {
                                     let start = i * max_payload;
                                     let end = std::cmp::min(start + max_payload, data.len());
                                     let chunk = &data[start..end];
-                                    
+
                                     let mut packet = Vec::with_capacity(10 + chunk.len());
                                     packet.extend_from_slice(&sequence.to_be_bytes());
                                     packet.push(i as u8);
                                     packet.push(total_chunks as u8);
                                     packet.extend_from_slice(chunk);
-                                    
+
                                     if let Err(e) = socket.send_to(&packet, addr).await {
                                         log::warn!("Send error: {}", e);
                                     }
-                                    
+
                                     bytes_sent += packet.len();
                                 }
-                                
+
                                 sequence = sequence.wrapping_add(1);
                                 stats.frames_encoded.fetch_add(1, Ordering::Relaxed);
-                                
+
                                 // FPS calc
                                 fps_counter += 1;
                                 if last_fps_time.elapsed() >= std::time::Duration::from_secs(1) {
@@ -317,19 +323,21 @@ pub async fn run_client(
     stop_rx: oneshot::Receiver<()>,
     init_tx: oneshot::Sender<Result<()>>,
 ) -> Result<()> {
-    
     // Config for lib
     let config = ClientConfig {
         connect_addr: match format!("{}:{}", host_ip, port).parse() {
             Ok(a) => Some(a),
             Err(e) => {
-                 let _ = init_tx.send(Err(anyhow!("Invalid address: {}", e)));
-                 return Err(e.into());
+                let _ = init_tx.send(Err(anyhow!("Invalid address: {}", e)));
+                return Err(e.into());
             }
         },
         client_name: "WavryMacOS".to_string(),
         no_encrypt: false,
         identity_key: crate::identity::get_private_key(),
+        relay_info: None,
+        max_resolution: None,
+        vr_adapter: None,
     };
 
     // Factory
@@ -338,10 +346,14 @@ pub async fn run_client(
         Ok(Box::new(SharedRenderer(renderer_handle.clone())))
     });
 
-    log::info!("Starting Wavry Client (Refactored) connecting to {}:{}", host_ip, port);
-    
-    // We need to signal init_tx when it *starts*? 
-    // run_client is blocking (async). 
+    log::info!(
+        "Starting Wavry Client (Refactored) connecting to {}:{}",
+        host_ip,
+        port
+    );
+
+    // We need to signal init_tx when it *starts*?
+    // run_client is blocking (async).
     // We need to signal success early? No, run_client takes over.
     // The previous implementation signaled init success after socket connect.
     // wavry_client::run_client performs discovery/connect.

@@ -18,6 +18,8 @@ members = [
   "crates/wavry-master",
   "crates/wavry-cli",
   "crates/wavry-desktop/src-tauri", "crates/wavry-ffi", "crates/wavry-gateway",
+  "crates/wavry-vr",
+  "crates/wavry-vr-alvr",
 ]
 resolver = "2"
 
@@ -54,6 +56,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 
 # Networking
 mdns-sd = "0.10"
+socket2 = "0.6"
 
 # Crypto
 snow = "0.9"

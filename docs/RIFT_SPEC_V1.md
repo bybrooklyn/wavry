@@ -100,6 +100,10 @@ The top-level `Message` MUST contain a `oneof` content field:
 - **StatsReport**: Loss data for congestion control.
 - **CongestionControl**: Host signals to adjust bitrate/FPS.
 - **ReferenceInvalidation (RFI)**: Client signals the last successfully rendered `frame_id`. The host encoder SHOULD use this frame as a reference for future P-frames to recover from loss without a full I-frame.
+- **Nack**: Receiver-driven missing packet report. The receiver SHOULD emit a NACK immediately upon detecting gaps in the transport packet ID sequence (sliding window 64–256). Packet IDs refer to the Physical Transport `packet_id` field. The sender SHOULD retransmit missing packet IDs immediately.
+- **EncoderControl**: Receiver hint to skip encoder output frames (e.g., 1–2 frames) when sudden RTT spikes are detected to allow network buffers to drain.
+- **PoseUpdate**: Headset pose update (position + orientation). These packets MUST be treated as ultra-high priority and MUST bypass any jitter buffer.
+- **VrTiming**: VR timing hints from the client (refresh rate + vsync offset) to align pacing and prediction.
 
 #### Input Messages
 - **MouseButton**: 32-bit button ID and pressed state.
@@ -110,6 +114,7 @@ The top-level `Message` MUST contain a `oneof` content field:
 #### Media Messages
 - **VideoChunk**: Segmented encoded video data.
 - **FecPacket**: Parity data for sequence-based error recovery.
+- **AudioPacket**: Opus-encoded audio payloads with microsecond timestamps.
 
 ---
 
@@ -127,6 +132,17 @@ RIFT uses an interleaved XOR-based FEC.
 - **Payload**: Contains a parity block derived from XOR operations on group members.
 - **Recovery**: Enables reconstruction of single-packet gaps per group without retransmission.
 
+### 5.3 Audio (Opus)
+Audio payloads use **raw Opus packets** (no container) with minimal framing overhead.
+- **Codec**: Opus
+- **Sample Rate**: 48 kHz
+- **Channels**: Stereo (2)
+- **Frame Size**: 5 ms (240 samples per channel)
+- **Bitrate**: ~128 kbps (target)
+- **Timestamp**: `AudioPacket.timestamp_us` refers to the first sample in the Opus frame.
+
+Receivers SHOULD decode and play audio immediately with a short buffer (≤ 20 ms). If buffers grow, drop the oldest audio first to preserve motion-to-photon latency.
+
 ---
 
 ## 6. Implementation Modules
@@ -134,8 +150,23 @@ RIFT uses an interleaved XOR-based FEC.
 ### 6.1 DELTA Congestion Control
 DELTA is a delay-oriented congestion controller designed for real-time interactive streams.
 - **Metric**: Uses queuing delay slope trends to transition between state states (Stable, Rising, Congested).
-- **Adaptivity**: Automatically scales slope noise floor (epsilon) based on measured jitter.
+ - **Adaptivity**: Scales the slope noise floor (epsilon) relative to smoothed RTT (e.g., `epsilon = RTT_smooth * 0.05`).
 - **Enforcement**: Regulates bitrate to resolve congestion before packet loss triggers.
+
+### 6.2 Adaptive Packet Pacing
+Media packets SHOULD be micro-paced after packetization rather than sent as a burst. Initial spacing SHOULD be ~20–50µs and adapt based on smoothed RTT, recent arrival jitter, and current bitrate. Spacing MUST increase when RTT rises or packets arrive bunched, and decrease when RTT is stable and arrivals are evenly spaced.
+
+### 6.3 Receiver-Driven Aggressive NACK
+Receivers MUST track transport packet IDs in a sliding window and emit a NACK immediately on gap detection (no sender timeout). This enables fast retransmission of missing packets without waiting for loss to compound.
+
+### 6.4 Adaptive Client Jitter Buffer
+Receivers SHOULD adjust jitter buffer size dynamically based on inter-packet arrival variance: shrink toward 0ms under stable conditions, grow toward 5–10ms when jitter is detected.
+
+### 6.5 Encoder Panic Skip Mode
+On sudden RTT spikes (e.g., +30–50ms over smoothed RTT), the receiver SHOULD signal the sender to skip 1–2 frames to drain buffers and avoid congestion spirals.
+
+### 6.6 DSCP/WMM Tagging
+Senders SHOULD set DSCP to EF (46 / 0x2E) or CS6 (48 / 0x30) on media and input UDP sockets to prioritize traffic in Wi‑Fi WMM queues and reduce jitter.
 
 ### 6.2 NAT Traversal
 - **STUN**: Used to discover reflexive public addresses.
@@ -154,8 +185,8 @@ Dynamic path MTU discovery to find the largest possible datagram size without fr
 ### 7.3 Zero-Copy Media Framing [Experimental]
 Optimizing the `PhysicalPacket` -> `VideoChunk` path to avoid intermediate buffer allocations. This involves using a specialized "Tail-Header" for media packets where Protobuf metadata is appended after the raw NAL units.
 
-### 7.4 Audio Synchronization [Planned]
-Implementation of Opus-based audio channels with Lip-Sync timestamps locked to `frame_id`.
+### 7.4 Audio Synchronization & Lip-Sync [Planned]
+Refine audio/video alignment by locking audio timestamps to `frame_id` and improving drift correction without increasing latency.
 
 ### 7.5 Z-Frame Padding (Pipe Warming) [Experimental]
 Optional low-priority "Zero Frames" sent during idle periods to keep NAT mappings active and prevent ISP "sleep" states from inducing first-packet jitter.

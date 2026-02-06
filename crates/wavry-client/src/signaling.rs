@@ -12,20 +12,28 @@ pub struct SignalingClient {
 impl SignalingClient {
     pub async fn connect(url: &str, token: &str) -> Result<Self> {
         let (mut ws_stream, _) = connect_async(url).await?;
-        
+
         // Auth
-        let bind_msg = SignalMessage::BIND { token: token.to_string() };
-        ws_stream.send(tokio_tungstenite::tungstenite::Message::Text(serde_json::to_string(&bind_msg)?.into())).await?;
-        
+        let bind_msg = SignalMessage::BIND {
+            token: token.to_string(),
+        };
+        ws_stream
+            .send(tokio_tungstenite::tungstenite::Message::Text(
+                serde_json::to_string(&bind_msg)?.into(),
+            ))
+            .await?;
+
         // Expect OK? Gateway might send something back or just be silent until error.
         // Assuming silent success for now based on gateway impl.
-        
+
         Ok(Self { ws: ws_stream })
     }
 
     pub async fn send(&mut self, msg: SignalMessage) -> Result<()> {
         let text = serde_json::to_string(&msg)?;
-        self.ws.send(tokio_tungstenite::tungstenite::Message::Text(text.into())).await?;
+        self.ws
+            .send(tokio_tungstenite::tungstenite::Message::Text(text.into()))
+            .await?;
         Ok(())
     }
 

@@ -158,6 +158,7 @@ class AppState: ObservableObject {
     @Published var hostStartPort: Int = UserDefaults.standard.integer(forKey: "hostStartPort") == 0 ? 0 : UserDefaults.standard.integer(forKey: "hostStartPort")
     @Published var upnpEnabled: Bool = UserDefaults.standard.object(forKey: "upnpEnabled") == nil ? true : UserDefaults.standard.bool(forKey: "upnpEnabled")
     @Published var showLoginSheet: Bool = false
+    @Published var pcvrStatus: String = "PCVR: Not available on macOS"
     
     var effectiveDisplayName: String {
         if isUsingHostname || displayName.isEmpty {

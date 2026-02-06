@@ -1,5 +1,11 @@
 <script>
   let { appState } = $props();
+
+  $effect(() => {
+    if (!appState.isHosting) {
+       appState.loadMonitors();
+    }
+  });
 </script>
 
 <div class="host-card">
@@ -19,6 +25,13 @@
     <div class="meta">
       <h3>{appState.displayName || "Mac"}</h3>
       <p>{appState.connectivityMode || "Wavry Service"}</p>
+      {#if !appState.isHosting && appState.monitors.length > 0}
+        <select bind:value={appState.selectedMonitorId} class="monitor-select">
+            {#each appState.monitors as monitor}
+                <option value={monitor.id}>{monitor.name} ({monitor.resolution.width}x{monitor.resolution.height})</option>
+            {/each}
+        </select>
+      {/if}
     </div>
 
     <button
@@ -115,5 +128,16 @@
 
   .action-btn:hover {
     filter: brightness(1.1);
+  }
+
+  .monitor-select {
+    margin-top: 8px;
+    padding: 4px;
+    background: var(--colors-bg-base);
+    color: var(--colors-text-primary);
+    border: 1px solid var(--colors-border-input);
+    border-radius: var(--radius-sm);
+    font-size: 11px;
+    max-width: 140px;
   }
 </style>

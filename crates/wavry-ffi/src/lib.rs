@@ -1,51 +1,53 @@
 #![allow(clippy::missing_safety_doc)]
 
+use once_cell::sync::Lazy;
 use std::ffi::{c_char, CStr};
 use std::sync::{Arc, Mutex};
-use once_cell::sync::Lazy;
 use tokio::runtime::Runtime;
 
-#[cfg(target_os = "macos")]
-use wavry_media::{MacVideoRenderer, MacInputInjector};
 #[cfg(not(target_os = "macos"))]
 use wavry_media::DummyRenderer as MacVideoRenderer;
+#[cfg(target_os = "macos")]
+use wavry_media::{MacInputInjector, MacVideoRenderer};
 
 // Stub for Linux input injector if needed, or use a dummy
 #[cfg(not(target_os = "macos"))]
-pub struct MacInputInjector; 
+pub struct MacInputInjector;
 #[cfg(not(target_os = "macos"))]
 impl MacInputInjector {
-    pub fn new(_w: u32, _h: u32) -> Self { Self }
-    pub fn inject(&mut self, _e: InputEvent) -> anyhow::Result<()> { Ok(()) }
+    pub fn new(_w: u32, _h: u32) -> Self {
+        Self
+    }
+    pub fn inject(&mut self, _e: InputEvent) -> anyhow::Result<()> {
+        Ok(())
+    }
 }
 
 use wavry_media::InputEvent;
+use wavry_media::InputInjector;
 
 mod session;
-use session::{SessionHandle, SessionStats, run_host, run_client};
+use session::{run_client, run_host, SessionHandle, SessionStats};
 
 mod identity;
 mod signaling_ffi;
 
 // Global State
-static RUNTIME: Lazy<Runtime> = Lazy::new(|| {
-    Runtime::new().expect("Failed to create Tokio runtime")
-});
+static RUNTIME: Lazy<Runtime> =
+    Lazy::new(|| Runtime::new().expect("Failed to create Tokio runtime"));
 
 static SESSION: Mutex<Option<SessionHandle>> = Mutex::new(None);
 
 // Shared media resources (FFI -> Rust)
 // We wrap MacVideoRenderer in a way that it can be used by both FFI Init and Client Loop
-// But MacVideoRenderer is not Sync/Send? It is Send, not Sync? 
+// But MacVideoRenderer is not Sync/Send? It is Send, not Sync?
 // Actually I implemented `unsafe impl Send for MacVideoRenderer` so it's Send.
 // Mutex makes it Sync.
-static VIDEO_RENDERER: Lazy<Arc<Mutex<Option<Box<MacVideoRenderer>>>>> = Lazy::new(|| {
-    Arc::new(Mutex::new(None))
-});
+static VIDEO_RENDERER: Lazy<Arc<Mutex<Option<Box<MacVideoRenderer>>>>> =
+    Lazy::new(|| Arc::new(Mutex::new(None)));
 #[allow(dead_code)]
-static INPUT_INJECTOR: Lazy<Arc<Mutex<Option<MacInputInjector>>>> = Lazy::new(|| {
-    Arc::new(Mutex::new(None))
-});
+static INPUT_INJECTOR: Lazy<Arc<Mutex<Option<MacInputInjector>>>> =
+    Lazy::new(|| Arc::new(Mutex::new(None)));
 
 #[no_mangle]
 pub extern "C" fn wavry_init() {
@@ -56,13 +58,15 @@ pub extern "C" fn wavry_init() {
 
 #[no_mangle]
 pub unsafe extern "C" fn wavry_init_identity(storage_path_ptr: *const c_char) -> i32 {
-    if storage_path_ptr.is_null() { return -1; }
+    if storage_path_ptr.is_null() {
+        return -1;
+    }
     let c_str = CStr::from_ptr(storage_path_ptr);
     let path_str = match c_str.to_str() {
         Ok(s) => s,
         Err(_) => return -2,
     };
-    
+
     match identity::init_identity(path_str) {
         Ok(_) => 0,
         Err(e) => {
@@ -74,8 +78,10 @@ pub unsafe extern "C" fn wavry_init_identity(storage_path_ptr: *const c_char) ->
 
 #[no_mangle]
 pub unsafe extern "C" fn wavry_get_public_key(out_buffer: *mut u8) -> i32 {
-    if out_buffer.is_null() { return -1; }
-    
+    if out_buffer.is_null() {
+        return -1;
+    }
+
     if let Some(pub_key) = identity::get_public_key() {
         std::ptr::copy_nonoverlapping(pub_key.as_ptr(), out_buffer, 32);
         0
@@ -103,7 +109,7 @@ pub extern "C" fn wavry_start_host(port: u16) -> i32 {
     let stats = Arc::new(SessionStats::default());
     let (tx, rx) = tokio::sync::oneshot::channel();
     let (init_tx, init_rx) = tokio::sync::oneshot::channel();
-    
+
     let stats_clone = stats.clone();
     RUNTIME.spawn(async move {
         if let Err(e) = run_host(port, stats_clone, rx, init_tx).await {
@@ -140,7 +146,7 @@ pub unsafe extern "C" fn wavry_start_client(host_ip: *const c_char, port: u16) -
         log::warn!("Session already running");
         return -1;
     }
-    
+
     if host_ip.is_null() {
         return -2;
     }
@@ -153,10 +159,10 @@ pub unsafe extern "C" fn wavry_start_client(host_ip: *const c_char, port: u16) -
     let stats = Arc::new(SessionStats::default());
     let (tx, rx) = tokio::sync::oneshot::channel();
     let (init_tx, init_rx) = tokio::sync::oneshot::channel();
-    
+
     let stats_clone = stats.clone();
     let renderer = VIDEO_RENDERER.clone(); // Shared Reference
-    
+
     RUNTIME.spawn(async move {
         if let Err(e) = run_client(host_str, port, renderer, stats_clone, rx, init_tx).await {
             log::error!("Client error: {}", e);
@@ -165,22 +171,26 @@ pub unsafe extern "C" fn wavry_start_client(host_ip: *const c_char, port: u16) -
 
     // Wait for initialization
     match init_rx.blocking_recv() {
-         Ok(Ok(())) => {
+        Ok(Ok(())) => {
             *guard = Some(SessionHandle {
                 stop_tx: Some(tx),
                 stats,
             });
-            log::info!("Started Client connecting to {}:{}", c_str.to_string_lossy(), port);
+            log::info!(
+                "Started Client connecting to {}:{}",
+                c_str.to_string_lossy(),
+                port
+            );
             0
-         }
-         Ok(Err(e)) => {
+        }
+        Ok(Err(e)) => {
             log::error!("Failed to start client: {}", e);
             -4
-         }
-         Err(_) => {
-             log::error!("Client init channel closed");
-             -5
-         }
+        }
+        Err(_) => {
+            log::error!("Client init channel closed");
+            -5
+        }
     }
 }
 
@@ -210,8 +220,10 @@ pub struct WavryStats {
 
 #[no_mangle]
 pub unsafe extern "C" fn wavry_get_stats(out: *mut WavryStats) -> i32 {
-    if out.is_null() { return -1; }
-    
+    if out.is_null() {
+        return -1;
+    }
+
     let guard = SESSION.lock().unwrap();
     if let Some(handle) = guard.as_ref() {
         let s = &handle.stats;
@@ -228,12 +240,12 @@ pub unsafe extern "C" fn wavry_get_stats(out: *mut WavryStats) -> i32 {
     } else {
         // Zero out if not running
         *out = WavryStats {
-             connected: false,
-             fps: 0,
-             rtt_ms: 0,
-             bitrate_kbps: 0,
-             frames_encoded: 0,
-             frames_decoded: 0,
+            connected: false,
+            fps: 0,
+            rtt_ms: 0,
+            bitrate_kbps: 0,
+            frames_encoded: 0,
+            frames_decoded: 0,
         };
         0
     }

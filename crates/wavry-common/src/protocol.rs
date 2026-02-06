@@ -7,56 +7,51 @@ use serde::{Deserialize, Serialize};
 pub enum SignalMessage {
     /// Initial binding of a connection to a specific session/token.
     BIND { token: String },
-    
+
     /// RIFT-v1 SDP Exchange: OFFER (base64 encoded rift::Hello)
-    OFFER_RIFT { 
-        target_username: String, 
-        hello_base64: String 
+    OFFER_RIFT {
+        target_username: String,
+        hello_base64: String,
     },
-    
+
     /// RIFT-v1 SDP Exchange: ANSWER (base64 encoded rift::HelloAck)
-    ANSWER_RIFT { 
-        target_username: String, 
-        ack_base64: String 
+    ANSWER_RIFT {
+        target_username: String,
+        ack_base64: String,
     },
 
     /// WebRTC-style OFFER (legacy/fallback)
-    OFFER { 
-        target_username: String, 
-        sdp: String, 
-        public_addr: Option<String> 
+    OFFER {
+        target_username: String,
+        sdp: String,
+        public_addr: Option<String>,
     },
-    
+
     /// WebRTC-style ANSWER (legacy/fallback)
-    ANSWER { 
-        target_username: String, 
-        sdp: String, 
-        public_addr: Option<String> 
+    ANSWER {
+        target_username: String,
+        sdp: String,
+        public_addr: Option<String>,
     },
-    
+
     /// ICE candidate for NAT traversal (not yet fully used by direct UDP).
-    CANDIDATE { 
-        target_username: String, 
-        candidate: String 
+    CANDIDATE {
+        target_username: String,
+        candidate: String,
     },
 
     /// Request a fallback blind relay for the target session.
-    REQUEST_RELAY { 
-        target_username: String 
-    },
+    REQUEST_RELAY { target_username: String },
 
     /// Received credentials for a blind relay session.
-    RELAY_CREDENTIALS { 
-        token: String, 
+    RELAY_CREDENTIALS {
+        token: String,
         addr: String,
-        session_id: uuid::Uuid
+        session_id: uuid::Uuid,
     },
 
     /// Generic error message from the signaling server.
-    ERROR { 
-        code: Option<u16>, 
-        message: String 
-    },
+    ERROR { code: Option<u16>, message: String },
 }
 
 /// Request for a relay to register with the Master server.

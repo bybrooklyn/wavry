@@ -19,3 +19,4 @@ wavry-media = { path = "../../crates/wavry-media" }
 wavry-platform = { path = "../../crates/wavry-platform" }
 rand.workspace = true
 hex = "0.4.3"
+socket2 = { workspace = true }

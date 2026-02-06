@@ -51,22 +51,22 @@ impl Default for DeltaConfig {
 /// Implementation of DELTA (Differential Latency Estimation and Tuning Algorithm).
 pub struct DeltaCC {
     config: DeltaConfig,
-    
+
     // Signals
     rtt_smooth_us: f64,
     rtt_min_us: u64,
     last_d_q_us: f64,
-    
+
     // State machine
     state: DeltaState,
     rising_count: usize,
     stable_count: usize,
     congested_start: Option<Instant>,
-    
+
     // Windowed minimum tracking
     window_samples: Vec<(Instant, u64)>,
     window_duration: Duration,
-    
+
     // Outputs
     current_bitrate_kbps: u32,
     current_fps: u32,
@@ -99,12 +99,13 @@ impl DeltaCC {
 
         // 1. Update RTT Min Window
         self.update_rtt_min(now, rtt_us);
-        
+
         // 2. Update EWMA Smooth RTT
         if self.rtt_smooth_us == 0.0 {
             self.rtt_smooth_us = rtt_us as f64;
         } else {
-            self.rtt_smooth_us = (1.0 - self.config.alpha) * self.rtt_smooth_us + self.config.alpha * (rtt_us as f64);
+            self.rtt_smooth_us = (1.0 - self.config.alpha) * self.rtt_smooth_us
+                + self.config.alpha * (rtt_us as f64);
         }
 
         // 3. Compute Queue Delay and Slope
@@ -113,7 +114,11 @@ impl DeltaCC {
         self.last_d_q_us = d_q;
 
         // 4. Dynamic Slope Noise Floor (Epsilon)
-        let epsilon = (jitter_us as f64 * 0.5).max(self.config.epsilon_us);
+        let epsilon = if self.rtt_smooth_us > 0.0 {
+            self.rtt_smooth_us * 0.05
+        } else {
+            self.config.epsilon_us
+        };
 
         // 5. State Transitions
         self.update_state(now, d_q, delta_q, epsilon);
@@ -124,13 +129,16 @@ impl DeltaCC {
 
     fn update_rtt_min(&mut self, now: Instant, rtt_us: u64) {
         // Prune old samples
-        self.window_samples.retain(|(t, _)| now.duration_since(*t) < self.window_duration);
-        
+        self.window_samples
+            .retain(|(t, _)| now.duration_since(*t) < self.window_duration);
+
         // Add new sample
         self.window_samples.push((now, rtt_us));
 
         // Update current minimum
-        self.rtt_min_us = self.window_samples.iter()
+        self.rtt_min_us = self
+            .window_samples
+            .iter()
             .map(|(_, rtt)| *rtt)
             .min()
             .unwrap_or(u64::MAX);
@@ -139,7 +147,10 @@ impl DeltaCC {
     fn update_state(&mut self, now: Instant, d_q: f64, delta_q: f64, epsilon: f64) {
         if d_q > self.config.target_delay_us as f64 {
             if self.state != DeltaState::Congested {
-                info!("DELTA: Transition to CONGESTED (Delay: {:.1}ms)", d_q / 1000.0);
+                info!(
+                    "DELTA: Transition to CONGESTED (Delay: {:.1}ms)",
+                    d_q / 1000.0
+                );
                 self.state = DeltaState::Congested;
                 self.congested_start = Some(now);
             }
@@ -148,7 +159,10 @@ impl DeltaCC {
         } else if delta_q > epsilon {
             self.rising_count += 1;
             if self.rising_count >= self.config.k_persistence && self.state == DeltaState::Stable {
-                info!("DELTA: Transition to RISING (Slope: {:.1}us, Epsilon: {:.1}us)", delta_q, epsilon);
+                info!(
+                    "DELTA: Transition to RISING (Slope: {:.1}us, Epsilon: {:.1}us)",
+                    delta_q, epsilon
+                );
                 self.state = DeltaState::Rising;
             }
             self.stable_count = 0;
@@ -168,19 +182,23 @@ impl DeltaCC {
         // High jitter (>10ms) indicates network instability, increase FEC before loss occurs
         if jitter_us > 10_000 {
             self.fec_ratio = (self.fec_ratio + 0.02).min(0.25);
-            debug!("DELTA: High jitter {}us - FEC increased to {:.0}%", jitter_us, self.fec_ratio * 100.0);
+            debug!(
+                "DELTA: High jitter {}us - FEC increased to {:.0}%",
+                jitter_us,
+                self.fec_ratio * 100.0
+            );
         } else if jitter_us > 5_000 {
             self.fec_ratio = (self.fec_ratio + 0.01).min(0.20);
         }
-        
+
         match self.state {
             DeltaState::Stable => {
                 // Additive Increase: R = R + Step * (1 - Dq/Tlimit)
                 let gain = (1.0 - (d_q / self.config.target_delay_us as f64)).max(0.0);
                 let increase = (self.config.increase_kbps as f64 * gain) as u32;
-                self.current_bitrate_kbps = (self.current_bitrate_kbps + increase)
-                    .min(self.config.max_bitrate_kbps);
-                
+                self.current_bitrate_kbps =
+                    (self.current_bitrate_kbps + increase).min(self.config.max_bitrate_kbps);
+
                 // Gradually decay FEC ratio back to 5% baseline (only if jitter is low)
                 if jitter_us < 5_000 {
                     self.fec_ratio = (self.fec_ratio - 0.001).max(0.05);
@@ -188,12 +206,17 @@ impl DeltaCC {
             }
             DeltaState::Rising => {
                 // Hold bitrate and observe
-                debug!("DELTA: RISING - Bitrate held at {}kbps", self.current_bitrate_kbps);
+                debug!(
+                    "DELTA: RISING - Bitrate held at {}kbps",
+                    self.current_bitrate_kbps
+                );
             }
             DeltaState::Congested => {
                 // Multiplicative Decrease: R = R * Beta
-                self.current_bitrate_kbps = (self.current_bitrate_kbps as f64 * self.config.beta) as u32;
-                self.current_bitrate_kbps = self.current_bitrate_kbps.max(self.config.min_bitrate_kbps);
+                self.current_bitrate_kbps =
+                    (self.current_bitrate_kbps as f64 * self.config.beta) as u32;
+                self.current_bitrate_kbps =
+                    self.current_bitrate_kbps.max(self.config.min_bitrate_kbps);
 
                 // Sustained congestion leads to FPS step-down
                 if let Some(start) = self.congested_start {
@@ -222,7 +245,10 @@ impl DeltaCC {
             _ => self.current_fps, // Don't drop below 30 if possible
         };
         if next_fps != self.current_fps {
-            info!("DELTA: Stepping down FPS: {} -> {}", self.current_fps, next_fps);
+            info!(
+                "DELTA: Stepping down FPS: {} -> {}",
+                self.current_fps, next_fps
+            );
             self.current_fps = next_fps;
         }
     }
@@ -251,13 +277,13 @@ mod tests {
     #[test]
     fn test_delta_rtt_min_tracking() {
         let mut cc = DeltaCC::new(DeltaConfig::default(), 10000, 60);
-        
+
         cc.on_rtt_sample(5000, 0.0, 0);
         assert_eq!(cc.rtt_min_us, 5000);
-        
+
         cc.on_rtt_sample(4000, 0.0, 0);
         assert_eq!(cc.rtt_min_us, 4000);
-        
+
         cc.on_rtt_sample(6000, 0.0, 0);
         assert_eq!(cc.rtt_min_us, 4000);
     }
@@ -272,13 +298,13 @@ mod tests {
         };
         let mut cc = DeltaCC::new(config, 10000, 60);
         cc.on_rtt_sample(5000, 0.0, 0); // Baseline
-        
+
         cc.on_rtt_sample(5200, 0.0, 0); // rising_count = 1
         cc.on_rtt_sample(5400, 0.0, 0); // rising_count = 2
         cc.on_rtt_sample(5600, 0.0, 0); // rising_count = 3
         cc.on_rtt_sample(5800, 0.0, 0); // rising_count = 4
         assert_eq!(cc.state, DeltaState::Stable);
-        
+
         cc.on_rtt_sample(6000, 0.0, 0); // rising_count = 5 -> RISING
         assert_eq!(cc.state, DeltaState::Rising);
     }
@@ -293,12 +319,12 @@ mod tests {
         };
         let mut cc = DeltaCC::new(config, 10000, 60);
         cc.on_rtt_sample(5000, 0.0, 0); // Baseline
-        
-        // With 10ms jitter, epsilon = 5000us. 
+
+        // With 10ms jitter, epsilon = 5000us.
         // A slope of 1000us should NOT trigger RISING.
-        cc.on_rtt_sample(6000, 0.0, 10000); 
+        cc.on_rtt_sample(6000, 0.0, 10000);
         assert_eq!(cc.state, DeltaState::Stable);
-        
+
         // A slope of 6000us SHOULD trigger RISING because it exceeds 5000us.
         cc.on_rtt_sample(12000, 0.0, 10000);
         assert_eq!(cc.state, DeltaState::Rising);
@@ -313,7 +339,7 @@ mod tests {
         };
         let mut cc = DeltaCC::new(config, 10000, 60);
         cc.on_rtt_sample(5000, 0.0, 0); // Baseline
-        
+
         // Breach 10ms target delay
         cc.on_rtt_sample(16000, 0.0, 0); // 16ms - 5ms = 11ms > 10ms
         assert_eq!(cc.state, DeltaState::Congested);
@@ -329,15 +355,15 @@ mod tests {
             ..DeltaConfig::default()
         };
         let mut cc = DeltaCC::new(config, 10000, 60);
-        
+
         // Baseline: RTT smooth init + first additive increase
-        cc.on_rtt_sample(5000, 0.0, 0); 
+        cc.on_rtt_sample(5000, 0.0, 0);
         assert_eq!(cc.target_bitrate_kbps(), 11000);
-        
+
         // Stable: second additive increase
-        cc.on_rtt_sample(5000, 0.0, 0); 
+        cc.on_rtt_sample(5000, 0.0, 0);
         assert_eq!(cc.target_bitrate_kbps(), 12000);
-        
+
         // Congested: half (beta 0.5)
         cc.on_rtt_sample(20000, 0.0, 0); // 15ms queue delay > 10ms target
         assert_eq!(cc.state, DeltaState::Congested);
@@ -347,14 +373,14 @@ mod tests {
     #[test]
     fn test_delta_jitter_fec_adjustment() {
         let mut cc = DeltaCC::new(DeltaConfig::default(), 10000, 60);
-        
+
         // Baseline FEC is 5%
         assert_eq!(cc.fec_ratio, 0.05);
-        
+
         // High jitter (15ms) should increase FEC
         cc.on_rtt_sample(5000, 0.0, 15000);
         assert!(cc.fec_ratio > 0.05);
-        
+
         // Low jitter (2ms) should allow FEC to decay
         let high_fec = cc.fec_ratio;
         cc.on_rtt_sample(5000, 0.0, 2000);

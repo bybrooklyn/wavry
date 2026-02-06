@@ -106,7 +106,7 @@ impl SecureClient {
     /// Create client with a specific keypair.
     pub fn with_keypair(private_key: [u8; 32]) -> Result<Self> {
         let initiator = NoiseInitiator::new(&private_key)?;
-        
+
         // Compute public key from private
         let secret = x25519_dalek::StaticSecret::from(private_key);
         let public_key = x25519_dalek::PublicKey::from(&secret);
@@ -123,7 +123,10 @@ impl SecureClient {
     ///
     /// Returns bytes to send to the server.
     pub fn start_handshake(&mut self) -> Result<Vec<u8>, ConnectionError> {
-        let initiator = self.initiator.as_mut().ok_or(ConnectionError::NotEstablished)?;
+        let initiator = self
+            .initiator
+            .as_mut()
+            .ok_or(ConnectionError::NotEstablished)?;
         let msg = initiator.write_message_1()?;
         self.state = ClientHandshakeState::SentMsg1;
         Ok(msg)
@@ -133,8 +136,11 @@ impl SecureClient {
     ///
     /// Returns bytes to send to complete the handshake.
     pub fn process_server_response(&mut self, data: &[u8]) -> Result<Vec<u8>, ConnectionError> {
-        let initiator = self.initiator.as_mut().ok_or(ConnectionError::NotEstablished)?;
-        
+        let initiator = self
+            .initiator
+            .as_mut()
+            .ok_or(ConnectionError::NotEstablished)?;
+
         // Read message 2
         let _payload = initiator.read_message_2(data)?;
         self.state = ClientHandshakeState::ReceivedMsg2;
@@ -143,7 +149,10 @@ impl SecureClient {
         let msg3 = initiator.write_message_3(&[])?;
 
         // Extract the session and create cipher
-        let initiator = self.initiator.take().ok_or(ConnectionError::NotEstablished)?;
+        let initiator = self
+            .initiator
+            .take()
+            .ok_or(ConnectionError::NotEstablished)?;
         let session = initiator.into_session()?;
 
         // Create cipher from established session (client = initiator)
@@ -159,14 +168,28 @@ impl SecureClient {
     }
 
     /// Encrypt a packet for sending.
-    pub fn encrypt(&mut self, packet_id: u64, plaintext: &[u8]) -> Result<Vec<u8>, ConnectionError> {
-        let cipher = self.cipher.as_mut().ok_or(ConnectionError::NotEstablished)?;
+    pub fn encrypt(
+        &mut self,
+        packet_id: u64,
+        plaintext: &[u8],
+    ) -> Result<Vec<u8>, ConnectionError> {
+        let cipher = self
+            .cipher
+            .as_mut()
+            .ok_or(ConnectionError::NotEstablished)?;
         cipher.encrypt(packet_id, plaintext)
     }
 
     /// Decrypt a received packet.
-    pub fn decrypt(&mut self, packet_id: u64, ciphertext: &[u8]) -> Result<Vec<u8>, ConnectionError> {
-        let cipher = self.cipher.as_mut().ok_or(ConnectionError::NotEstablished)?;
+    pub fn decrypt(
+        &mut self,
+        packet_id: u64,
+        ciphertext: &[u8],
+    ) -> Result<Vec<u8>, ConnectionError> {
+        let cipher = self
+            .cipher
+            .as_mut()
+            .ok_or(ConnectionError::NotEstablished)?;
         cipher.decrypt(packet_id, ciphertext)
     }
 
@@ -233,7 +256,10 @@ impl SecureServer {
     ///
     /// Returns bytes to send back to client.
     pub fn process_client_hello(&mut self, data: &[u8]) -> Result<Vec<u8>, ConnectionError> {
-        let responder = self.responder.as_mut().ok_or(ConnectionError::NotEstablished)?;
+        let responder = self
+            .responder
+            .as_mut()
+            .ok_or(ConnectionError::NotEstablished)?;
 
         // Read message 1
         let _payload = responder.read_message_1(data)?;
@@ -247,13 +273,19 @@ impl SecureServer {
 
     /// Process client message 3 to complete handshake.
     pub fn process_client_finish(&mut self, data: &[u8]) -> Result<(), ConnectionError> {
-        let responder = self.responder.as_mut().ok_or(ConnectionError::NotEstablished)?;
+        let responder = self
+            .responder
+            .as_mut()
+            .ok_or(ConnectionError::NotEstablished)?;
 
         // Read message 3 and transition
         let _payload = responder.read_message_3(data)?;
 
         // Extract session and create cipher (server = responder)
-        let responder = self.responder.take().ok_or(ConnectionError::NotEstablished)?;
+        let responder = self
+            .responder
+            .take()
+            .ok_or(ConnectionError::NotEstablished)?;
         let session = responder.into_session()?;
 
         self.cipher = Some(PacketCipher::from_session(session, false)?);
@@ -268,14 +300,28 @@ impl SecureServer {
     }
 
     /// Encrypt a packet for sending.
-    pub fn encrypt(&mut self, packet_id: u64, plaintext: &[u8]) -> Result<Vec<u8>, ConnectionError> {
-        let cipher = self.cipher.as_mut().ok_or(ConnectionError::NotEstablished)?;
+    pub fn encrypt(
+        &mut self,
+        packet_id: u64,
+        plaintext: &[u8],
+    ) -> Result<Vec<u8>, ConnectionError> {
+        let cipher = self
+            .cipher
+            .as_mut()
+            .ok_or(ConnectionError::NotEstablished)?;
         cipher.encrypt(packet_id, plaintext)
     }
 
     /// Decrypt a received packet.
-    pub fn decrypt(&mut self, packet_id: u64, ciphertext: &[u8]) -> Result<Vec<u8>, ConnectionError> {
-        let cipher = self.cipher.as_mut().ok_or(ConnectionError::NotEstablished)?;
+    pub fn decrypt(
+        &mut self,
+        packet_id: u64,
+        ciphertext: &[u8],
+    ) -> Result<Vec<u8>, ConnectionError> {
+        let cipher = self
+            .cipher
+            .as_mut()
+            .ok_or(ConnectionError::NotEstablished)?;
         cipher.decrypt(packet_id, ciphertext)
     }
 
@@ -303,7 +349,10 @@ impl PacketCipher {
     /// Uses the handshake hash to derive bidirectional keys:
     /// - Initiator-to-Responder key: H(handshake_hash || "I2R")
     /// - Responder-to-Initiator key: H(handshake_hash || "R2I")
-    fn from_session(session: crate::noise::NoiseSession, is_initiator: bool) -> Result<Self, ConnectionError> {
+    fn from_session(
+        session: crate::noise::NoiseSession,
+        is_initiator: bool,
+    ) -> Result<Self, ConnectionError> {
         let hash = session.handshake_hash();
 
         // Derive keys using simple hash-based KDF:
@@ -312,14 +361,14 @@ impl PacketCipher {
         //
         // Since we're using ChaCha20-Poly1305 which needs 32-byte keys,
         // and our handshake hash is 32 bytes from BLAKE2s, we XOR with labels.
-        
+
         let mut key_i2r = *hash;
         let mut key_r2i = *hash;
-        
+
         // XOR with different constants to derive different keys (exactly 32 bytes each)
         let label_i2r: [u8; 32] = *b"wavrykdf-initiator-to-responder0";
         let label_r2i: [u8; 32] = *b"wavrykdf-responder-to-initiator0";
-        
+
         for i in 0..32 {
             key_i2r[i] ^= label_i2r[i];
             key_r2i[i] ^= label_r2i[i];
@@ -343,10 +392,15 @@ impl PacketCipher {
     }
 
     /// Encrypt plaintext with the given packet_id as nonce.
-    pub fn encrypt(&mut self, packet_id: u64, plaintext: &[u8]) -> Result<Vec<u8>, ConnectionError> {
+    pub fn encrypt(
+        &mut self,
+        packet_id: u64,
+        plaintext: &[u8],
+    ) -> Result<Vec<u8>, ConnectionError> {
         let nonce = packet_id_to_nonce(packet_id);
 
-        let ciphertext = self.send_cipher
+        let ciphertext = self
+            .send_cipher
             .encrypt(&nonce, plaintext)
             .map_err(|e| ConnectionError::EncryptionFailed(e.to_string()))?;
 

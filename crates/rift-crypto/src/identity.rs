@@ -53,7 +53,10 @@ impl WavryId {
             .context("invalid base64url encoding")?;
 
         if bytes.len() != 32 {
-            anyhow::bail!("invalid Wavry ID length: expected 32 bytes, got {}", bytes.len());
+            anyhow::bail!(
+                "invalid Wavry ID length: expected 32 bytes, got {}",
+                bytes.len()
+            );
         }
 
         Ok(Self(s.to_string()))
@@ -143,7 +146,10 @@ impl IdentityKeypair {
             Ok(s) => s,
             Err(_) => return false,
         };
-        self.signing_key.verifying_key().verify(message, &sig).is_ok()
+        self.signing_key
+            .verifying_key()
+            .verify(message, &sig)
+            .is_ok()
     }
 
     /// Save keypair to files.
@@ -220,8 +226,7 @@ pub struct PublicIdentity {
 impl PublicIdentity {
     /// Create from raw public key bytes.
     pub fn from_bytes(bytes: &[u8; 32]) -> Result<Self> {
-        let verifying_key =
-            VerifyingKey::from_bytes(bytes).context("invalid public key")?;
+        let verifying_key = VerifyingKey::from_bytes(bytes).context("invalid public key")?;
         Ok(Self { verifying_key })
     }
 

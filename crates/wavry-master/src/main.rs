@@ -7,22 +7,22 @@
 
 use anyhow::{anyhow, Result};
 use axum::{
-    routing::{get, post},
-    Router, Json,
     extract::ws::{Message, WebSocket, WebSocketUpgrade},
     extract::State,
     response::IntoResponse,
+    routing::{get, post},
+    Json, Router,
 };
 use clap::Parser;
 use std::sync::Arc;
 use tower_http::cors::CorsLayer;
 use tracing::info;
 
+use ed25519_dalek::{Signature, Verifier, VerifyingKey};
+use futures_util::{SinkExt, StreamExt};
 use std::collections::HashMap;
 use std::sync::Mutex;
-use ed25519_dalek::{Verifier, VerifyingKey, Signature};
-use tokio::sync::{mpsc, RwLock};
-use futures_util::{StreamExt, SinkExt}; // Required for socket.split() and receiver.next()
+use tokio::sync::{mpsc, RwLock}; // Required for socket.split() and receiver.next()
 
 #[derive(Parser, Debug)]
 #[command(name = "wavry-master")]
@@ -34,10 +34,7 @@ struct Args {
     log_level: String,
 }
 
-use wavry_common::protocol::{
-    SignalMessage,
-    RegisterRequest, VerifyRequest
-};
+use wavry_common::protocol::{RegisterRequest, SignalMessage, VerifyRequest};
 
 type PeerMap = Arc<RwLock<HashMap<String, mpsc::UnboundedSender<Message>>>>;
 
@@ -68,11 +65,18 @@ async fn main() -> Result<()> {
 
     info!("wavry-master starting on {}", args.listen);
     let listener = tokio::net::TcpListener::bind(&args.listen).await?;
-    axum::serve(listener, app.into_make_service_with_connect_info::<std::net::SocketAddr>()).await.map_err(|e| anyhow!(e))?;
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+    )
+    .await
+    .map_err(|e| anyhow!(e))?;
     Ok(())
 }
 
-async fn health_check() -> &'static str { "OK" }
+async fn health_check() -> &'static str {
+    "OK"
+}
 
 async fn handle_register(
     axum::extract::State(state): axum::extract::State<Arc<AppState>>,
@@ -81,10 +85,10 @@ async fn handle_register(
     use rand::RngCore;
     let mut challenge = [0u8; 32];
     rand::thread_rng().fill_bytes(&mut challenge);
-    
+
     let mut lock = state.challenges.lock().unwrap();
     lock.insert(payload.wavry_id.clone(), challenge);
-    
+
     Json(serde_json::json!({
         "status": "pending_challenge",
         "challenge": hex::encode(challenge)
@@ -97,15 +101,25 @@ async fn handle_verify(
 ) -> Result<Json<serde_json::Value>, axum::http::StatusCode> {
     let challenge = {
         let mut lock = state.challenges.lock().unwrap();
-        lock.remove(&payload.wavry_id).ok_or(axum::http::StatusCode::BAD_REQUEST)?
+        lock.remove(&payload.wavry_id)
+            .ok_or(axum::http::StatusCode::BAD_REQUEST)?
     };
 
     // Verify Signature
-    let public_key_bytes = hex::decode(&payload.wavry_id).map_err(|_| axum::http::StatusCode::BAD_REQUEST)?;
-    let sig_bytes = hex::decode(&payload.signature_hex).map_err(|_| axum::http::StatusCode::BAD_REQUEST)?;
+    let public_key_bytes =
+        hex::decode(&payload.wavry_id).map_err(|_| axum::http::StatusCode::BAD_REQUEST)?;
+    let sig_bytes =
+        hex::decode(&payload.signature_hex).map_err(|_| axum::http::StatusCode::BAD_REQUEST)?;
 
-    let verifying_key = VerifyingKey::from_bytes(public_key_bytes.as_slice().try_into().map_err(|_| axum::http::StatusCode::BAD_REQUEST)?).map_err(|_| axum::http::StatusCode::BAD_REQUEST)?;
-    let signature = Signature::from_slice(&sig_bytes).map_err(|_| axum::http::StatusCode::BAD_REQUEST)?;
+    let verifying_key = VerifyingKey::from_bytes(
+        public_key_bytes
+            .as_slice()
+            .try_into()
+            .map_err(|_| axum::http::StatusCode::BAD_REQUEST)?,
+    )
+    .map_err(|_| axum::http::StatusCode::BAD_REQUEST)?;
+    let signature =
+        Signature::from_slice(&sig_bytes).map_err(|_| axum::http::StatusCode::BAD_REQUEST)?;
 
     if verifying_key.verify(&challenge, &signature).is_ok() {
         Ok(Json(serde_json::json!({
@@ -119,21 +133,20 @@ async fn handle_verify(
 }
 
 // --- WebSocket ---
-async fn ws_handler(
-    ws: WebSocketUpgrade,
-    State(state): State<Arc<AppState>>,
-) -> impl IntoResponse {
+async fn ws_handler(ws: WebSocketUpgrade, State(state): State<Arc<AppState>>) -> impl IntoResponse {
     ws.on_upgrade(move |socket| handle_socket(socket, state))
 }
 
 async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
     let (mut sender, mut receiver) = socket.split();
     let (tx, mut rx) = mpsc::unbounded_channel();
-    
+
     // Outgoing loop
     tokio::spawn(async move {
         while let Some(msg) = rx.recv().await {
-            if sender.send(msg).await.is_err() { break; }
+            if sender.send(msg).await.is_err() {
+                break;
+            }
         }
     });
 
@@ -146,54 +159,88 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
                 Err(_) => {
                     info!("Failed to parse signal message: {}", text);
                     continue;
-                },
+                }
             };
 
             match signal {
+                SignalMessage::OFFER_RIFT { .. } | SignalMessage::ANSWER_RIFT { .. } => {
+                    // Master doesn't handle RIFT signaling
+                }
                 SignalMessage::BIND { token } => {
                     // MOCK: In prod, verify token against DB/auth service
-                    let username = format!("user_{}", &token[..4]); 
+                    let username = format!("user_{}", &token[..4]);
                     my_username = Some(username.clone());
                     state.peers.write().await.insert(username, tx.clone());
                     info!("Peer bound: {}", my_username.as_ref().unwrap());
-                },
-                SignalMessage::OFFER { target_username, sdp, public_addr } => {
+                }
+                SignalMessage::OFFER {
+                    target_username,
+                    sdp,
+                    public_addr,
+                } => {
                     if let Some(src) = &my_username {
-                        relay_signal(&state, &target_username, SignalMessage::OFFER {
-                            target_username: src.clone(),
-                            sdp,
-                            public_addr,
-                        }).await;
+                        relay_signal(
+                            &state,
+                            &target_username,
+                            SignalMessage::OFFER {
+                                target_username: src.clone(),
+                                sdp,
+                                public_addr,
+                            },
+                        )
+                        .await;
                     }
-                },
-                SignalMessage::ANSWER { target_username, sdp, public_addr } => {
+                }
+                SignalMessage::ANSWER {
+                    target_username,
+                    sdp,
+                    public_addr,
+                } => {
                     if let Some(src) = &my_username {
-                        relay_signal(&state, &target_username, SignalMessage::ANSWER {
-                            target_username: src.clone(),
-                            sdp,
-                            public_addr,
-                        }).await;
+                        relay_signal(
+                            &state,
+                            &target_username,
+                            SignalMessage::ANSWER {
+                                target_username: src.clone(),
+                                sdp,
+                                public_addr,
+                            },
+                        )
+                        .await;
                     }
-                },
-                SignalMessage::CANDIDATE { target_username, candidate } => {
+                }
+                SignalMessage::CANDIDATE {
+                    target_username,
+                    candidate,
+                } => {
                     if let Some(src) = &my_username {
-                        relay_signal(&state, &target_username, SignalMessage::CANDIDATE {
-                            target_username: src.clone(),
-                            candidate,
-                        }).await;
+                        relay_signal(
+                            &state,
+                            &target_username,
+                            SignalMessage::CANDIDATE {
+                                target_username: src.clone(),
+                                candidate,
+                            },
+                        )
+                        .await;
                     }
-                },
+                }
                 SignalMessage::REQUEST_RELAY { target_username } => {
                     if let Some(src) = &my_username {
-                        relay_signal(&state, &target_username, SignalMessage::REQUEST_RELAY {
-                            target_username: src.clone(),
-                        }).await;
+                        relay_signal(
+                            &state,
+                            &target_username,
+                            SignalMessage::REQUEST_RELAY {
+                                target_username: src.clone(),
+                            },
+                        )
+                        .await;
                     }
-                },
+                }
                 SignalMessage::RELAY_CREDENTIALS { .. } => {
-                   // Ensure we don't panic on received credentials without target
-                   info!("Received RELAY_CREDENTIALS from client. Ignoring (no target).");
-                },
+                    // Ensure we don't panic on received credentials without target
+                    info!("Received RELAY_CREDENTIALS from client. Ignoring (no target).");
+                }
                 SignalMessage::ERROR { message, .. } => {
                     info!("Received ERROR message from client: {}", message);
                 }
@@ -212,6 +259,9 @@ async fn relay_signal(state: &Arc<AppState>, target: &str, msg: SignalMessage) {
     if let Some(tx) = guard.get(target) {
         let _ = tx.send(Message::Text(serde_json::to_string(&msg).unwrap()));
     } else {
-        info!("Target peer '{}' not found for relaying message: {:?}", target, msg);
+        info!(
+            "Target peer '{}' not found for relaying message: {:?}",
+            target, msg
+        );
     }
 }

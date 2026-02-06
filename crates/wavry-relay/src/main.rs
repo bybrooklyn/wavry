@@ -16,14 +16,11 @@ use std::time::Duration;
 
 use anyhow::Result;
 use clap::Parser;
-use serde::{Deserialize, Serialize};
-use rift_core::{
-    decode_msg, PhysicalPacket, Message as ProtoMessage,
-    relay::{
-        LeaseAckPayload, LeaseRejectPayload, LeaseRejectReason, RelayHeader, RelayPacketType,
-        RELAY_HEADER_SIZE, RELAY_MAX_PACKET_SIZE,
-    }
+use rift_core::relay::{
+    LeaseAckPayload, LeaseRejectPayload, LeaseRejectReason, RelayHeader, RelayPacketType,
+    RELAY_HEADER_SIZE, RELAY_MAX_PACKET_SIZE,
 };
+use serde::{Deserialize, Serialize};
 use session::{PeerRole, SessionError, SessionPool};
 use tokio::net::UdpSocket;
 use tokio::sync::RwLock;
@@ -140,7 +137,8 @@ impl RelayServer {
 
         let master_public_key = if let Some(hex_key) = master_key_hex {
             let key_bytes = hex::decode(hex_key)?;
-            let key = pasetors::keys::AsymmetricPublicKey::<pasetors::version4::V4>::from(&key_bytes)?;
+            let key =
+                pasetors::keys::AsymmetricPublicKey::<pasetors::version4::V4>::from(&key_bytes)?;
             Some(key)
         } else {
             None
@@ -161,7 +159,8 @@ impl RelayServer {
 
     async fn run(&self) -> Result<()> {
         let mut buf = vec![0u8; RELAY_MAX_PACKET_SIZE];
-        let mut cleanup_interval = tokio::time::interval(Duration::from_secs(CLEANUP_INTERVAL_SECS));
+        let mut cleanup_interval =
+            tokio::time::interval(Duration::from_secs(CLEANUP_INTERVAL_SECS));
 
         loop {
             tokio::select! {
@@ -205,15 +204,9 @@ impl RelayServer {
 
         // 5. Dispatch by type
         match header.packet_type {
-            RelayPacketType::LeasePresent => {
-                self.handle_lease_present(&header, payload, src).await
-            }
-            RelayPacketType::LeaseRenew => {
-                self.handle_lease_renew(&header, src).await
-            }
-            RelayPacketType::Forward => {
-                self.handle_forward(&header, payload, src).await
-            }
+            RelayPacketType::LeasePresent => self.handle_lease_present(&header, payload, src).await,
+            RelayPacketType::LeaseRenew => self.handle_lease_renew(&header, src).await,
+            RelayPacketType::Forward => self.handle_forward(&header, payload, src).await,
             _ => Err(PacketError::UnexpectedType),
         }
     }
@@ -227,28 +220,34 @@ impl RelayServer {
         use rift_core::relay::LeasePresentPayload;
 
         // 1. Parse payload
-        let payload = LeasePresentPayload::decode(payload).map_err(|_| PacketError::InvalidPayload)?;
+        let payload =
+            LeasePresentPayload::decode(payload).map_err(|_| PacketError::InvalidPayload)?;
 
         // 2. Validate PASETO lease token
         let mut maybe_claims = None;
         let wavry_id = if let Some(ref master_key) = self.master_public_key {
-            let token_str = String::from_utf8(payload.lease_token).map_err(|_| PacketError::InvalidPayload)?;
-            
-            let mut validation_rules = pasetors::claims::ClaimsValidationRules::new();
+            let token_str =
+                String::from_utf8(payload.lease_token).map_err(|_| PacketError::InvalidPayload)?;
+
+            let validation_rules = pasetors::claims::ClaimsValidationRules::new();
             // validation_rules.validate_expiration(); // Removed or fix according to newer pasetors
-            
-            let untrusted_token = pasetors::token::UntrustedToken::<pasetors::token::Public, pasetors::version4::V4>::try_from(&token_str)
-                .map_err(|_| PacketError::InvalidSignature)?;
+
+            let untrusted_token = pasetors::token::UntrustedToken::<
+                pasetors::token::Public,
+                pasetors::version4::V4,
+            >::try_from(&token_str)
+            .map_err(|_| PacketError::InvalidSignature)?;
 
             let claims = pasetors::public::verify(
                 master_key,
                 &untrusted_token,
                 &validation_rules,
                 None,
-                None
-            ).map_err(|_| PacketError::InvalidSignature)?;
+                None,
+            )
+            .map_err(|_| PacketError::InvalidSignature)?;
 
-            let claims_json: LeaseClaims = serde_json::from_value(claims.payload().clone().into())
+            let claims_json: LeaseClaims = serde_json::from_value(claims.payload().into())
                 .map_err(|_| PacketError::InvalidPayload)?;
 
             // Verify session ID matches
@@ -280,7 +279,8 @@ impl RelayServer {
         // 3. Register peer
         if let Err(e) = session.register_peer(peer_role, wavry_id, src) {
             warn!("Failed to register peer from {}: {}", src, e);
-            self.send_lease_reject(header.session_id, src, LeaseRejectReason::SessionFull).await;
+            self.send_lease_reject(header.session_id, src, LeaseRejectReason::SessionFull)
+                .await;
             return Err(PacketError::SessionError);
         }
 
@@ -349,9 +349,8 @@ impl RelayServer {
         }
 
         // Identify sender and get destination
-        let (sender_role, _sender_id, dest) = session
-            .identify_peer(src)
-            .ok_or(PacketError::UnknownPeer)?;
+        let (sender_role, _sender_id, dest) =
+            session.identify_peer(src).ok_or(PacketError::UnknownPeer)?;
 
         let dest_addr = dest.socket_addr;
 
@@ -368,13 +367,16 @@ impl RelayServer {
             return Err(PacketError::RateLimited);
         }
 
-        // 7. Sequence number check 
+        // 7. Sequence number check
         // TODO: Implement sequence window check in session
-        
+
         // 8. Update sender's last seen (for NAT rebinding)
         if let Some(sender) = session.get_peer_mut(sender_role) {
             if sender.socket_addr != src {
-                debug!("NAT rebinding detected for {:?}: {} -> {}", sender_role, sender.socket_addr, src);
+                debug!(
+                    "NAT rebinding detected for {:?}: {} -> {}",
+                    sender_role, sender.socket_addr, src
+                );
                 sender.socket_addr = src;
             }
             sender.last_seen = now;
@@ -388,7 +390,9 @@ impl RelayServer {
         // Forward the entire original packet to destination
         // We need to re-encode header + payload
         let mut forward_buf = vec![0u8; RELAY_HEADER_SIZE + payload.len()];
-        header.encode(&mut forward_buf).map_err(|_| PacketError::InvalidHeader)?;
+        header
+            .encode(&mut forward_buf)
+            .map_err(|_| PacketError::InvalidHeader)?;
         forward_buf[RELAY_HEADER_SIZE..].copy_from_slice(payload);
 
         drop(sessions); // Release lock before sending
@@ -414,7 +418,7 @@ impl RelayServer {
 
         let payload = LeaseAckPayload {
             expires_ms: unix_expires,
-            soft_limit_kbps: 50_000, // 50 Mbps
+            soft_limit_kbps: 50_000,  // 50 Mbps
             hard_limit_kbps: 100_000, // 100 Mbps
         };
 
@@ -433,7 +437,12 @@ impl RelayServer {
         }
     }
 
-    async fn send_lease_reject(&self, session_id: uuid::Uuid, dest: SocketAddr, reason: LeaseRejectReason) {
+    async fn send_lease_reject(
+        &self,
+        session_id: uuid::Uuid,
+        dest: SocketAddr,
+        reason: LeaseRejectReason,
+    ) {
         let header = RelayHeader::new(RelayPacketType::LeaseReject, session_id);
 
         let payload = LeaseRejectPayload { reason };
@@ -500,34 +509,34 @@ async fn main() -> Result<()> {
 
     // Initialize tracing
     let filter = format!("{},hyper=warn,tokio=warn", args.log_level);
-    tracing_subscriber::fmt()
-        .with_env_filter(filter)
-        .init();
+    tracing_subscriber::fmt().with_env_filter(filter).init();
 
     info!("Starting wavry-relay v{}", env!("CARGO_PKG_VERSION"));
-    
+
     // Generate Relay ID
     let relay_id = Uuid::new_v4();
     info!("Relay ID: {}", relay_id);
-    
+
     // Register with Master (with retries)
     let client = reqwest::Client::new();
     let register_url = format!("{}/v1/relays/register", args.master_url);
     let endpoints = vec![args.listen.to_string()];
-    
+
     let mut retry_delay = Duration::from_secs(1);
     let max_retry_delay = Duration::from_secs(60);
 
     info!("Registering with Master at {}...", args.master_url);
-    
+
     let reg_data = loop {
-        match client.post(&register_url)
+        match client
+            .post(&register_url)
             .json(&RelayRegisterRequest {
                 relay_id: relay_id.to_string(),
                 endpoints: endpoints.clone(),
             })
             .send()
-            .await {
+            .await
+        {
             Ok(resp) => {
                 if resp.status().is_success() {
                     match resp.json::<RelayRegisterResponse>().await {
@@ -540,51 +549,55 @@ async fn main() -> Result<()> {
             }
             Err(e) => warn!("Failed to connect to Master: {}", e),
         }
-        
+
         info!("Retrying registration in {:?}...", retry_delay);
         tokio::time::sleep(retry_delay).await;
         retry_delay = std::cmp::min(retry_delay * 2, max_retry_delay);
     };
-        
-    info!("Registered successfully. Heartbeat interval: {}ms", reg_data.heartbeat_interval_ms);
 
-    let server = Arc::new(RelayServer::new(
-        args.listen,
-        args.max_sessions,
-        Duration::from_secs(args.idle_timeout),
-        args.master_public_key.as_deref(),
-    )
-    .await?);
+    info!(
+        "Registered successfully. Heartbeat interval: {}ms",
+        reg_data.heartbeat_interval_ms
+    );
+
+    let server = Arc::new(
+        RelayServer::new(
+            args.listen,
+            args.max_sessions,
+            Duration::from_secs(args.idle_timeout),
+            args.master_public_key.as_deref(),
+        )
+        .await?,
+    );
 
     // Spawn Heartbeat Task
     let server_clone = server.clone();
     let master_url = args.master_url.clone();
     let hb_interval = Duration::from_millis(reg_data.heartbeat_interval_ms);
-    let relay_id_clone = relay_id.clone();
     let max_sessions = args.max_sessions;
 
     tokio::spawn(async move {
         let client = reqwest::Client::new();
         let heartbeat_url = format!("{}/v1/relays/heartbeat", master_url);
         let mut interval = tokio::time::interval(hb_interval);
-        
+
         loop {
             interval.tick().await;
-            
+
             let active = server_clone.active_session_count().await;
-            
+
             // Calculate load (0-100)
             let load = if max_sessions > 0 {
                 (active as f32 / max_sessions as f32) * 100.0
             } else {
                 100.0
             } as u8;
-            
+
             let req = RelayHeartbeatRequest {
-                relay_id: relay_id_clone.to_string(),
+                relay_id: relay_id.to_string(),
                 load_pct: load as f32,
             };
-            
+
             if let Err(e) = client.post(&heartbeat_url).json(&req).send().await {
                 warn!("Failed to send heartbeat: {}", e);
             }

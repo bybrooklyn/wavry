@@ -49,7 +49,7 @@ pub enum RiftError {
 pub mod cc;
 pub mod stun;
 
-use bytes::{Bytes, BytesMut, Buf, BufMut};
+use bytes::{Buf, BufMut, Bytes, BytesMut};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PhysicalPacket {
@@ -68,7 +68,7 @@ impl PhysicalPacket {
         } else {
             TRANSPORT_HEADER_SIZE
         };
-        
+
         let mut buf = BytesMut::with_capacity(header_size + self.payload.len());
         buf.put_slice(&RIFT_MAGIC);
         buf.put_u16(self.version);
@@ -80,7 +80,7 @@ impl PhysicalPacket {
         }
 
         buf.put_u64(self.packet_id);
-        
+
         // Placeholder for checksum
         let csum_pos = buf.len();
         buf.put_u16(0);
@@ -91,9 +91,9 @@ impl PhysicalPacket {
         let mut state = crc16::State::<crc16::KERMIT>::new();
         state.update(&buf[..csum_pos]);
         let csum = state.get();
-        
+
         // Fill checksum
-        let mut buf_slice = &mut buf[csum_pos..csum_pos+2];
+        let mut buf_slice = &mut buf[csum_pos..csum_pos + 2];
         buf_slice.put_u16(csum);
 
         buf.freeze()
@@ -104,7 +104,7 @@ impl PhysicalPacket {
             return Err(RiftError::TooShort(bytes.len()));
         }
 
-        if &bytes[0..2] != RIFT_MAGIC {
+        if bytes[0..2] != RIFT_MAGIC {
             return Err(RiftError::InvalidMagic([bytes[0], bytes[1]]));
         }
 
@@ -115,13 +115,13 @@ impl PhysicalPacket {
 
         // Check if handshake
         let alias_test = u32::from_be_bytes(bytes[4..8].try_into().unwrap());
-        
+
         if alias_test == 0 && bytes.len() >= HANDSHAKE_HEADER_SIZE {
             // Handshake (30 bytes)
             let session_id = u128::from_be_bytes(bytes[4..20].try_into().unwrap());
             let packet_id = u64::from_be_bytes(bytes[20..28].try_into().unwrap());
             let csum = u16::from_be_bytes([bytes[28], bytes[29]]);
-            
+
             // Verify checksum
             let mut state = crc16::State::<crc16::KERMIT>::new();
             state.update(&bytes[..28]);
@@ -144,7 +144,7 @@ impl PhysicalPacket {
             let session_alias = alias_test;
             let packet_id = u64::from_be_bytes(bytes[8..16].try_into().unwrap());
             let csum = u16::from_be_bytes([bytes[16], bytes[17]]);
-            
+
             // Verify checksum
             let mut state = crc16::State::<crc16::KERMIT>::new();
             state.update(&bytes[..16]);
@@ -365,7 +365,10 @@ impl Handshake {
         }
     }
 
-    pub fn on_receive_hello(&mut self, _hello: &Hello) -> Result<HandshakeTransition, HandshakeError> {
+    pub fn on_receive_hello(
+        &mut self,
+        _hello: &Hello,
+    ) -> Result<HandshakeTransition, HandshakeError> {
         match (self.role, &self.state) {
             (Role::Host, HandshakeState::Init) => {
                 self.transition(HandshakeEvent::ReceiveHello, HandshakeState::HelloReceived)
@@ -459,8 +462,11 @@ mod tests {
         Hello {
             client_name: "test".to_string(),
             platform: Platform::Linux as i32,
-            supported_codecs: vec![Codec::Hevc as i32],
-            max_resolution: Some(Resolution { width: 1920, height: 1080 }),
+            supported_codecs: vec![Codec::Av1 as i32, Codec::Hevc as i32, Codec::H264 as i32],
+            max_resolution: Some(Resolution {
+                width: 1920,
+                height: 1080,
+            }),
             max_fps: 60,
             input_caps: 1, // Keyboard
             protocol_version: 1,
@@ -472,7 +478,10 @@ mod tests {
         HelloAck {
             accepted,
             selected_codec: Codec::Hevc as i32,
-            stream_resolution: Some(Resolution { width: 1920, height: 1080 }),
+            stream_resolution: Some(Resolution {
+                width: 1920,
+                height: 1080,
+            }),
             fps: 60,
             initial_bitrate_kbps: 8000,
             keyframe_interval_ms: 1000,

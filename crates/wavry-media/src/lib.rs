@@ -1,11 +1,13 @@
 // #![forbid(unsafe_code)]
 
 use anyhow::Result;
+use serde::{Deserialize, Serialize};
 #[cfg(unix)]
 use std::os::fd::OwnedFd;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 pub enum Codec {
+    Av1,
     Hevc,
     H264,
 }
@@ -18,7 +20,10 @@ pub enum FrameFormat {
 
 #[derive(Debug)]
 pub enum FrameData {
-    Cpu { bytes: Vec<u8>, stride: u32 },
+    Cpu {
+        bytes: Vec<u8>,
+        stride: u32,
+    },
     #[cfg(unix)]
     Dmabuf {
         fd: OwnedFd,
@@ -45,7 +50,7 @@ pub struct EncodedFrame {
     pub data: Vec<u8>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Resolution {
     pub width: u16,
     pub height: u16,
@@ -58,6 +63,7 @@ pub struct EncodeConfig {
     pub fps: u16,
     pub bitrate_kbps: u32,
     pub keyframe_interval_ms: u32,
+    pub display_id: Option<u32>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -74,9 +80,17 @@ pub trait Decoder: Send {
     fn decode(&mut self, payload: &[u8], timestamp_us: u64) -> Result<RawFrame>;
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DisplayInfo {
+    pub id: u32,
+    pub name: String,
+    pub resolution: Resolution,
+}
+
 pub trait CapabilityProbe: Send + Sync {
     fn supported_encoders(&self) -> Result<Vec<Codec>>;
     fn supported_decoders(&self) -> Result<Vec<Codec>>;
+    fn enumerate_displays(&self) -> Result<Vec<DisplayInfo>>;
 }
 
 pub trait Renderer: Send {
@@ -85,16 +99,51 @@ pub trait Renderer: Send {
 
 // Input Types abstraction (simplified for now)
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum MouseButton { Left, Right, Middle }
+pub enum MouseButton {
+    Left,
+    Right,
+    Middle,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct GamepadAxis {
+    pub axis: u32,
+    pub value: f32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct GamepadButton {
+    pub button: u32,
+    pub pressed: bool,
+}
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum InputEvent {
-    MouseMove { x: f32, y: f32 }, // Normalized 0..1
-    MouseDown { button: MouseButton },
-    MouseUp { button: MouseButton },
-    KeyDown { key_code: u32 }, // Platform specific for now (Mac: CGKeyCode)
-    KeyUp { key_code: u32 },
-    Scroll { dx: f32, dy: f32 },
+    MouseMove {
+        x: f32,
+        y: f32,
+    }, // Normalized 0..1
+    MouseDown {
+        button: MouseButton,
+    },
+    MouseUp {
+        button: MouseButton,
+    },
+    KeyDown {
+        key_code: u32,
+    },
+    KeyUp {
+        key_code: u32,
+    },
+    Scroll {
+        dx: f32,
+        dy: f32,
+    },
+    Gamepad {
+        gamepad_id: u32,
+        axes: Vec<GamepadAxis>,
+        buttons: Vec<GamepadButton>,
+    },
 }
 
 pub trait InputInjector: Send {
@@ -111,13 +160,19 @@ impl CapabilityProbe for NullProbe {
     fn supported_decoders(&self) -> Result<Vec<Codec>> {
         Ok(vec![])
     }
+
+    fn enumerate_displays(&self) -> Result<Vec<DisplayInfo>> {
+        Ok(vec![])
+    }
 }
 
 #[cfg(target_os = "linux")]
 mod linux;
 
+mod audio;
+
 #[cfg(target_os = "linux")]
-pub use linux::{PipewireEncoder, GstVideoRenderer, GstAudioRenderer, PipewireAudioCapturer};
+pub use linux::{GstAudioRenderer, GstVideoRenderer, LinuxProbe, PipewireAudioCapturer, PipewireEncoder};
 
 mod dummy;
 pub use dummy::{DummyEncoder, DummyRenderer};
@@ -128,7 +183,7 @@ mod mac_screen_encoder;
 mod mac_video_renderer;
 
 #[cfg(target_os = "macos")]
-pub use mac_screen_encoder::MacScreenEncoder;
+pub use mac_screen_encoder::{MacProbe, MacScreenEncoder};
 #[cfg(target_os = "macos")]
 pub use mac_video_renderer::MacVideoRenderer;
 
@@ -137,8 +192,21 @@ mod mac_input_injector;
 #[cfg(target_os = "macos")]
 pub use mac_input_injector::MacInputInjector;
 
+#[cfg(target_os = "macos")]
+mod mac_audio_capturer;
+#[cfg(target_os = "macos")]
+pub use mac_audio_capturer::MacAudioCapturer;
+
+#[cfg(target_os = "macos")]
+mod mac_audio_renderer;
+#[cfg(target_os = "macos")]
+pub use mac_audio_renderer::MacAudioRenderer;
+
 #[cfg(target_os = "windows")]
 mod windows;
 
 #[cfg(target_os = "windows")]
-pub use windows::{WindowsEncoder, WindowsRenderer, WindowsAudioRenderer, WindowsAudioCapturer};
+pub use windows::{
+    WindowsAudioCapturer, WindowsAudioRenderer, WindowsEncoder, WindowsInputInjector, WindowsProbe,
+    WindowsRenderer,
+};

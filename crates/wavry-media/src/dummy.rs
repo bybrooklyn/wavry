@@ -1,5 +1,5 @@
-use anyhow::Result;
 use crate::{DecodeConfig, EncodeConfig, EncodedFrame};
+use anyhow::Result;
 use std::time::{Duration, Instant};
 
 pub struct DummyEncoder {
@@ -21,7 +21,7 @@ impl DummyEncoder {
         // Simulate frame timing
         let frame_interval = Duration::from_secs_f64(1.0 / self.fps as f64);
         let target_time = self.start + frame_interval * self.seq as u32;
-        
+
         if let Some(wait) = target_time.checked_duration_since(Instant::now()) {
             std::thread::sleep(wait);
         }

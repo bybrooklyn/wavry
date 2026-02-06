@@ -313,7 +313,10 @@ impl SessionPool {
 
     /// Get active session count
     pub fn active_count(&self) -> usize {
-        self.sessions.values().filter(|s| matches!(s.state, SessionState::Active | SessionState::Renewed)).count()
+        self.sessions
+            .values()
+            .filter(|s| matches!(s.state, SessionState::Active | SessionState::Renewed))
+            .count()
     }
 
     /// Check if empty

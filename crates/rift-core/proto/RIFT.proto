@@ -75,6 +75,30 @@ message StatsReport {
     uint32 jitter_us = 5;
 }
 
+message Nack {
+    repeated uint64 packet_ids = 1;
+}
+
+message EncoderControl {
+    uint32 skip_frames = 1;
+}
+
+message PoseUpdate {
+    uint64 timestamp_us = 1;
+    float position_x = 2;
+    float position_y = 3;
+    float position_z = 4;
+    float orientation_x = 5;
+    float orientation_y = 6;
+    float orientation_z = 7;
+    float orientation_w = 8;
+}
+
+message VrTiming {
+    float refresh_hz = 1;
+    int64 vsync_offset_us = 2;
+}
+
 message CongestionControl {
     uint32 target_bitrate_kbps = 1;
     uint32 target_fps = 2;
@@ -82,6 +106,21 @@ message CongestionControl {
 
 message ReferenceInvalidation {
     uint64 last_valid_frame_id = 1;
+}
+
+message MonitorInfo {
+    uint32 id = 1;
+    string name = 2;
+    uint32 width = 3;
+    uint32 height = 4;
+}
+
+message MonitorList {
+    repeated MonitorInfo monitors = 1;
+}
+
+message SelectMonitor {
+    uint32 monitor_id = 1;
 }
 
 message ControlMessage {
@@ -93,6 +132,12 @@ message ControlMessage {
         StatsReport stats = 5;
         CongestionControl congestion = 6;
         ReferenceInvalidation rfi = 7;
+        MonitorList monitor_list = 8;
+        SelectMonitor select_monitor = 9;
+        Nack nack = 10;
+        EncoderControl encoder_control = 11;
+        PoseUpdate pose_update = 12;
+        VrTiming vr_timing = 13;
     }
 }
 
@@ -120,6 +165,22 @@ message Scroll {
     float dy = 2;
 }
 
+message GamepadAxis {
+    uint32 axis = 1;
+    float value = 2;
+}
+
+message GamepadButton {
+    uint32 button = 1;
+    bool pressed = 2;
+}
+
+message GamepadMessage {
+    uint32 gamepad_id = 1;
+    repeated GamepadAxis axes = 2;
+    repeated GamepadButton buttons = 3;
+}
+
 message InputMessage {
     uint64 timestamp_us = 1;
     oneof event {
@@ -127,6 +188,7 @@ message InputMessage {
         MouseButton mouse_button = 3;
         Key key = 4;
         Scroll scroll = 5;
+        GamepadMessage gamepad = 6;
     }
 }
 

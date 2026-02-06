@@ -115,6 +115,26 @@ Technical contributions are welcome. Please ensure any changes to the protocol a
 
 ---
 
+## Licensing & Hosted Service
+
+**Open Source (AGPL-3.0):**
+- Free to use, modify, and self-host.
+- If you modify Wavry and provide it as a service, you must publish your changes (standard AGPL).
+
+**Commercial License:**
+- Available for private modifications, internal embedding, and closed derivatives.
+- See `COMMERCIAL.md` for details.
+
+**Hosted Auth / Matchmaking / Relay (Official Service):**
+- Personal / non-commercial use is free and unlimited.
+- Commercial use requires a commercial agreement.
+- Official relay is fallback-only and capped at **1080p / 60fps / ~10 Mbps** per session.
+- Community relays are allowed but must register with auth; relays only forward traffic.
+
+See `TERMS.md` for the minimal hosted service policy.
+
+---
+
 ## License
 
 Wavry is licensed under the **GNU Affero General Public License v3.0 (AGPL-3.0)**. See [`LICENSE`](LICENSE) for details.

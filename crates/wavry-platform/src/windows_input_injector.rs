@@ -1,7 +1,7 @@
-use anyhow::Result;
 use crate::InputInjector;
-use windows::Win32::UI::Input::KeyboardAndMouse::*;
+use anyhow::Result;
 use windows::Win32::Foundation::HWND;
+use windows::Win32::UI::Input::KeyboardAndMouse::*;
 use windows::Win32::UI::WindowsAndMessaging::{GetSystemMetrics, SM_CXSCREEN, SM_CYSCREEN};
 
 pub struct WindowsInjector;
@@ -20,7 +20,11 @@ impl InputInjector for WindowsInjector {
                 ki: KEYBDINPUT {
                     wVk: VIRTUAL_KEY(keycode as u16),
                     wScan: 0,
-                    dwFlags: if pressed { KEYBD_EVENT_FLAGS(0) } else { KEYEVENTF_KEYUP },
+                    dwFlags: if pressed {
+                        KEYBD_EVENT_FLAGS(0)
+                    } else {
+                        KEYEVENTF_KEYUP
+                    },
                     time: 0,
                     dwExtraInfo: 0,
                 },

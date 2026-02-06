@@ -1,7 +1,7 @@
-use sqlx::SqlitePool;
-use uuid::Uuid;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use sqlx::SqlitePool;
+use uuid::Uuid;
 
 #[derive(Debug, Serialize, Deserialize, sqlx::FromRow)]
 pub struct User {
@@ -29,12 +29,12 @@ pub struct Session {
 // DB Operations
 
 pub async fn create_user(
-    pool: &SqlitePool, 
-    email: &str, 
-    password_hash: &str, 
+    pool: &SqlitePool,
+    email: &str,
+    password_hash: &str,
     display_name: &str,
     username: &str,
-    public_key: &str
+    public_key: &str,
 ) -> anyhow::Result<User> {
     let id = Uuid::new_v4().to_string();
     let user = sqlx::query_as::<_, User>(
@@ -67,12 +67,13 @@ pub async fn get_user_by_email(pool: &SqlitePool, email: &str) -> anyhow::Result
 pub async fn create_session(
     pool: &SqlitePool,
     user_id: &str,
-    ip_address: Option<String>
+    ip_address: Option<String>,
 ) -> anyhow::Result<Session> {
     // Generate secure random token
     // Using a simple UUID for now, but in production should be high-entropy 32-byte hex
-    let token = Uuid::new_v4().to_string().replace("-", "") + &Uuid::new_v4().to_string().replace("-", ""); 
-    
+    let token =
+        Uuid::new_v4().to_string().replace("-", "") + &Uuid::new_v4().to_string().replace("-", "");
+
     // Expires in 24 hours
     let expires_at = Utc::now() + chrono::Duration::hours(24);
 
@@ -81,7 +82,7 @@ pub async fn create_session(
         INSERT INTO sessions (token, user_id, expires_at, ip_address)
         VALUES (?, ?, ?, ?)
         RETURNING token, user_id, expires_at, ip_address, created_at
-        "#
+        "#,
     )
     .bind(&token)
     .bind(user_id)

@@ -79,6 +79,7 @@ fn process_sample(sample: RttSample) {
     let delta_q = d_q - last_d_q;
 
     // 2. Evaluate State with Persistence
+    let epsilon = rtt_smooth * 0.05;
     if d_q > T_LIMIT {
         set_state(CONGESTED);
         congested_start_time = now();
@@ -118,7 +119,7 @@ fn process_sample(sample: RttSample) {
 ## 6. Tunable Constants
 
 - **$T_{limit}$**: Latency budget (e.g., 15ms). Safety ceiling for queuing delay.
-- **$\epsilon$**: Slope noise floor. Prevents reacting to tiny RTT fluctuations.
+- **$\epsilon$**: Slope noise floor. Scales with smoothed RTT (e.g., $\epsilon = RTT_{smooth} \cdot 0.05$) to adapt across LAN/WAN.
 - **$\alpha$**: EWMA weight (e.g., 0.125). Balanced between responsiveness and smoothing.
 - **$k_{rising}$**: Persistence factor. Higher values make the algorithm "sturdier" against jitter but slower to react.
 - **$\beta$**: Back-off factor. Determines the depth of the bitrate cut on congestion.

@@ -11,8 +11,84 @@ use ashpd::desktop::{
 use gstreamer as gst;
 use gstreamer::prelude::*;
 use gstreamer_app as gst_app;
+use gst::glib;
 
-use crate::{Codec, DecodeConfig, EncodedFrame, EncodeConfig, Renderer};
+use crate::{Codec, DecodeConfig, EncodeConfig, EncodedFrame, Renderer};
+
+fn element_available(name: &str) -> bool {
+    gst::ElementFactory::find(name).is_some()
+}
+
+fn select_parser(codec: Codec) -> Result<&'static str> {
+    let parser = match codec {
+        Codec::Av1 => "av1parse",
+        Codec::Hevc => "h265parse",
+        Codec::H264 => "h264parse",
+    };
+    if !element_available(parser) {
+        return Err(anyhow!("missing GStreamer parser element: {parser}"));
+    }
+    Ok(parser)
+}
+
+fn caps_for_codec(codec: Codec) -> &'static str {
+    match codec {
+        Codec::Av1 => "video/x-av1,stream-format=(string)obu-stream,alignment=(string)tu",
+        Codec::Hevc => "video/x-h265,stream-format=(string)byte-stream,alignment=(string)au",
+        Codec::H264 => "video/x-h264,stream-format=(string)byte-stream,alignment=(string)au",
+    }
+}
+
+fn select_encoder(codec: Codec) -> Result<(String, &'static str)> {
+    let candidates: &[&str] = match codec {
+        Codec::H264 => &["vaapih264enc", "x264enc", "openh264enc"],
+        Codec::Hevc => &["vaapih265enc", "x265enc"],
+        Codec::Av1 => &["vaapav1enc", "vaapivav1enc", "svtav1enc", "av1enc", "rav1enc"],
+    };
+    let encoder = candidates
+        .iter()
+        .find(|name| element_available(name))
+        .ok_or_else(|| anyhow!("missing GStreamer encoder element for {codec:?}"))?;
+    let input_format = if encoder.starts_with("vaapi") { "NV12" } else { "I420" };
+    Ok((encoder.to_string(), input_format))
+}
+
+fn configure_low_latency_encoder(
+    encoder: &gst::Element,
+    encoder_name: &str,
+    bitrate_kbps: u32,
+    keyframe_interval_frames: u32,
+) -> Result<()> {
+    let set_if_exists = |name: &str, value: impl glib::ToValue| {
+        if encoder.has_property(name, None) {
+            encoder.set_property(name, value);
+        }
+    };
+
+    set_if_exists("bitrate", bitrate_kbps);
+    set_if_exists("target-bitrate", bitrate_kbps);
+    set_if_exists("keyframe-period", keyframe_interval_frames);
+    set_if_exists("key-int-max", keyframe_interval_frames as i32);
+
+    if encoder_name.contains("x264") {
+        set_if_exists("tune", "zerolatency");
+        set_if_exists("speed-preset", "ultrafast");
+        set_if_exists("bframes", 0i32);
+    } else if encoder_name.contains("x265") {
+        set_if_exists("tune", "zerolatency");
+        set_if_exists("speed-preset", "ultrafast");
+        set_if_exists("bframes", 0i32);
+    } else if encoder_name.contains("svtav1") {
+        set_if_exists("preset", 8i32);
+        set_if_exists("tune", 0i32);
+    } else if encoder_name.contains("vaapi") {
+        set_if_exists("rate-control", "cbr");
+        set_if_exists("max-bframes", 0i32);
+        set_if_exists("cabac", false);
+    }
+
+    Ok(())
+}
 
 pub struct PipewireEncoder {
     _fd: OwnedFd,
@@ -27,36 +103,22 @@ impl PipewireEncoder {
         gst::init()?;
         let (fd, node_id) = open_portal_stream().await?;
 
-        let encoder_name = match config.codec {
-            Codec::Hevc => "vaapih265enc",
-            Codec::H264 => "vaapih264enc",
-        };
-        let parser = match config.codec {
-            Codec::Hevc => "h265parse",
-            Codec::H264 => "h264parse",
-        };
+        let (encoder_name, input_format) = select_encoder(config.codec)?;
+        let parser = select_parser(config.codec)?;
 
-        if gst::ElementFactory::find(encoder_name).is_none() {
-            return Err(anyhow!("missing GStreamer encoder element: {encoder_name}"));
-        }
-        if gst::ElementFactory::find(parser).is_none() {
-            return Err(anyhow!("missing GStreamer parser element: {parser}"));
-        }
+        let keyframe_interval_frames =
+            ((config.fps as u32 * config.keyframe_interval_ms) / 1000).max(1);
 
-        let keyframe_interval_frames = ((config.fps as u32 * config.keyframe_interval_ms) / 1000)
-            .max(1);
-        
         // Use named encoder element for later property access
         let pipeline_str = format!(
-            "pipewiresrc fd={} path={} do-timestamp=true ! videoconvert ! video/x-raw,format=NV12,width={},height={},framerate={}/1 ! {} name=encoder bitrate={} keyframe-period={} ! {} config-interval=-1 ! appsink name=sink max-buffers=1 drop=true sync=false",
+            "pipewiresrc fd={} path={} do-timestamp=true ! videoconvert ! video/x-raw,format={},width={},height={},framerate={}/1 ! queue max-size-buffers=1 leaky=downstream ! {} name=encoder ! {} config-interval=-1 ! appsink name=sink max-buffers=1 drop=true sync=false",
             fd.as_raw_fd(),
             node_id,
+            input_format,
             config.resolution.width,
             config.resolution.height,
             config.fps,
             encoder_name,
-            config.bitrate_kbps,
-            keyframe_interval_frames,
             parser,
         );
 
@@ -69,10 +131,17 @@ impl PipewireEncoder {
             .ok_or_else(|| anyhow!("appsink not found"))?
             .downcast::<gst_app::AppSink>()
             .map_err(|_| anyhow!("appsink type mismatch"))?;
-        
+
         let encoder_element = pipeline
             .by_name("encoder")
             .ok_or_else(|| anyhow!("encoder element not found"))?;
+
+        configure_low_latency_encoder(
+            &encoder_element,
+            encoder_name,
+            config.bitrate_kbps,
+            keyframe_interval_frames,
+        )?;
 
         pipeline.set_state(gst::State::Playing)?;
 
@@ -90,11 +159,10 @@ impl PipewireEncoder {
             .pull_sample()
             .map_err(|_| anyhow!("failed to pull sample"))?;
         let buffer = sample.buffer().ok_or_else(|| anyhow!("missing buffer"))?;
-        let map = buffer.map_readable().map_err(|_| anyhow!("buffer map failed"))?;
-        let pts = buffer
-            .pts()
-            .map(|t| t.nseconds() / 1_000)
-            .unwrap_or(0);
+        let map = buffer
+            .map_readable()
+            .map_err(|_| anyhow!("buffer map failed"))?;
+        let pts = buffer.pts().map(|t| t.nseconds() / 1_000).unwrap_or(0);
         let keyframe = !buffer.flags().contains(gst::BufferFlags::DELTA_UNIT);
         Ok(EncodedFrame {
             timestamp_us: pts,
@@ -102,12 +170,15 @@ impl PipewireEncoder {
             data: map.as_slice().to_vec(),
         })
     }
-    
+
     /// Update encoder bitrate at runtime.
     /// VAAPI encoders support dynamic bitrate changes via the "bitrate" property.
     pub fn set_bitrate(&mut self, bitrate_kbps: u32) -> Result<()> {
-        // VAAPI encoder bitrate property is in kbps
-        self.encoder_element.set_property("bitrate", bitrate_kbps);
+        if self.encoder_element.has_property("bitrate", None) {
+            self.encoder_element.set_property("bitrate", bitrate_kbps);
+        } else if self.encoder_element.has_property("target-bitrate", None) {
+            self.encoder_element.set_property("target-bitrate", bitrate_kbps);
+        }
         log::debug!("Linux encoder bitrate updated to {} kbps", bitrate_kbps);
         Ok(())
     }
@@ -122,14 +193,7 @@ pub struct GstVideoRenderer {
 impl GstVideoRenderer {
     pub fn new(config: DecodeConfig) -> Result<Self> {
         gst::init()?;
-        let parser = match config.codec {
-            Codec::Hevc => "h265parse",
-            Codec::H264 => "h264parse",
-        };
-
-        if gst::ElementFactory::find(parser).is_none() {
-            return Err(anyhow!("missing GStreamer parser element: {parser}"));
-        }
+        let parser = select_parser(config.codec)?;
 
         let pipeline_str = format!(
             "appsrc name=src is-live=true format=time do-timestamp=true ! {} ! decodebin ! videoconvert ! autovideosink sync=false",
@@ -144,10 +208,7 @@ impl GstVideoRenderer {
             .downcast::<gst_app::AppSrc>()
             .map_err(|_| anyhow!("appsrc type mismatch"))?;
 
-        let caps_str = match config.codec {
-            Codec::Hevc => "video/x-h265,stream-format=(string)byte-stream,alignment=(string)au",
-            Codec::H264 => "video/x-h264,stream-format=(string)byte-stream,alignment=(string)au",
-        };
+        let caps_str = caps_for_codec(config.codec);
         let caps = gst::Caps::from_str(caps_str)?;
         appsrc.set_caps(Some(&caps));
 
@@ -159,10 +220,12 @@ impl GstVideoRenderer {
     pub fn push(&self, payload: &[u8], timestamp_us: u64) -> Result<()> {
         let mut buffer = gst::Buffer::with_size(payload.len())?;
         {
-            let buffer = buffer.get_mut().ok_or_else(|| anyhow!("buffer mut failed"))?;
-            buffer
-                .copy_from_slice(0, payload)
-                .map_err(|copied| anyhow!("failed to copy buffer slice, copied {} bytes", copied))?;
+            let buffer = buffer
+                .get_mut()
+                .ok_or_else(|| anyhow!("buffer mut failed"))?;
+            buffer.copy_from_slice(0, payload).map_err(|copied| {
+                anyhow!("failed to copy buffer slice, copied {} bytes", copied)
+            })?;
             buffer.set_pts(gst::ClockTime::from_nseconds(timestamp_us * 1_000));
         }
         self.appsrc.push_buffer(buffer)?;
@@ -189,7 +252,7 @@ impl PipewireAudioCapturer {
         let (fd, node_id) = open_audio_portal_stream().await?;
 
         let pipeline_str = format!(
-            "pipewiresrc fd={} path={} do-timestamp=true ! audioconvert ! audioresample ! opusenc bitrate=128000 ! appsink name=sink max-buffers=10 drop=true sync=false",
+            "pipewiresrc fd={} path={} do-timestamp=true ! audioconvert ! audioresample ! opusenc bitrate=128000 frame-size=5 ! appsink name=sink max-buffers=4 drop=true sync=false",
             fd.as_raw_fd(),
             node_id
         );
@@ -218,13 +281,14 @@ impl PipewireAudioCapturer {
             .appsink
             .pull_sample()
             .map_err(|_| anyhow!("failed to pull audio sample"))?;
-        let buffer = sample.buffer().ok_or_else(|| anyhow!("missing audio buffer"))?;
-        let map = buffer.map_readable().map_err(|_| anyhow!("audio buffer map failed"))?;
-        let pts = buffer
-            .pts()
-            .map(|t| t.nseconds() / 1_000)
-            .unwrap_or(0);
-        
+        let buffer = sample
+            .buffer()
+            .ok_or_else(|| anyhow!("missing audio buffer"))?;
+        let map = buffer
+            .map_readable()
+            .map_err(|_| anyhow!("audio buffer map failed"))?;
+        let pts = buffer.pts().map(|t| t.nseconds() / 1_000).unwrap_or(0);
+
         Ok(EncodedFrame {
             timestamp_us: pts,
             keyframe: true, // Audio packets are essentially all keyframes in Opus
@@ -279,9 +343,48 @@ impl Drop for GstAudioRenderer {
     }
 }
 
+pub struct LinuxProbe;
+
+impl crate::CapabilityProbe for LinuxProbe {
+    fn supported_encoders(&self) -> Result<Vec<crate::Codec>> {
+        gst::init()?;
+        let mut codecs = Vec::new();
+        for codec in [Codec::Av1, Codec::Hevc, Codec::H264] {
+            if select_encoder(codec).is_ok() {
+                codecs.push(codec);
+            }
+        }
+        Ok(codecs)
+    }
+
+    fn supported_decoders(&self) -> Result<Vec<crate::Codec>> {
+        gst::init()?;
+        let mut codecs = Vec::new();
+        for codec in [Codec::Av1, Codec::Hevc, Codec::H264] {
+            if decoder_available(codec) {
+                codecs.push(codec);
+            }
+        }
+        Ok(codecs)
+    }
+
+    fn enumerate_displays(&self) -> Result<Vec<crate::DisplayInfo>> {
+        Ok(Vec::new())
+    }
+}
+
+fn decoder_available(codec: Codec) -> bool {
+    let candidates: &[&str] = match codec {
+        Codec::H264 => &["vaapih264dec", "avdec_h264", "openh264dec"],
+        Codec::Hevc => &["vaapih265dec", "avdec_h265"],
+        Codec::Av1 => &["vaapav1dec", "vaapivav1dec", "av1dec", "dav1ddec"],
+    };
+    candidates.iter().any(|name| element_available(name))
+}
+
 async fn open_audio_portal_stream() -> Result<(OwnedFd, u32)> {
     // Note: This uses the same Screencast portal but with different sources
-    // In a real implementation, we might need the Device portal or 
+    // In a real implementation, we might need the Device portal or
     // simply use the Screencast portal with 'Audio' capability.
     let proxy = Screencast::new().await?;
     let session = proxy.create_session().await?;
@@ -290,7 +393,7 @@ async fn open_audio_portal_stream() -> Result<(OwnedFd, u32)> {
             &session,
             CursorMode::Hidden,
             SourceType::Virtual.into(), // Virtual source for system audio capture
-            true, // Enable audio
+            true,                       // Enable audio
             None,
             PersistMode::DoNot,
         )
@@ -346,8 +449,8 @@ fn save_restore_token(token: &str) -> Result<()> {
 }
 
 fn token_path() -> Option<PathBuf> {
-    let base = std::env::var_os("XDG_CONFIG_HOME").map(PathBuf::from).or_else(|| {
-        std::env::var_os("HOME").map(|home| Path::new(&home).join(".config"))
-    })?;
+    let base = std::env::var_os("XDG_CONFIG_HOME")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|home| Path::new(&home).join(".config")))?;
     Some(base.join("wavry").join("portal_restore_token"))
 }
