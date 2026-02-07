@@ -6,10 +6,8 @@ use tokio::time;
 
 use base64::{engine::general_purpose, Engine as _};
 use rift_core::{
-    decode_msg, encode_msg,
-    Codec as RiftCodec, Message as ProtoMessage,
-    ControlMessage as ProtoControl, Hello as ProtoHello,
-    Resolution as ProtoResolution, RIFT_VERSION,
+    decode_msg, encode_msg, Codec as RiftCodec, ControlMessage as ProtoControl,
+    Hello as ProtoHello, Message as ProtoMessage, Resolution as ProtoResolution, RIFT_VERSION,
 };
 
 pub fn env_bool(name: &str, default: bool) -> bool {
@@ -129,4 +127,3 @@ pub fn decode_hello_ack_base64(b64: &str) -> Result<rift_core::HelloAck> {
         _ => Err(anyhow!("Not a Control message")),
     }
 }
-

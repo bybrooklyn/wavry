@@ -54,7 +54,7 @@ Java_com_wavry_android_core_NativeBridge_nativeGetPublicKeyHex(JNIEnv *env, jobj
 
 extern "C" JNIEXPORT jint JNICALL
 Java_com_wavry_android_core_NativeBridge_nativeStartHost(JNIEnv *, jobject, jint port) {
-    if (port <= 0 || port > 65535) {
+    if (port < 0 || port > 65535) {
         return -10;
     }
     return wavry_start_host(static_cast<uint16_t>(port));

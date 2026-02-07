@@ -7,11 +7,11 @@ use tokio::runtime::Runtime;
 use wavry_client::RelayInfo;
 
 #[cfg(target_os = "android")]
-use wavry_media::{AndroidVideoRenderer as VideoRenderer};
-#[cfg(target_os = "macos")]
-use wavry_media::{MacVideoRenderer as VideoRenderer};
+use wavry_media::AndroidVideoRenderer as VideoRenderer;
 #[cfg(not(any(target_os = "macos", target_os = "android")))]
 use wavry_media::DummyRenderer as VideoRenderer;
+#[cfg(target_os = "macos")]
+use wavry_media::MacVideoRenderer as VideoRenderer;
 
 // Stub for Linux input injector if needed, or use a dummy
 #[cfg(not(any(target_os = "macos", target_os = "android")))]
@@ -42,9 +42,6 @@ impl AndroidInputInjector {
 use wavry_media::InputEvent;
 #[cfg(target_os = "macos")]
 use wavry_media::{InputInjector, MacInputInjector};
-
-#[cfg(target_os = "android")]
-use wavry_media::InputInjector;
 
 mod session;
 use session::{run_client, run_host, HostRuntimeConfig, SessionHandle, SessionStats};
@@ -208,7 +205,7 @@ fn start_host_internal(port: u16, host_config: HostRuntimeConfig) -> i32 {
 
     let stats = Arc::new(SessionStats::default());
     let (tx, rx) = tokio::sync::oneshot::channel();
-    let (init_tx, init_rx) = tokio::sync::oneshot::channel();
+    let (init_tx, init_rx) = tokio::sync::oneshot::channel::<anyhow::Result<u16>>();
 
     let stats_clone = stats.clone();
     RUNTIME.spawn(async move {
@@ -218,15 +215,17 @@ fn start_host_internal(port: u16, host_config: HostRuntimeConfig) -> i32 {
     });
 
     match init_rx.blocking_recv() {
-        Ok(Ok(())) => {
+        Ok(Ok(bound_port)) => {
             *guard = Some(SessionHandle {
                 stop_tx: Some(tx),
                 stats,
             });
             clear_last_error();
+            set_cloud_status(&format!("Hosting on UDP {}", bound_port));
             log::info!(
-                "Started Host on port {} ({}x{} @ {}fps, {} kbps, keyframe {}ms, display {:?})",
+                "Started Host (requested port {}, bound port {}) ({}x{} @ {}fps, {} kbps, keyframe {}ms, display {:?})",
                 port,
+                bound_port,
                 host_config.width,
                 host_config.height,
                 host_config.fps,
@@ -498,11 +497,14 @@ pub extern "C" fn wavry_init_renderer(layer_ptr: *mut std::ffi::c_void) -> i32 {
     }
     #[cfg(target_os = "android")]
     {
-        use wavry_media::{DecodeConfig, Codec, Resolution};
+        use wavry_media::{Codec, DecodeConfig, Resolution};
         // For Android, we default to H264/1080p for now, as we don't have the hello info yet
         let config = DecodeConfig {
             codec: Codec::H264,
-            resolution: Resolution { width: 1920, height: 1080 },
+            resolution: Resolution {
+                width: 1920,
+                height: 1080,
+            },
         };
         match VideoRenderer::new(config, layer_ptr) {
             Ok(renderer) => {
@@ -540,7 +542,11 @@ pub extern "C" fn wavry_init_injector(width: u32, height: u32) -> i32 {
         let injector = AndroidInputInjector::new(width, height);
         let mut guard = INPUT_INJECTOR.lock().unwrap();
         *guard = Some(injector);
-        log::info!("FFI: Android Input Injector initialized ({}x{})", width, height);
+        log::info!(
+            "FFI: Android Input Injector initialized ({}x{})",
+            width,
+            height
+        );
         0
     }
     #[cfg(not(any(target_os = "macos", target_os = "android")))]

@@ -19,11 +19,16 @@ use std::sync::Arc;
 use tower_http::cors::{AllowOrigin, CorsLayer};
 use tracing::{info, warn};
 
+#[cfg(feature = "insecure-dev-auth")]
 use ed25519_dalek::{Signature, Verifier, VerifyingKey};
 use futures_util::{SinkExt, StreamExt};
+use serde::Serialize;
 use std::collections::HashMap;
+#[cfg(feature = "insecure-dev-auth")]
 use std::sync::Mutex;
-use std::time::{Duration, Instant};
+#[cfg(feature = "insecure-dev-auth")]
+use std::time::Duration;
+use std::time::Instant;
 use tokio::sync::{mpsc, RwLock}; // Required for socket.split() and receiver.next()
 
 #[derive(Parser, Debug)]
@@ -38,10 +43,22 @@ struct Args {
     insecure_dev: bool,
 }
 
-use wavry_common::protocol::{RegisterRequest, SignalMessage, VerifyRequest};
+use wavry_common::protocol::{
+    RegisterRequest, RelayHeartbeatRequest, RelayRegisterRequest, RelayRegisterResponse,
+    SignalMessage, VerifyRequest,
+};
 
 type PeerMap = Arc<RwLock<HashMap<String, mpsc::Sender<Message>>>>;
+type RelayMap = Arc<RwLock<HashMap<String, RelayRegistration>>>;
 
+#[derive(Clone)]
+struct RelayRegistration {
+    endpoints: Vec<String>,
+    load_pct: f32,
+    last_seen: Instant,
+}
+
+#[cfg(feature = "insecure-dev-auth")]
 struct ChallengeEntry {
     challenge: [u8; 32],
     issued_at: Instant,
@@ -49,12 +66,25 @@ struct ChallengeEntry {
 
 struct AppState {
     // wavry_id -> challenge
+    #[cfg(feature = "insecure-dev-auth")]
     challenges: Mutex<HashMap<String, ChallengeEntry>>,
     peers: PeerMap,
+    relays: RelayMap,
+    #[cfg(feature = "insecure-dev-auth")]
     insecure_dev: bool,
 }
 
+#[derive(Serialize)]
+struct RelayRegistryResponse {
+    relay_id: String,
+    endpoints: Vec<String>,
+    load_pct: f32,
+    last_seen_ms_ago: u64,
+}
+
+#[cfg(feature = "insecure-dev-auth")]
 const CHALLENGE_TTL: Duration = Duration::from_secs(300);
+#[cfg(feature = "insecure-dev-auth")]
 const CHALLENGE_CAPACITY: usize = 10_000;
 
 fn env_bool(name: &str, default: bool) -> bool {
@@ -124,30 +154,48 @@ async fn main() -> Result<()> {
         ));
     }
 
+    #[cfg(feature = "insecure-dev-auth")]
+    let insecure_dev = {
+        let requested = args.insecure_dev || env_bool("WAVRY_MASTER_INSECURE_DEV", false);
+        if requested {
+            info!("Insecure dev mode ENABLED via feature-gate and flag");
+            true
+        } else {
+            false
+        }
+    };
+
+    #[cfg(not(feature = "insecure-dev-auth"))]
+    if args.insecure_dev || env_bool("WAVRY_MASTER_INSECURE_DEV", false) {
+        warn!("Insecure dev mode requested but 'insecure-dev-auth' feature is NOT enabled. Staying in secure mode.");
+    }
+
     let state = Arc::new(AppState {
+        #[cfg(feature = "insecure-dev-auth")]
         challenges: Mutex::new(HashMap::new()),
         peers: Arc::new(RwLock::new(HashMap::new())),
-        insecure_dev: {
-            let requested = args.insecure_dev || env_bool("WAVRY_MASTER_INSECURE_DEV", false);
-            if requested {
-                #[cfg(feature = "insecure-dev-auth")]
-                {
-                    info!("Insecure dev mode ENABLED via feature-gate and flag");
-                    true
-                }
-                #[cfg(not(feature = "insecure-dev-auth"))]
-                {
-                    warn!("Insecure dev mode requested but 'insecure-dev-auth' feature is NOT enabled. Staying in secure mode.");
-                    false
-                }
-            } else {
-                false
-            }
-        },
+        relays: Arc::new(RwLock::new(HashMap::new())),
+        #[cfg(feature = "insecure-dev-auth")]
+        insecure_dev,
+    });
+
+    let relay_registry = state.relays.clone();
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(30));
+        let ttl = std::time::Duration::from_secs(120);
+        loop {
+            interval.tick().await;
+            let now = Instant::now();
+            let mut relays = relay_registry.write().await;
+            relays.retain(|_, relay| now.duration_since(relay.last_seen) <= ttl);
+        }
     });
 
     let app = Router::new()
         .route("/health", get(health_check))
+        .route("/v1/relays/register", post(handle_relay_register))
+        .route("/v1/relays/heartbeat", post(handle_relay_heartbeat))
+        .route("/v1/relays", get(handle_relay_list))
         .route("/v1/auth/register", post(handle_register))
         .route("/v1/auth/register/verify", post(handle_verify))
         .route("/v1/auth/login", post(handle_login))
@@ -168,6 +216,71 @@ async fn main() -> Result<()> {
 
 async fn health_check() -> &'static str {
     "OK"
+}
+
+async fn handle_relay_register(
+    State(state): State<Arc<AppState>>,
+    Json(payload): Json<RelayRegisterRequest>,
+) -> Result<Json<RelayRegisterResponse>, StatusCode> {
+    if payload.relay_id.trim().is_empty() || payload.endpoints.is_empty() {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+
+    let mut relays = state.relays.write().await;
+    relays.insert(
+        payload.relay_id.clone(),
+        RelayRegistration {
+            endpoints: payload.endpoints,
+            load_pct: 0.0,
+            last_seen: Instant::now(),
+        },
+    );
+    info!("relay registered: {}", payload.relay_id);
+
+    Ok(Json(RelayRegisterResponse {
+        heartbeat_interval_ms: 5_000,
+    }))
+}
+
+async fn handle_relay_heartbeat(
+    State(state): State<Arc<AppState>>,
+    Json(payload): Json<RelayHeartbeatRequest>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    if !(0.0..=100.0).contains(&payload.load_pct) || payload.relay_id.trim().is_empty() {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+
+    let mut relays = state.relays.write().await;
+    let Some(entry) = relays.get_mut(&payload.relay_id) else {
+        return Err(StatusCode::NOT_FOUND);
+    };
+    entry.load_pct = payload.load_pct;
+    entry.last_seen = Instant::now();
+    info!(
+        "relay heartbeat: {} load={:.1}%",
+        payload.relay_id, payload.load_pct
+    );
+    Ok(Json(serde_json::json!({ "ok": true })))
+}
+
+async fn handle_relay_list(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<Vec<RelayRegistryResponse>>, StatusCode> {
+    let now = Instant::now();
+    let relays = state.relays.read().await;
+    let mut out = Vec::with_capacity(relays.len());
+    for (relay_id, relay) in relays.iter() {
+        out.push(RelayRegistryResponse {
+            relay_id: relay_id.clone(),
+            endpoints: relay.endpoints.clone(),
+            load_pct: relay.load_pct,
+            last_seen_ms_ago: now
+                .saturating_duration_since(relay.last_seen)
+                .as_millis()
+                .min(u64::MAX as u128) as u64,
+        });
+    }
+    Ok(Json(out))
 }
 
 #[cfg(feature = "insecure-dev-auth")]
@@ -320,6 +433,7 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
         }
     });
 
+    #[allow(unused_mut)]
     let mut my_username: Option<String> = None;
 
     while let Some(Ok(msg)) = receiver.next().await {
@@ -339,6 +453,7 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
                 SignalMessage::BIND { token } => {
                     #[cfg(not(feature = "insecure-dev-auth"))]
                     {
+                        let _ = token;
                         let _ = tx_clone.try_send(Message::Text(
                             serde_json::to_string(&SignalMessage::ERROR {
                                 code: None,
@@ -357,10 +472,12 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
                             let _ = tx_clone.try_send(Message::Text(
                                 serde_json::to_string(&SignalMessage::ERROR {
                                     code: None,
-                                    message: "Master WS bind disabled outside insecure dev mode".into(),
+                                    message: "Master WS bind disabled outside insecure dev mode"
+                                        .into(),
                                 })
                                 .unwrap_or_else(|_| {
-                                    "{\"type\":\"ERROR\",\"payload\":{\"message\":\"disabled\"}}".into()
+                                    "{\"type\":\"ERROR\",\"payload\":{\"message\":\"disabled\"}}"
+                                        .into()
                                 }),
                             ));
                             break;

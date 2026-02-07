@@ -69,7 +69,7 @@ zeroize = { version = "1", features = ["derive"] }
 # Web
 axum = { version = "0.7", features = ["macros", "ws"] }
 tower-http = { version = "0.5", features = ["cors", "trace", "fs"] }
-reqwest = { version = "0.12", features = ["json", "rustls-tls"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 
 # Database
 sqlx = { version = "0.8", features = ["runtime-tokio", "tls-rustls", "postgres", "uuid", "chrono", "json"] }

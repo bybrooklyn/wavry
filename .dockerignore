@@ -1,0 +1,9 @@
+.git
+.github
+target
+dist
+**/.DS_Store
+**/node_modules
+apps/android/.gradle
+apps/android/local.properties
+apps/macos/.build

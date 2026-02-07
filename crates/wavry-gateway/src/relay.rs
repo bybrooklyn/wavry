@@ -62,7 +62,8 @@ impl IpRateLimiter {
 
     fn cleanup(&mut self) {
         let now = Instant::now();
-        self.counts.retain(|_, (_, start)| now.duration_since(*start) < Duration::from_secs(2));
+        self.counts
+            .retain(|_, (_, start)| now.duration_since(*start) < Duration::from_secs(2));
     }
 }
 
@@ -72,7 +73,9 @@ struct BannedIPs {
 
 impl BannedIPs {
     fn new() -> Self {
-        Self { strikes: HashMap::new() }
+        Self {
+            strikes: HashMap::new(),
+        }
     }
 
     fn is_banned(&mut self, ip: std::net::IpAddr) -> bool {
@@ -95,7 +98,12 @@ impl BannedIPs {
         entry.0 += 1;
         entry.1 = now;
         if entry.0 >= MAX_STRIKES {
-            warn!("IP {} banned from relay for {}s after {} strikes", ip, BAN_DURATION.as_secs(), MAX_STRIKES);
+            warn!(
+                "IP {} banned from relay for {}s after {} strikes",
+                ip,
+                BAN_DURATION.as_secs(),
+                MAX_STRIKES
+            );
         }
     }
 
@@ -187,7 +195,9 @@ pub async fn run_relay_server(port: u16, state: RelayMap) -> Result<()> {
         let payload = &packet[RELAY_HEADER_SIZE..];
         match header.packet_type {
             RelayPacketType::LeasePresent => {
-                if !handle_lease_present(&state, &mut routes, src_addr, &header, payload, &socket).await {
+                if !handle_lease_present(&state, &mut routes, src_addr, &header, payload, &socket)
+                    .await
+                {
                     banned.add_strike(ip);
                 }
             }
@@ -426,9 +436,9 @@ async fn handle_forward(
 }
 
 fn extract_forward_sequence(payload: &[u8]) -> Result<u64, String> {
-    use rift_core::PhysicalPacket;
-    use rift_core::relay::ForwardPayloadHeader;
     use bytes::Bytes;
+    use rift_core::relay::ForwardPayloadHeader;
+    use rift_core::PhysicalPacket;
 
     if payload.starts_with(&rift_core::RIFT_MAGIC) {
         let packet = PhysicalPacket::decode(Bytes::copy_from_slice(payload))

@@ -21,7 +21,10 @@ use tokio::time;
 use wavry_media::{Codec, EncodeConfig, EncodedFrame, Renderer, Resolution};
 
 #[cfg(target_os = "macos")]
-use wavry_media::{MacScreenEncoder, MacVideoRenderer};
+use wavry_media::{MacScreenEncoder, MacVideoRenderer as PlatformVideoRenderer};
+
+#[cfg(target_os = "android")]
+use wavry_media::AndroidVideoRenderer as PlatformVideoRenderer;
 
 #[cfg(target_os = "macos")]
 use rift_core::cc::{DeltaCC, DeltaConfig};
@@ -36,8 +39,8 @@ use rift_crypto::connection::SecureServer;
 use wavry_client::{
     run_client as run_rift_client, ClientConfig, ClientRuntimeStats, RelayInfo, RendererFactory,
 };
-#[cfg(not(target_os = "macos"))]
-use wavry_media::DummyRenderer as MacVideoRenderer;
+#[cfg(not(any(target_os = "macos", target_os = "android")))]
+use wavry_media::DummyRenderer as PlatformVideoRenderer;
 
 #[allow(dead_code)]
 const CONNECTION_TIMEOUT: Duration = Duration::from_secs(5);
@@ -351,7 +354,7 @@ pub async fn run_host(
     host_config: HostRuntimeConfig,
     stats: Arc<SessionStats>,
     #[allow(unused_mut)] mut stop_rx: oneshot::Receiver<()>,
-    init_tx: oneshot::Sender<Result<()>>,
+    init_tx: oneshot::Sender<Result<u16>>,
 ) -> Result<()> {
     #![allow(unused_variables)]
     // 1. Setup UDP
@@ -373,7 +376,13 @@ pub async fn run_host(
             return Err(e.into());
         }
     };
-    log::info!("Host listening on {}", addr);
+    let bound_port = socket.local_addr().map(|addr| addr.port()).unwrap_or(port);
+    log::info!(
+        "Host listening on {} (requested port {}, bound port {})",
+        addr,
+        port,
+        bound_port
+    );
 
     // 2. Setup Encoder
     let config = EncodeConfig {
@@ -400,10 +409,10 @@ pub async fn run_host(
         };
 
         // Signal Init Success
-        let _ = init_tx.send(Ok(()));
+        let _ = init_tx.send(Ok(bound_port));
 
         // Notify Signaling Layer
-        crate::signaling_ffi::set_hosting(port);
+        crate::signaling_ffi::set_hosting(bound_port);
 
         // 3. Client state
         let mut client_addr: Option<SocketAddr> = None;
@@ -677,7 +686,7 @@ pub async fn run_host(
     }
 }
 
-struct SharedRenderer(Arc<Mutex<Option<Box<MacVideoRenderer>>>>);
+struct SharedRenderer(Arc<Mutex<Option<Box<PlatformVideoRenderer>>>>);
 impl Renderer for SharedRenderer {
     fn render(&mut self, payload: &[u8], timestamp_us: u64) -> Result<()> {
         if let Ok(mut g) = self.0.lock() {
@@ -693,7 +702,7 @@ pub async fn run_client(
     direct_target: Option<(String, u16)>,
     relay_info: Option<RelayInfo>,
     client_name: String,
-    renderer_handle: Arc<std::sync::Mutex<Option<Box<MacVideoRenderer>>>>,
+    renderer_handle: Arc<std::sync::Mutex<Option<Box<PlatformVideoRenderer>>>>,
     stats: Arc<SessionStats>,
     mut stop_rx: oneshot::Receiver<()>,
     init_tx: oneshot::Sender<Result<()>>,

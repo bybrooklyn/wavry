@@ -1,15 +1,11 @@
-use tauri::Manager;
-use crate::state::{AUTH_STATE, AuthState, IDENTITY_KEY};
+use crate::state::{AuthState, AUTH_STATE, IDENTITY_KEY};
 use rift_crypto::identity::IdentityKeypair;
+use tauri::Manager;
 
-pub fn get_or_create_identity(
-    app_handle: &tauri::AppHandle,
-) -> Result<IdentityKeypair, String> {
+pub fn get_or_create_identity(app_handle: &tauri::AppHandle) -> Result<IdentityKeypair, String> {
     let mut id_lock = IDENTITY_KEY.lock().unwrap();
     if let Some(ref id) = *id_lock {
-        return Ok(IdentityKeypair::from_bytes(
-            &id.private_key_bytes(),
-        ));
+        return Ok(IdentityKeypair::from_bytes(&id.private_key_bytes()));
     }
 
     let app_dir = app_handle
@@ -22,9 +18,7 @@ pub fn get_or_create_identity(
     if key_path.exists() {
         let id = IdentityKeypair::load(key_path.to_str().unwrap())
             .map_err(|e| format!("Failed to load identity: {}", e))?;
-        *id_lock = Some(IdentityKeypair::from_bytes(
-            &id.private_key_bytes(),
-        ));
+        *id_lock = Some(IdentityKeypair::from_bytes(&id.private_key_bytes()));
         Ok(id)
     } else {
         let id = IdentityKeypair::generate();
@@ -33,9 +27,7 @@ pub fn get_or_create_identity(
             app_dir.join("identity.pub").to_str().unwrap(),
         )
         .map_err(|e| format!("Failed to save identity: {}", e))?;
-        *id_lock = Some(IdentityKeypair::from_bytes(
-            &id.private_key_bytes(),
-        ));
+        *id_lock = Some(IdentityKeypair::from_bytes(&id.private_key_bytes()));
         Ok(id)
     }
 }

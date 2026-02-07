@@ -1,8 +1,11 @@
 use axum::{
+    extract::State,
     http::{header, HeaderName, Method},
+    response::IntoResponse,
     routing::{get, post},
-    Router,
+    Json, Router,
 };
+use serde::Serialize;
 use sqlx::sqlite::SqlitePoolOptions;
 use std::net::SocketAddr;
 use std::time::{Duration, Instant};
@@ -27,6 +30,25 @@ struct AppState {
     pool: sqlx::SqlitePool,
     connections: signal::ConnectionMap,
     relay_sessions: relay::RelayMap,
+}
+
+#[derive(Serialize)]
+struct RuntimeMetrics {
+    active_ws_connections: usize,
+    active_relay_sessions: usize,
+}
+
+async fn health(State(state): State<AppState>) -> impl IntoResponse {
+    let active_ws_connections = state.connections.read().await.len();
+    let active_relay_sessions = state.relay_sessions.read().await.len();
+    (
+        axum::http::StatusCode::OK,
+        Json(RuntimeMetrics {
+            active_ws_connections,
+            active_relay_sessions,
+        }),
+    )
+        .into_response()
 }
 
 impl axum::extract::FromRef<AppState> for sqlx::SqlitePool {
@@ -199,7 +221,8 @@ async fn main() -> anyhow::Result<()> {
         if env_bool("WAVRY_ENABLE_INSECURE_WEBTRANSPORT_RUNTIME", false) {
             let bind_addr = std::env::var("WEBTRANSPORT_BIND_ADDR")
                 .unwrap_or_else(|_| "127.0.0.1:4444".to_string());
-            let socket_addr: SocketAddr = bind_addr.parse().expect("invalid WEBTRANSPORT_BIND_ADDR");
+            let socket_addr: SocketAddr =
+                bind_addr.parse().expect("invalid WEBTRANSPORT_BIND_ADDR");
             check_public_bind_allowed(socket_addr).expect("WebTransport bind rejected");
             tokio::spawn(async move {
                 if let Err(err) = web::run_webtransport_runtime(&bind_addr).await {
@@ -215,6 +238,9 @@ async fn main() -> anyhow::Result<()> {
 
     let app = Router::new()
         .route("/", get(|| async { "Wavry Gateway Online" }))
+        .route("/health", get(health))
+        .route("/metrics/runtime", get(health))
+        .route("/metrics/auth", get(auth::metrics))
         .route("/admin", get(admin::admin_panel))
         .route("/admin/api/overview", get(admin::admin_overview))
         .route(

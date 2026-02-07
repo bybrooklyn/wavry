@@ -3,9 +3,16 @@ package com.wavry.android
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Home
+import androidx.compose.material.icons.filled.Menu
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
@@ -13,7 +20,6 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.imePadding
-import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.width
@@ -26,12 +32,18 @@ import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.CenterAlignedTopAppBar
-import androidx.compose.material3.ElevatedCard
+import androidx.compose.material3.DrawerValue
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalDrawerSheet
+import androidx.compose.material3.ModalNavigationDrawer
+import androidx.compose.material3.NavigationDrawerItem
+import androidx.compose.material3.NavigationRail
+import androidx.compose.material3.NavigationRailItem
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
@@ -39,15 +51,18 @@ import androidx.compose.material3.SegmentedButton
 import androidx.compose.material3.SegmentedButtonDefaults
 import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Text
+import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.rememberDrawerState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.KeyboardType
@@ -55,18 +70,21 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.wavry.android.ui.AppTab
+import com.wavry.android.ui.AuthFormMode
+import com.wavry.android.ui.CloudSignalingState
 import com.wavry.android.ui.ConnectionMode
 import com.wavry.android.ui.ConnectivityMode
 import com.wavry.android.ui.WavryUiState
 import com.wavry.android.ui.WavryViewModel
 import com.wavry.android.ui.theme.WavryTheme
+import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: android.os.Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         setContent {
-            WavryTheme {
+            WavryTheme(dynamicColor = true) {
                 val vm: WavryViewModel = viewModel()
                 val state by vm.state.collectAsStateWithLifecycle()
                 WavryScreen(
@@ -77,11 +95,14 @@ class MainActivity : ComponentActivity() {
                     onSetDisplayName = vm::setDisplayName,
                     onSetConnectivityMode = vm::setConnectivityMode,
                     onSetAuthServer = vm::setAuthServer,
+                    onSetAuthFormMode = vm::setAuthFormMode,
                     onSetTab = vm::setActiveTab,
                     onLoginCloud = vm::loginCloud,
                     onRegisterCloud = vm::registerCloud,
                     onLogoutCloud = vm::logoutCloud,
-                    onRequestCloudConnect = vm::requestCloudConnect,
+                    onReconnectCloudSignaling = vm::reconnectCloudSignaling,
+                    onOpenCloudSignIn = { vm.openCloudAuth(AuthFormMode.LOGIN) },
+                    onOpenCloudRegister = { vm.openCloudAuth(AuthFormMode.REGISTER) },
                     onSaveSettings = vm::saveSettings,
                     onCompleteSetup = vm::completeSetup,
                     onStart = vm::start,
@@ -93,7 +114,7 @@ class MainActivity : ComponentActivity() {
 }
 
 @Composable
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalLayoutApi::class, ExperimentalMaterial3Api::class)
 private fun WavryScreen(
     state: WavryUiState,
     onSetMode: (ConnectionMode) -> Unit,
@@ -102,11 +123,14 @@ private fun WavryScreen(
     onSetDisplayName: (String) -> Unit,
     onSetConnectivityMode: (ConnectivityMode) -> Unit,
     onSetAuthServer: (String) -> Unit,
+    onSetAuthFormMode: (AuthFormMode) -> Unit,
     onSetTab: (AppTab) -> Unit,
     onLoginCloud: (String, String) -> Unit,
     onRegisterCloud: (String, String, String) -> Unit,
     onLogoutCloud: () -> Unit,
-    onRequestCloudConnect: (String) -> Unit,
+    onReconnectCloudSignaling: () -> Unit,
+    onOpenCloudSignIn: () -> Unit,
+    onOpenCloudRegister: () -> Unit,
     onSaveSettings: () -> Unit,
     onCompleteSetup: (String, ConnectivityMode) -> Unit,
     onStart: () -> Unit,
@@ -118,105 +142,205 @@ private fun WavryScreen(
             onCompleteSetup = onCompleteSetup,
             onSetDisplayName = onSetDisplayName,
             onSetConnectivityMode = onSetConnectivityMode,
+            onOpenCloudSignIn = onOpenCloudSignIn,
+            onOpenCloudRegister = onOpenCloudRegister,
         )
         return
     }
 
-    val gradient = Brush.verticalGradient(
-        colors = listOf(
-            MaterialTheme.colorScheme.background,
-            MaterialTheme.colorScheme.surface,
-            MaterialTheme.colorScheme.background,
+    val navigationItems = listOf(
+        NavigationItem(
+            tab = AppTab.SESSION,
+            label = "Session",
+            icon = Icons.Filled.Home,
+        ),
+        NavigationItem(
+            tab = AppTab.SETTINGS,
+            label = "Settings",
+            icon = Icons.Filled.Settings,
         ),
     )
 
-    Scaffold(
-        containerColor = MaterialTheme.colorScheme.background,
-        contentWindowInsets = WindowInsets.safeDrawing,
-        topBar = {
-            CenterAlignedTopAppBar(
-                title = {
-                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+    BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
+        val expandedLayout = maxWidth >= 1000.dp
+        val showDrawerButton = !expandedLayout
+        val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
+        val scope = rememberCoroutineScope()
+
+        ModalNavigationDrawer(
+            drawerState = drawerState,
+            gesturesEnabled = showDrawerButton,
+            drawerContent = {
+                if (showDrawerButton) {
+                    ModalDrawerSheet {
+                        Spacer(modifier = Modifier.height(8.dp))
                         Text(
-                            text = if (state.isQuestBuild) "Wavry Quest" else "Wavry Android",
-                            style = MaterialTheme.typography.titleLarge,
+                            text = "Navigate",
+                            style = MaterialTheme.typography.labelLarge,
+                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
                         )
-                        Text(
-                            text = "${state.displayName} • Core ${state.version}",
-                            style = MaterialTheme.typography.labelMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
+                        navigationItems.forEach { destination ->
+                            NavigationDrawerItem(
+                                selected = state.activeTab == destination.tab,
+                                onClick = {
+                                    onSetTab(destination.tab)
+                                    scope.launch { drawerState.close() }
+                                },
+                                label = { Text(destination.label) },
+                                icon = {
+                                    Icon(
+                                        imageVector = destination.icon,
+                                        contentDescription = destination.label,
+                                    )
+                                },
+                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp),
+                            )
+                        }
                     }
-                },
-            )
-        },
-    ) { innerPadding ->
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .background(gradient)
-                .padding(innerPadding)
-                .padding(horizontal = 16.dp, vertical = 12.dp)
-                .navigationBarsPadding()
-                .imePadding()
-                .verticalScroll(rememberScrollState()),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(12.dp),
+                }
+            },
         ) {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .widthIn(max = 760.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp),
-            ) {
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    AssistChip(
-                        onClick = { },
-                        enabled = false,
-                        label = { Text(if (state.connectivityMode == ConnectivityMode.WAVRY) "Cloud mode" else "LAN mode") },
-                    )
-                    AssistChip(
-                        onClick = { },
-                        enabled = false,
-                        label = {
-                            Text(if (state.isAuthenticated) "Cloud signed in" else "Cloud signed out")
+            Scaffold(
+                containerColor = MaterialTheme.colorScheme.surfaceContainerLowest,
+                contentWindowInsets = WindowInsets.safeDrawing,
+                topBar = {
+                    TopAppBar(
+                        navigationIcon = {
+                            if (showDrawerButton) {
+                                IconButton(onClick = { scope.launch { drawerState.open() } }) {
+                                    Icon(
+                                        imageVector = Icons.Filled.Menu,
+                                        contentDescription = "Open navigation",
+                                    )
+                                }
+                            }
+                        },
+                        title = {
+                            Column {
+                                Text(
+                                    text = if (state.isQuestBuild) "Wavry Quest" else "Wavry Android",
+                                    style = MaterialTheme.typography.titleMedium,
+                                )
+                                Text(
+                                    text = "${state.displayName} • Core ${state.version}",
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
                         },
                     )
-                }
+                },
+            ) { innerPadding ->
+                Row(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(MaterialTheme.colorScheme.surfaceContainerLowest)
+                        .padding(innerPadding)
+                        .imePadding(),
+                ) {
+                    if (expandedLayout) {
+                        NavigationRail {
+                            navigationItems.forEach { destination ->
+                                NavigationRailItem(
+                                    selected = state.activeTab == destination.tab,
+                                    onClick = { onSetTab(destination.tab) },
+                                    label = { Text(destination.label) },
+                                    icon = {
+                                        Icon(
+                                            imageVector = destination.icon,
+                                            contentDescription = destination.label,
+                                        )
+                                    },
+                                )
+                            }
+                        }
+                    }
 
-                if (state.isBusy) {
-                    LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
-                }
+                    Column(
+                        modifier = Modifier
+                            .weight(1f)
+                            .fillMaxSize()
+                            .padding(horizontal = 16.dp, vertical = 8.dp)
+                            .verticalScroll(rememberScrollState()),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(12.dp),
+                    ) {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .widthIn(max = 920.dp),
+                            verticalArrangement = Arrangement.spacedBy(12.dp),
+                        ) {
+                            ConnectionOverviewCard(state = state)
 
-                AppTabSelector(
-                    selected = state.activeTab,
-                    onSetTab = onSetTab,
+                            if (state.isBusy) {
+                                LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                            }
+
+                            if (state.activeTab == AppTab.SESSION) {
+                                SessionTab(
+                                    state = state,
+                                    onSetMode = onSetMode,
+                                    onSetHost = onSetHost,
+                                    onSetPort = onSetPort,
+                                    onOpenCloudSignIn = onOpenCloudSignIn,
+                                    onOpenCloudRegister = onOpenCloudRegister,
+                                    onStart = onStart,
+                                    onStop = onStop,
+                                )
+                            } else {
+                                SettingsTab(
+                                    state = state,
+                                    onSetDisplayName = onSetDisplayName,
+                                    onSetConnectivityMode = onSetConnectivityMode,
+                                    onSetAuthServer = onSetAuthServer,
+                                    onSetAuthFormMode = onSetAuthFormMode,
+                                    onLoginCloud = onLoginCloud,
+                                    onRegisterCloud = onRegisterCloud,
+                                    onLogoutCloud = onLogoutCloud,
+                                    onReconnectCloudSignaling = onReconnectCloudSignaling,
+                                    onSetHost = onSetHost,
+                                    onSetPort = onSetPort,
+                                    onSaveSettings = onSaveSettings,
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+@OptIn(ExperimentalLayoutApi::class)
+private fun ConnectionOverviewCard(state: WavryUiState) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
+    ) {
+        FlowRow(
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            AssistChip(
+                onClick = { },
+                enabled = false,
+                label = { Text(if (state.connectivityMode == ConnectivityMode.WAVRY) "Cloud mode" else "LAN mode") },
+            )
+            AssistChip(
+                onClick = { },
+                enabled = false,
+                label = { Text(if (state.isAuthenticated) "Account signed in" else "Account signed out") },
+            )
+            if (state.connectivityMode == ConnectivityMode.WAVRY) {
+                AssistChip(
+                    onClick = { },
+                    enabled = false,
+                    label = { Text("Signal ${cloudSignalingLabel(state.cloudSignalingState)}") },
                 )
-
-                if (state.activeTab == AppTab.SESSION) {
-                    SessionTab(
-                        state = state,
-                        onSetMode = onSetMode,
-                        onSetHost = onSetHost,
-                        onSetPort = onSetPort,
-                        onRequestCloudConnect = onRequestCloudConnect,
-                        onStart = onStart,
-                        onStop = onStop,
-                    )
-                } else {
-                    SettingsTab(
-                        state = state,
-                        onSetDisplayName = onSetDisplayName,
-                        onSetConnectivityMode = onSetConnectivityMode,
-                        onSetAuthServer = onSetAuthServer,
-                        onLoginCloud = onLoginCloud,
-                        onRegisterCloud = onRegisterCloud,
-                        onLogoutCloud = onLogoutCloud,
-                        onSetHost = onSetHost,
-                        onSetPort = onSetPort,
-                        onSaveSettings = onSaveSettings,
-                    )
-                }
             }
         }
     }
@@ -228,10 +352,19 @@ private fun SetupFlow(
     onCompleteSetup: (String, ConnectivityMode) -> Unit,
     onSetDisplayName: (String) -> Unit,
     onSetConnectivityMode: (ConnectivityMode) -> Unit,
+    onOpenCloudSignIn: () -> Unit,
+    onOpenCloudRegister: () -> Unit,
 ) {
     var step by rememberSaveable { mutableIntStateOf(0) }
     var localName by rememberSaveable { mutableStateOf(state.displayName.ifBlank { "My Android" }) }
     var localConnectivity by rememberSaveable { mutableStateOf(state.connectivityMode) }
+
+    fun finishSetup(mode: ConnectivityMode = localConnectivity) {
+        val finalName = localName.trim().ifEmpty { "My Android" }
+        onSetDisplayName(finalName)
+        onSetConnectivityMode(mode)
+        onCompleteSetup(finalName, mode)
+    }
 
     Scaffold(
         containerColor = MaterialTheme.colorScheme.background,
@@ -264,9 +397,10 @@ private fun SetupFlow(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
 
-                ElevatedCard(
+                Card(
                     modifier = Modifier.fillMaxWidth(),
-                    colors = CardDefaults.elevatedCardColors(containerColor = MaterialTheme.colorScheme.surface),
+                    shape = RoundedCornerShape(20.dp),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
                 ) {
                     Column(
                         modifier = Modifier
@@ -298,11 +432,35 @@ private fun SetupFlow(
                                 Card(
                                     colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
                                 ) {
-                                    Text(
-                                        text = "Client mode is optimized for phone and Quest. Add host IP, connect, and monitor session health in one place.",
+                                    Column(
                                         modifier = Modifier.padding(12.dp),
-                                        style = MaterialTheme.typography.bodyMedium,
-                                    )
+                                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                                    ) {
+                                        Text(
+                                            text = "Client mode is optimized for phone and Quest. Add host IP, connect, and monitor session health in one place.",
+                                            style = MaterialTheme.typography.bodyMedium,
+                                        )
+                                        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                            OutlinedButton(
+                                                onClick = {
+                                                    finishSetup(ConnectivityMode.WAVRY)
+                                                    onOpenCloudSignIn()
+                                                },
+                                                modifier = Modifier.fillMaxWidth(),
+                                            ) {
+                                                Text("I already have an account")
+                                            }
+                                            OutlinedButton(
+                                                onClick = {
+                                                    finishSetup(ConnectivityMode.WAVRY)
+                                                    onOpenCloudRegister()
+                                                },
+                                                modifier = Modifier.fillMaxWidth(),
+                                            ) {
+                                                Text("Create account")
+                                            }
+                                        }
+                                    }
                                 }
                             }
 
@@ -323,6 +481,30 @@ private fun SetupFlow(
                                     enabled = true,
                                     onSetConnectivityMode = { localConnectivity = it },
                                 )
+                                if (localConnectivity == ConnectivityMode.WAVRY) {
+                                    StatusBanner(
+                                        text = "Cloud mode works best with an account. Create one now, or sign in if you already have one.",
+                                        isError = false,
+                                    )
+                                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                        OutlinedButton(
+                                            onClick = {
+                                                finishSetup(ConnectivityMode.WAVRY)
+                                                onOpenCloudRegister()
+                                            },
+                                        ) {
+                                            Text("Create account")
+                                        }
+                                        OutlinedButton(
+                                            onClick = {
+                                                finishSetup(ConnectivityMode.WAVRY)
+                                                onOpenCloudSignIn()
+                                            },
+                                        ) {
+                                            Text("Sign in")
+                                        }
+                                    }
+                                }
                                 Text(
                                     text = "You can change this later in Settings.",
                                     style = MaterialTheme.typography.bodySmall,
@@ -350,10 +532,7 @@ private fun SetupFlow(
                             }
                             step += 1
                         } else {
-                            val finalName = localName.trim().ifEmpty { "My Android" }
-                            onSetDisplayName(finalName)
-                            onSetConnectivityMode(localConnectivity)
-                            onCompleteSetup(finalName, localConnectivity)
+                            finishSetup()
                         }
                     },
                     modifier = Modifier.fillMaxWidth(),
@@ -366,39 +545,37 @@ private fun SetupFlow(
 }
 
 @Composable
-private fun AppTabSelector(
-    selected: AppTab,
-    onSetTab: (AppTab) -> Unit,
-) {
-    val tabs = listOf(AppTab.SESSION, AppTab.SETTINGS)
-    SingleChoiceSegmentedButtonRow(
-        modifier = Modifier.fillMaxWidth(),
-    ) {
-        tabs.forEachIndexed { index, tab ->
-            SegmentedButton(
-                selected = selected == tab,
-                onClick = { onSetTab(tab) },
-                shape = SegmentedButtonDefaults.itemShape(index = index, count = tabs.size),
-                label = { Text(if (tab == AppTab.SESSION) "Session" else "Settings") },
-            )
-        }
-    }
-}
-
-@Composable
 private fun SessionTab(
     state: WavryUiState,
     onSetMode: (ConnectionMode) -> Unit,
     onSetHost: (String) -> Unit,
     onSetPort: (String) -> Unit,
-    onRequestCloudConnect: (String) -> Unit,
+    onOpenCloudSignIn: () -> Unit,
+    onOpenCloudRegister: () -> Unit,
     onStart: () -> Unit,
     onStop: () -> Unit,
 ) {
-    ElevatedCard(
+    val cloudTargetLooksValid = looksLikeCloudUsername(state.hostText)
+    val hasClientTarget = state.mode != ConnectionMode.CLIENT || state.hostText.trim().isNotEmpty()
+    val hasValidPort = state.portText.toIntOrNull()?.let { port ->
+        if (state.mode == ConnectionMode.HOST) port in 0..65535 else port in 1..65535
+    } ?: false
+    val requiresCloudAuth =
+        state.mode == ConnectionMode.CLIENT &&
+            state.connectivityMode == ConnectivityMode.WAVRY &&
+            cloudTargetLooksValid &&
+            !state.isAuthenticated
+    val canStart = !state.isBusy && hasClientTarget && hasValidPort && !requiresCloudAuth
+    val startLabel = when {
+        state.mode == ConnectionMode.HOST -> "Start Hosting"
+        state.connectivityMode == ConnectivityMode.WAVRY && cloudTargetLooksValid -> "Connect via Cloud"
+        else -> "Connect"
+    }
+
+    Card(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(20.dp),
-        colors = CardDefaults.elevatedCardColors(containerColor = MaterialTheme.colorScheme.surface),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
     ) {
         Column(
             modifier = Modifier
@@ -416,10 +593,43 @@ private fun SessionTab(
                     text = if (state.isAuthenticated) {
                         "Cloud signaling is active. Use username lookup, or connect directly by IP."
                     } else {
-                        "Sign in from Settings to use cloud signaling."
+                        "Sign in for username connect, or keep using direct host/IP connection."
                     },
                     isError = !state.isAuthenticated,
                 )
+
+                if (!state.isAuthenticated) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OutlinedButton(
+                            onClick = onOpenCloudSignIn,
+                            enabled = !state.isBusy && !state.isRunning,
+                        ) {
+                            Text("Sign in")
+                        }
+                        OutlinedButton(
+                            onClick = onOpenCloudRegister,
+                            enabled = !state.isBusy && !state.isRunning,
+                        ) {
+                            Text("Create account")
+                        }
+                    }
+                }
+
+                if (state.isAuthenticated && state.cloudSignalingState != CloudSignalingState.CONNECTED) {
+                    StatusBanner(
+                        text = when (state.cloudSignalingState) {
+                            CloudSignalingState.CONNECTING ->
+                                "Cloud signaling is connecting. Username requests may take a moment."
+                            CloudSignalingState.ERROR ->
+                                "Cloud signaling is unavailable. Open Settings and tap Reconnect Signaling."
+                            CloudSignalingState.DISCONNECTED ->
+                                "Cloud signaling is disconnected. Open Settings and tap Reconnect Signaling."
+                            CloudSignalingState.CONNECTED ->
+                                ""
+                        },
+                        isError = state.cloudSignalingState == CloudSignalingState.ERROR,
+                    )
+                }
             }
 
             ModeSelector(
@@ -441,7 +651,7 @@ private fun SessionTab(
                     placeholder = {
                         Text(
                             if (state.connectivityMode == ConnectivityMode.WAVRY) {
-                                "username or 192.168.1.20:8000"
+                                "@username or 192.168.1.20:8000"
                             } else {
                                 "192.168.1.20 or host.local:8000"
                             },
@@ -450,7 +660,7 @@ private fun SessionTab(
                     supportingText = {
                         Text(
                             if (state.connectivityMode == ConnectivityMode.WAVRY) {
-                                "Use username for cloud request, or host/IP for direct fallback."
+                                "Use username (optional @) for cloud request, or host/IP for direct fallback."
                             } else {
                                 "Hostname or IP. Optional :port supported."
                             },
@@ -461,12 +671,12 @@ private fun SessionTab(
             }
 
             if (state.mode == ConnectionMode.CLIENT && state.connectivityMode == ConnectivityMode.WAVRY) {
-                OutlinedButton(
-                    onClick = { onRequestCloudConnect(state.hostText) },
-                    enabled = state.isAuthenticated && !state.isBusy && !state.isRunning && state.hostText.isNotBlank(),
-                    modifier = Modifier.fillMaxWidth(),
-                ) {
-                    Text("Request Cloud Connect")
+                if (state.hostText.isNotBlank() && !cloudTargetLooksValid) {
+                    Text(
+                        text = "Cloud requests need a username (3-32 chars, optional @ prefix). Use Connect for IP/host targets.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
                 }
             }
 
@@ -476,24 +686,41 @@ private fun SessionTab(
                 modifier = Modifier.fillMaxWidth(),
                 singleLine = true,
                 label = { Text("UDP Port") },
-                supportingText = { Text("Typical: 4444 (native macOS) or 8000 (desktop host).") },
+                supportingText = {
+                    Text(
+                        if (state.mode == ConnectionMode.HOST) {
+                            "Typical: 4444 or 8000. Use 0 for a random host port."
+                        } else {
+                            "Typical: 4444 (native macOS) or 8000 (desktop host)."
+                        },
+                    )
+                },
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                 enabled = !state.isBusy && !state.isRunning,
             )
 
             PortPresetRow(
                 selectedPort = state.portText.toIntOrNull(),
+                allowRandom = state.mode == ConnectionMode.HOST,
                 onSetPort = onSetPort,
                 enabled = !state.isBusy && !state.isRunning,
             )
 
+            if (state.mode == ConnectionMode.CLIENT && state.portText == "0") {
+                Text(
+                    text = "Client mode needs a concrete remote port (for example 4444 or 8000).",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+
             if (!state.isRunning) {
                 Button(
                     onClick = onStart,
-                    enabled = !state.isBusy,
+                    enabled = canStart,
                     modifier = Modifier.fillMaxWidth(),
                 ) {
-                    Text(if (state.mode == ConnectionMode.HOST) "Start Hosting" else "Connect")
+                    Text(startLabel)
                 }
             } else {
                 OutlinedButton(
@@ -520,9 +747,10 @@ private fun SessionTab(
     }
 
     if (state.isQuestBuild) {
-        ElevatedCard(
+        Card(
             modifier = Modifier.fillMaxWidth(),
-            colors = CardDefaults.elevatedCardColors(containerColor = MaterialTheme.colorScheme.surface),
+            shape = RoundedCornerShape(20.dp),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
         ) {
             Column(
                 modifier = Modifier.padding(16.dp),
@@ -545,12 +773,25 @@ private fun SessionTab(
 }
 
 @Composable
+@OptIn(ExperimentalLayoutApi::class)
 private fun PortPresetRow(
     selectedPort: Int?,
+    allowRandom: Boolean,
     onSetPort: (String) -> Unit,
     enabled: Boolean,
 ) {
-    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+    FlowRow(
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        if (allowRandom) {
+            FilterChip(
+                selected = selectedPort == 0,
+                onClick = { onSetPort("0") },
+                enabled = enabled,
+                label = { Text("Random") },
+            )
+        }
         FilterChip(
             selected = selectedPort == 4444,
             onClick = { onSetPort("4444") },
@@ -572,17 +813,19 @@ private fun SettingsTab(
     onSetDisplayName: (String) -> Unit,
     onSetConnectivityMode: (ConnectivityMode) -> Unit,
     onSetAuthServer: (String) -> Unit,
+    onSetAuthFormMode: (AuthFormMode) -> Unit,
     onLoginCloud: (String, String) -> Unit,
     onRegisterCloud: (String, String, String) -> Unit,
     onLogoutCloud: () -> Unit,
+    onReconnectCloudSignaling: () -> Unit,
     onSetHost: (String) -> Unit,
     onSetPort: (String) -> Unit,
     onSaveSettings: () -> Unit,
 ) {
-    ElevatedCard(
+    Card(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(20.dp),
-        colors = CardDefaults.elevatedCardColors(containerColor = MaterialTheme.colorScheme.surface),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
     ) {
         Column(
             modifier = Modifier
@@ -625,6 +868,7 @@ private fun SettingsTab(
                 modifier = Modifier.fillMaxWidth(),
                 singleLine = true,
                 label = { Text("Default Port") },
+                supportingText = { Text("Use 0 for random host port (client mode still requires explicit remote port).") },
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
             )
 
@@ -644,9 +888,11 @@ private fun SettingsTab(
             CloudAccountSection(
                 state = state,
                 onSetAuthServer = onSetAuthServer,
+                onSetAuthFormMode = onSetAuthFormMode,
                 onLoginCloud = onLoginCloud,
                 onRegisterCloud = onRegisterCloud,
                 onLogoutCloud = onLogoutCloud,
+                onReconnectCloudSignaling = onReconnectCloudSignaling,
             )
         }
     }
@@ -656,9 +902,11 @@ private fun SettingsTab(
 private fun CloudAccountSection(
     state: WavryUiState,
     onSetAuthServer: (String) -> Unit,
+    onSetAuthFormMode: (AuthFormMode) -> Unit,
     onLoginCloud: (String, String) -> Unit,
     onRegisterCloud: (String, String, String) -> Unit,
     onLogoutCloud: () -> Unit,
+    onReconnectCloudSignaling: () -> Unit,
 ) {
     var email by rememberSaveable(state.authEmail, state.isAuthenticated) {
         mutableStateOf(state.authEmail)
@@ -667,10 +915,14 @@ private fun CloudAccountSection(
         mutableStateOf(state.authUsername)
     }
     var password by rememberSaveable { mutableStateOf("") }
+    val isRegisterMode = state.authFormMode == AuthFormMode.REGISTER
+    val trimmedEmail = email.trim()
+    val trimmedUsername = username.trim()
 
-    ElevatedCard(
+    Card(
         modifier = Modifier.fillMaxWidth(),
-        colors = CardDefaults.elevatedCardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+        shape = RoundedCornerShape(20.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer),
     ) {
         Column(
             modifier = Modifier
@@ -693,11 +945,38 @@ private fun CloudAccountSection(
                 enabled = !state.isAuthBusy,
             )
 
+            if (state.connectivityMode == ConnectivityMode.WAVRY && !state.isAuthenticated) {
+                StatusBanner(
+                    text = "Cloud mode is selected. Sign in or create an account to connect by username.",
+                    isError = false,
+                )
+            }
+
             if (state.isAuthenticated) {
                 Text(
                     text = "Signed in as ${state.authUsername.ifBlank { state.authEmail }}",
                     style = MaterialTheme.typography.bodyMedium,
                 )
+                if (state.connectivityMode == ConnectivityMode.WAVRY) {
+                    StatusBanner(
+                        text = when (state.cloudSignalingState) {
+                            CloudSignalingState.CONNECTED -> "Cloud signaling connected."
+                            CloudSignalingState.CONNECTING -> "Cloud signaling connecting..."
+                            CloudSignalingState.ERROR -> "Cloud signaling unavailable."
+                            CloudSignalingState.DISCONNECTED -> "Cloud signaling disconnected."
+                        },
+                        isError = state.cloudSignalingState == CloudSignalingState.ERROR,
+                    )
+                    if (state.cloudSignalingState != CloudSignalingState.CONNECTED) {
+                        OutlinedButton(
+                            onClick = onReconnectCloudSignaling,
+                            enabled = !state.isAuthBusy,
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            Text("Reconnect Signaling")
+                        }
+                    }
+                }
                 OutlinedButton(
                     onClick = onLogoutCloud,
                     enabled = !state.isAuthBusy,
@@ -706,23 +985,47 @@ private fun CloudAccountSection(
                     Text("Sign Out")
                 }
             } else {
+                SingleChoiceSegmentedButtonRow(
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    SegmentedButton(
+                        selected = !isRegisterMode,
+                        onClick = { onSetAuthFormMode(AuthFormMode.LOGIN) },
+                        enabled = !state.isAuthBusy,
+                        shape = SegmentedButtonDefaults.itemShape(index = 0, count = 2),
+                        label = { Text("Sign In") },
+                    )
+                    SegmentedButton(
+                        selected = isRegisterMode,
+                        onClick = { onSetAuthFormMode(AuthFormMode.REGISTER) },
+                        enabled = !state.isAuthBusy,
+                        shape = SegmentedButtonDefaults.itemShape(index = 1, count = 2),
+                        label = { Text("Create Account") },
+                    )
+                }
+
                 OutlinedTextField(
                     value = email,
-                    onValueChange = { email = it.trim() },
+                    onValueChange = { email = it },
                     modifier = Modifier.fillMaxWidth(),
                     singleLine = true,
                     label = { Text("Email") },
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email),
                     enabled = !state.isAuthBusy,
                 )
-                OutlinedTextField(
-                    value = username,
-                    onValueChange = { username = it.take(32) },
-                    modifier = Modifier.fillMaxWidth(),
-                    singleLine = true,
-                    label = { Text("Username (for sign-up)") },
-                    enabled = !state.isAuthBusy,
-                )
+
+                if (isRegisterMode) {
+                    OutlinedTextField(
+                        value = username,
+                        onValueChange = { username = it.take(32) },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true,
+                        label = { Text("Username") },
+                        placeholder = { Text("3-32 chars, letters/numbers/., _, -") },
+                        enabled = !state.isAuthBusy,
+                    )
+                }
+
                 OutlinedTextField(
                     value = password,
                     onValueChange = { password = it },
@@ -734,19 +1037,49 @@ private fun CloudAccountSection(
                     enabled = !state.isAuthBusy,
                 )
 
-                Button(
-                    onClick = { onLoginCloud(email, password) },
-                    enabled = !state.isAuthBusy && email.isNotBlank() && password.isNotBlank(),
-                    modifier = Modifier.fillMaxWidth(),
-                ) {
-                    Text("Sign In")
+                if (isRegisterMode) {
+                    Text(
+                        text = "Password must be at least 8 characters.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
                 }
-                OutlinedButton(
-                    onClick = { onRegisterCloud(email, username, password) },
-                    enabled = !state.isAuthBusy && email.isNotBlank() && username.isNotBlank() && password.isNotBlank(),
+
+                Button(
+                    onClick = {
+                        if (isRegisterMode) {
+                            onRegisterCloud(trimmedEmail, trimmedUsername, password)
+                        } else {
+                            onLoginCloud(trimmedEmail, password)
+                        }
+                    },
+                    enabled = if (isRegisterMode) {
+                        !state.isAuthBusy &&
+                            looksLikeEmail(trimmedEmail) &&
+                            looksLikeCloudUsername(trimmedUsername) &&
+                            password.length >= 8
+                    } else {
+                        !state.isAuthBusy && looksLikeEmail(trimmedEmail) && password.isNotBlank()
+                    },
                     modifier = Modifier.fillMaxWidth(),
                 ) {
-                    Text("Create Account")
+                    Text(if (isRegisterMode) "Create Account" else "Sign In")
+                }
+
+                OutlinedButton(
+                    onClick = {
+                        onSetAuthFormMode(if (isRegisterMode) AuthFormMode.LOGIN else AuthFormMode.REGISTER)
+                    },
+                    enabled = !state.isAuthBusy,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text(
+                        if (isRegisterMode) {
+                            "Already have an account? Sign in"
+                        } else {
+                            "Need an account? Create one"
+                        },
+                    )
                 }
             }
 
@@ -766,6 +1099,37 @@ private fun CloudAccountSection(
     }
 }
 
+private data class NavigationItem(
+    val tab: AppTab,
+    val label: String,
+    val icon: ImageVector,
+)
+
+private fun cloudSignalingLabel(state: CloudSignalingState): String {
+    return when (state) {
+        CloudSignalingState.CONNECTED -> "online"
+        CloudSignalingState.CONNECTING -> "connecting"
+        CloudSignalingState.ERROR -> "offline"
+        CloudSignalingState.DISCONNECTED -> "disconnected"
+    }
+}
+
+private fun looksLikeCloudUsername(value: String): Boolean {
+    val trimmed = value.trim().removePrefix("@").trim()
+    if (trimmed.length !in 3..32) return false
+    return trimmed.all { ch ->
+        ch.isLetterOrDigit() || ch == '.' || ch == '_' || ch == '-'
+    }
+}
+
+private fun looksLikeEmail(value: String): Boolean {
+    val trimmed = value.trim()
+    val atIndex = trimmed.indexOf('@')
+    if (atIndex <= 0 || atIndex >= trimmed.length - 1) return false
+    val dotAfterAt = trimmed.indexOf('.', atIndex + 1)
+    return dotAfterAt > atIndex + 1 && dotAfterAt < trimmed.length - 1
+}
+
 @Composable
 private fun StatusBanner(text: String, isError: Boolean) {
     Card(
@@ -773,7 +1137,7 @@ private fun StatusBanner(text: String, isError: Boolean) {
             containerColor = if (isError) {
                 MaterialTheme.colorScheme.errorContainer
             } else {
-                MaterialTheme.colorScheme.surfaceVariant
+                MaterialTheme.colorScheme.surfaceContainerHigh
             },
         ),
     ) {
@@ -846,10 +1210,10 @@ private fun ConnectivitySelector(
 
 @Composable
 private fun StatsCard(state: WavryUiState) {
-    ElevatedCard(
+    Card(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(20.dp),
-        colors = CardDefaults.elevatedCardColors(containerColor = MaterialTheme.colorScheme.surface),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
     ) {
         Column(
             modifier = Modifier.padding(16.dp),

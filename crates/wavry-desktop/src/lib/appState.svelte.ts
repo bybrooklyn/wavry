@@ -19,6 +19,7 @@ export class AppState {
     username = $state("");
     signalingToken = $state<string | null>(null);
     showLoginModal = $state(false);
+    authModalMode = $state<"login" | "register">("login");
 
     // CC Stats
     ccBitrate = $state(0);
@@ -86,7 +87,7 @@ export class AppState {
     }
 
     private sanitizeSettings() {
-        this.hostPort = Math.trunc(this.clamp(this.hostPort, 1, 65535));
+        this.hostPort = Math.trunc(this.clamp(this.hostPort, 0, 65535));
         this.gamepadDeadzone = this.clamp(this.gamepadDeadzone, 0, 0.5);
         this.customResolution = {
             width: Math.trunc(this.clamp(this.customResolution.width, 640, 8192)),
@@ -95,8 +96,8 @@ export class AppState {
     }
 
     validateSettingsInputs(): string | null {
-        if (!Number.isInteger(this.hostPort) || this.hostPort < 1 || this.hostPort > 65535) {
-            return "Host port must be an integer between 1 and 65535.";
+        if (!Number.isInteger(this.hostPort) || this.hostPort < 0 || this.hostPort > 65535) {
+            return "Host port must be an integer between 0 and 65535 (0 = random).";
         }
 
         if (this.connectivityMode === "custom") {
@@ -215,6 +216,15 @@ export class AppState {
         this.saveToStorage();
     }
 
+    openAuthModal(mode: "login" | "register" = "login") {
+        this.authModalMode = mode;
+        this.showLoginModal = true;
+    }
+
+    closeAuthModal() {
+        this.showLoginModal = false;
+    }
+
     async initialize() {
         this.isSetupCompleted = localStorage.getItem("isSetupCompleted") === "true";
         this.displayName = localStorage.getItem("displayName") || "";
@@ -270,6 +280,7 @@ export class AppState {
             this.signalingToken = res.token;
             this.isAuthenticated = true;
             // Note: login_full already saves the token and username to secure storage on the Rust side
+            this.authModalMode = "login";
             this.showLoginModal = false;
             return res.username;
         } catch (e: any) {
@@ -390,7 +401,7 @@ export class AppState {
             });
             this.connectionStatus = "connected";
             this.isConnected = true;
-            this.hostStatusMessage = `Connected to ${target}`;
+            this.hostStatusMessage = `Session started with ${target}`;
             this.startCCStatsPolling();
             return result;
         } catch (e: unknown) {
@@ -416,11 +427,17 @@ export class AppState {
         this.hostStatusMessage = "Starting host...";
         this.isHostTransitioning = true;
         try {
-            await invoke("start_host", { port: this.hostPort, display_id: this.selectedMonitorId });
+            const backendMessage = await invoke<string>("start_host", {
+                port: this.hostPort,
+                display_id: this.selectedMonitorId,
+            });
             this.isHosting = true;
             this.isConnected = true;
             this.connectionStatus = "connected";
-            this.hostStatusMessage = `Hosting on UDP ${this.hostPort}`;
+            const normalized = typeof backendMessage === "string" && backendMessage.trim()
+                ? backendMessage.trim()
+                : (this.hostPort === 0 ? "Hosting on random UDP port" : `Hosting on UDP ${this.hostPort}`);
+            this.hostStatusMessage = normalized;
             this.saveToStorage();
             this.startCCStatsPolling();
         } catch (e: unknown) {

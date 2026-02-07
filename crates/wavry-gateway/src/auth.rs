@@ -9,9 +9,11 @@ use axum::{
     http::{header, HeaderMap, StatusCode},
     response::IntoResponse,
 };
+use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
 use std::net::{IpAddr, SocketAddr};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use rand::{thread_rng, Rng};
 use totp_rs::{Algorithm, TOTP};
@@ -66,6 +68,87 @@ pub struct ErrorResponse {
 #[derive(Serialize)]
 pub struct LogoutResponse {
     pub revoked: bool,
+}
+
+struct AuthMetrics {
+    register_attempts: AtomicU64,
+    register_success: AtomicU64,
+    login_attempts: AtomicU64,
+    login_success: AtomicU64,
+    totp_setup_attempts: AtomicU64,
+    totp_setup_success: AtomicU64,
+    totp_enable_attempts: AtomicU64,
+    totp_enable_success: AtomicU64,
+    logout_attempts: AtomicU64,
+    logout_success: AtomicU64,
+    rate_limited: AtomicU64,
+    validation_errors: AtomicU64,
+    auth_failures: AtomicU64,
+    db_errors: AtomicU64,
+}
+
+impl Default for AuthMetrics {
+    fn default() -> Self {
+        Self {
+            register_attempts: AtomicU64::new(0),
+            register_success: AtomicU64::new(0),
+            login_attempts: AtomicU64::new(0),
+            login_success: AtomicU64::new(0),
+            totp_setup_attempts: AtomicU64::new(0),
+            totp_setup_success: AtomicU64::new(0),
+            totp_enable_attempts: AtomicU64::new(0),
+            totp_enable_success: AtomicU64::new(0),
+            logout_attempts: AtomicU64::new(0),
+            logout_success: AtomicU64::new(0),
+            rate_limited: AtomicU64::new(0),
+            validation_errors: AtomicU64::new(0),
+            auth_failures: AtomicU64::new(0),
+            db_errors: AtomicU64::new(0),
+        }
+    }
+}
+
+#[derive(Serialize)]
+pub struct AuthMetricsSnapshot {
+    pub register_attempts: u64,
+    pub register_success: u64,
+    pub login_attempts: u64,
+    pub login_success: u64,
+    pub totp_setup_attempts: u64,
+    pub totp_setup_success: u64,
+    pub totp_enable_attempts: u64,
+    pub totp_enable_success: u64,
+    pub logout_attempts: u64,
+    pub logout_success: u64,
+    pub rate_limited: u64,
+    pub validation_errors: u64,
+    pub auth_failures: u64,
+    pub db_errors: u64,
+}
+
+static AUTH_METRICS: Lazy<AuthMetrics> = Lazy::new(AuthMetrics::default);
+
+fn metrics_snapshot() -> AuthMetricsSnapshot {
+    AuthMetricsSnapshot {
+        register_attempts: AUTH_METRICS.register_attempts.load(Ordering::Relaxed),
+        register_success: AUTH_METRICS.register_success.load(Ordering::Relaxed),
+        login_attempts: AUTH_METRICS.login_attempts.load(Ordering::Relaxed),
+        login_success: AUTH_METRICS.login_success.load(Ordering::Relaxed),
+        totp_setup_attempts: AUTH_METRICS.totp_setup_attempts.load(Ordering::Relaxed),
+        totp_setup_success: AUTH_METRICS.totp_setup_success.load(Ordering::Relaxed),
+        totp_enable_attempts: AUTH_METRICS.totp_enable_attempts.load(Ordering::Relaxed),
+        totp_enable_success: AUTH_METRICS.totp_enable_success.load(Ordering::Relaxed),
+        logout_attempts: AUTH_METRICS.logout_attempts.load(Ordering::Relaxed),
+        logout_success: AUTH_METRICS.logout_success.load(Ordering::Relaxed),
+        rate_limited: AUTH_METRICS.rate_limited.load(Ordering::Relaxed),
+        validation_errors: AUTH_METRICS.validation_errors.load(Ordering::Relaxed),
+        auth_failures: AUTH_METRICS.auth_failures.load(Ordering::Relaxed),
+        db_errors: AUTH_METRICS.db_errors.load(Ordering::Relaxed),
+    }
+}
+
+pub async fn metrics() -> impl IntoResponse {
+    (StatusCode::OK, Json(metrics_snapshot())).into_response()
 }
 
 fn error_response(status: StatusCode, message: impl Into<String>) -> axum::response::Response {
@@ -123,6 +206,26 @@ fn is_reasonable_password_input(password: &str) -> bool {
     !password.is_empty() && password.len() <= 128
 }
 
+fn normalize_email(email: &str) -> String {
+    email.trim().to_ascii_lowercase()
+}
+
+fn normalize_username(username: &str) -> String {
+    username.trim().to_ascii_lowercase()
+}
+
+fn normalize_display_name(display_name: &str) -> String {
+    display_name.trim().to_string()
+}
+
+fn normalize_public_key(public_key: &str) -> String {
+    public_key.trim().to_string()
+}
+
+fn normalize_totp_secret(secret: &str) -> String {
+    secret.chars().filter(|c| !c.is_whitespace()).collect()
+}
+
 fn decode_totp_secret(secret: &str) -> Result<Vec<u8>, &'static str> {
     base32::decode(base32::Alphabet::Rfc4648 { padding: false }, secret)
         .ok_or("Invalid TOTP secret encoding")
@@ -167,21 +270,34 @@ pub async fn register(
     headers: HeaderMap,
     Json(payload): Json<RegisterRequest>,
 ) -> impl IntoResponse {
+    AUTH_METRICS
+        .register_attempts
+        .fetch_add(1, Ordering::Relaxed);
     let client_ip = get_client_ip(&headers, addr);
     if !ensure_auth_rate_limit("register", client_ip) {
+        AUTH_METRICS.rate_limited.fetch_add(1, Ordering::Relaxed);
         return error_response(StatusCode::TOO_MANY_REQUESTS, "Too many requests");
     }
 
-    if !security::is_valid_email(&payload.email)
+    let email = normalize_email(&payload.email);
+    let username = normalize_username(&payload.username);
+    let display_name = normalize_display_name(&payload.display_name);
+    let public_key = normalize_public_key(&payload.public_key);
+
+    if !security::is_valid_email(&email)
         || !security::is_valid_password(&payload.password)
-        || !security::is_valid_display_name(&payload.display_name)
-        || !security::is_valid_username(&payload.username)
-        || !security::is_valid_public_key_hex(&payload.public_key)
+        || !security::is_valid_display_name(&display_name)
+        || !security::is_valid_username(&username)
+        || !security::is_valid_public_key_hex(&public_key)
     {
+        AUTH_METRICS
+            .validation_errors
+            .fetch_add(1, Ordering::Relaxed);
         return error_response(StatusCode::BAD_REQUEST, "Invalid registration payload");
     }
 
-    if let Ok(Some(_)) = db::get_user_by_email(&pool, &payload.email).await {
+    if let Ok(Some(_)) = db::get_user_by_email(&pool, &email).await {
+        AUTH_METRICS.auth_failures.fetch_add(1, Ordering::Relaxed);
         return error_response(StatusCode::CONFLICT, "Email already exists");
     }
 
@@ -194,16 +310,24 @@ pub async fn register(
 
     let user = match db::create_user(
         &pool,
-        &payload.email,
+        &email,
         &password_hash,
-        &payload.display_name,
-        &payload.username,
-        &payload.public_key,
+        &display_name,
+        &username,
+        &public_key,
     )
     .await
     {
         Ok(user) => user,
         Err(err) => {
+            let lower = err.to_string().to_ascii_lowercase();
+            if lower.contains("unique")
+                && (lower.contains("users.email") || lower.contains("users.username"))
+            {
+                AUTH_METRICS.auth_failures.fetch_add(1, Ordering::Relaxed);
+                return error_response(StatusCode::CONFLICT, "Account already exists");
+            }
+            AUTH_METRICS.db_errors.fetch_add(1, Ordering::Relaxed);
             tracing::error!("failed to create user: {}", err);
             return error_response(StatusCode::INTERNAL_SERVER_ERROR, "Database error");
         }
@@ -212,11 +336,15 @@ pub async fn register(
     let session = match db::create_session(&pool, &user.id, Some(client_ip.to_string())).await {
         Ok(session) => session,
         Err(err) => {
+            AUTH_METRICS.db_errors.fetch_add(1, Ordering::Relaxed);
             tracing::error!("failed to create session: {}", err);
             return error_response(StatusCode::INTERNAL_SERVER_ERROR, "Session creation failed");
         }
     };
 
+    AUTH_METRICS
+        .register_success
+        .fetch_add(1, Ordering::Relaxed);
     (StatusCode::CREATED, Json(auth_response(user, session))).into_response()
 }
 
@@ -226,20 +354,30 @@ pub async fn login(
     headers: HeaderMap,
     Json(payload): Json<LoginRequest>,
 ) -> impl IntoResponse {
+    AUTH_METRICS.login_attempts.fetch_add(1, Ordering::Relaxed);
     let client_ip = get_client_ip(&headers, addr);
     if !ensure_auth_rate_limit("login", client_ip) {
+        AUTH_METRICS.rate_limited.fetch_add(1, Ordering::Relaxed);
         return error_response(StatusCode::TOO_MANY_REQUESTS, "Too many requests");
     }
 
-    if !security::is_valid_email(&payload.email) || !is_reasonable_password_input(&payload.password)
-    {
+    let email = normalize_email(&payload.email);
+
+    if !security::is_valid_email(&email) || !is_reasonable_password_input(&payload.password) {
+        AUTH_METRICS
+            .validation_errors
+            .fetch_add(1, Ordering::Relaxed);
         return error_response(StatusCode::BAD_REQUEST, "Invalid login payload");
     }
 
-    let user = match db::get_user_by_email(&pool, &payload.email).await {
+    let user = match db::get_user_by_email(&pool, &email).await {
         Ok(Some(user)) => user,
-        Ok(None) => return error_response(StatusCode::UNAUTHORIZED, "Invalid credentials"),
+        Ok(None) => {
+            AUTH_METRICS.auth_failures.fetch_add(1, Ordering::Relaxed);
+            return error_response(StatusCode::UNAUTHORIZED, "Invalid credentials");
+        }
         Err(err) => {
+            AUTH_METRICS.db_errors.fetch_add(1, Ordering::Relaxed);
             tracing::error!("database error during login: {}", err);
             return error_response(StatusCode::INTERNAL_SERVER_ERROR, "Database error");
         }
@@ -254,21 +392,27 @@ pub async fn login(
         .verify_password(payload.password.as_bytes(), &parsed_hash)
         .is_err()
     {
+        AUTH_METRICS.auth_failures.fetch_add(1, Ordering::Relaxed);
         return error_response(StatusCode::UNAUTHORIZED, "Invalid credentials");
     }
 
     if let Some(stored_secret) = &user.totp_secret {
         let Some(code) = payload.totp_code.as_deref() else {
+            AUTH_METRICS.auth_failures.fetch_add(1, Ordering::Relaxed);
             return error_response(StatusCode::UNAUTHORIZED, "2FA required");
         };
 
         if !security::is_valid_totp_code(code) {
+            AUTH_METRICS
+                .validation_errors
+                .fetch_add(1, Ordering::Relaxed);
             return error_response(StatusCode::UNAUTHORIZED, "Invalid 2FA code");
         }
 
         let secret = match security::decrypt_totp_secret(stored_secret) {
             Ok(secret) => secret,
             Err(err) => {
+                AUTH_METRICS.db_errors.fetch_add(1, Ordering::Relaxed);
                 tracing::error!("unable to decrypt stored TOTP secret: {}", err);
                 return error_response(
                     StatusCode::INTERNAL_SERVER_ERROR,
@@ -288,6 +432,7 @@ pub async fn login(
         };
 
         if !totp.check_current(code).unwrap_or(false) {
+            AUTH_METRICS.auth_failures.fetch_add(1, Ordering::Relaxed);
             return error_response(StatusCode::UNAUTHORIZED, "Invalid 2FA code");
         }
     }
@@ -295,11 +440,13 @@ pub async fn login(
     let session = match db::create_session(&pool, &user.id, Some(client_ip.to_string())).await {
         Ok(session) => session,
         Err(err) => {
+            AUTH_METRICS.db_errors.fetch_add(1, Ordering::Relaxed);
             tracing::error!("failed to create session: {}", err);
             return error_response(StatusCode::INTERNAL_SERVER_ERROR, "Session creation failed");
         }
     };
 
+    AUTH_METRICS.login_success.fetch_add(1, Ordering::Relaxed);
     (StatusCode::OK, Json(auth_response(user, session))).into_response()
 }
 
@@ -309,19 +456,30 @@ pub async fn setup_totp(
     headers: HeaderMap,
     Json(payload): Json<LoginRequest>,
 ) -> impl IntoResponse {
+    AUTH_METRICS
+        .totp_setup_attempts
+        .fetch_add(1, Ordering::Relaxed);
     let client_ip = get_client_ip(&headers, addr);
     if !ensure_auth_rate_limit("totp_setup", client_ip) {
+        AUTH_METRICS.rate_limited.fetch_add(1, Ordering::Relaxed);
         return error_response(StatusCode::TOO_MANY_REQUESTS, "Too many requests");
     }
 
-    if !security::is_valid_email(&payload.email) || !is_reasonable_password_input(&payload.password)
-    {
+    let email = normalize_email(&payload.email);
+
+    if !security::is_valid_email(&email) || !is_reasonable_password_input(&payload.password) {
+        AUTH_METRICS
+            .validation_errors
+            .fetch_add(1, Ordering::Relaxed);
         return error_response(StatusCode::BAD_REQUEST, "Invalid 2FA setup payload");
     }
 
-    let user = match db::get_user_by_email(&pool, &payload.email).await {
+    let user = match db::get_user_by_email(&pool, &email).await {
         Ok(Some(user)) => user,
-        _ => return error_response(StatusCode::UNAUTHORIZED, "Auth failed"),
+        _ => {
+            AUTH_METRICS.auth_failures.fetch_add(1, Ordering::Relaxed);
+            return error_response(StatusCode::UNAUTHORIZED, "Auth failed");
+        }
     };
 
     let parsed_hash = match PasswordHash::new(&user.password_hash) {
@@ -333,6 +491,7 @@ pub async fn setup_totp(
         .verify_password(payload.password.as_bytes(), &parsed_hash)
         .is_err()
     {
+        AUTH_METRICS.auth_failures.fetch_add(1, Ordering::Relaxed);
         return error_response(StatusCode::UNAUTHORIZED, "Auth failed");
     }
 
@@ -347,10 +506,11 @@ pub async fn setup_totp(
         30,
         secret_vec,
         Some("Wavry".to_string()),
-        payload.email.clone(),
+        email.clone(),
     ) {
         Ok(totp) => totp,
         Err(err) => {
+            AUTH_METRICS.db_errors.fetch_add(1, Ordering::Relaxed);
             tracing::error!("failed to create TOTP secret: {}", err);
             return error_response(StatusCode::INTERNAL_SERVER_ERROR, "2FA setup failed");
         }
@@ -360,6 +520,7 @@ pub async fn setup_totp(
     let qr_png_base64 = match totp.get_qr_base64() {
         Ok(qr) => qr,
         Err(err) => {
+            AUTH_METRICS.db_errors.fetch_add(1, Ordering::Relaxed);
             tracing::error!("failed to create TOTP QR: {}", err);
             return error_response(
                 StatusCode::INTERNAL_SERVER_ERROR,
@@ -368,6 +529,9 @@ pub async fn setup_totp(
         }
     };
 
+    AUTH_METRICS
+        .totp_setup_success
+        .fetch_add(1, Ordering::Relaxed);
     (
         StatusCode::OK,
         Json(TotpSetupResponse {
@@ -384,21 +548,34 @@ pub async fn enable_totp(
     headers: HeaderMap,
     Json(payload): Json<EnableTotpRequest>,
 ) -> impl IntoResponse {
+    AUTH_METRICS
+        .totp_enable_attempts
+        .fetch_add(1, Ordering::Relaxed);
     let client_ip = get_client_ip(&headers, addr);
     if !ensure_auth_rate_limit("totp_enable", client_ip) {
+        AUTH_METRICS.rate_limited.fetch_add(1, Ordering::Relaxed);
         return error_response(StatusCode::TOO_MANY_REQUESTS, "Too many requests");
     }
 
-    if !security::is_valid_email(&payload.email)
+    let email = normalize_email(&payload.email);
+    let secret = normalize_totp_secret(&payload.secret);
+
+    if !security::is_valid_email(&email)
         || !is_reasonable_password_input(&payload.password)
         || !security::is_valid_totp_code(&payload.code)
     {
+        AUTH_METRICS
+            .validation_errors
+            .fetch_add(1, Ordering::Relaxed);
         return error_response(StatusCode::BAD_REQUEST, "Invalid 2FA enable payload");
     }
 
-    let user = match db::get_user_by_email(&pool, &payload.email).await {
+    let user = match db::get_user_by_email(&pool, &email).await {
         Ok(Some(user)) => user,
-        _ => return error_response(StatusCode::UNAUTHORIZED, "Auth failed"),
+        _ => {
+            AUTH_METRICS.auth_failures.fetch_add(1, Ordering::Relaxed);
+            return error_response(StatusCode::UNAUTHORIZED, "Auth failed");
+        }
     };
 
     let parsed_hash = match PasswordHash::new(&user.password_hash) {
@@ -410,21 +587,29 @@ pub async fn enable_totp(
         .verify_password(payload.password.as_bytes(), &parsed_hash)
         .is_err()
     {
+        AUTH_METRICS.auth_failures.fetch_add(1, Ordering::Relaxed);
         return error_response(StatusCode::UNAUTHORIZED, "Auth failed");
     }
 
-    let totp = match totp_from_secret(&payload.secret) {
+    let totp = match totp_from_secret(&secret) {
         Ok(totp) => totp,
-        Err(_) => return error_response(StatusCode::BAD_REQUEST, "Invalid TOTP secret"),
+        Err(_) => {
+            AUTH_METRICS
+                .validation_errors
+                .fetch_add(1, Ordering::Relaxed);
+            return error_response(StatusCode::BAD_REQUEST, "Invalid TOTP secret");
+        }
     };
 
     if !totp.check_current(&payload.code).unwrap_or(false) {
+        AUTH_METRICS.auth_failures.fetch_add(1, Ordering::Relaxed);
         return error_response(StatusCode::BAD_REQUEST, "Invalid code");
     }
 
-    let encrypted_secret = match security::encrypt_totp_secret(&payload.secret) {
+    let encrypted_secret = match security::encrypt_totp_secret(&secret) {
         Ok(secret) => secret,
         Err(err) => {
+            AUTH_METRICS.db_errors.fetch_add(1, Ordering::Relaxed);
             tracing::error!("failed to encrypt TOTP secret: {}", err);
             return error_response(
                 StatusCode::INTERNAL_SERVER_ERROR,
@@ -434,11 +619,12 @@ pub async fn enable_totp(
     };
 
     if let Err(err) = db::enable_totp(&pool, &user.id, &encrypted_secret).await {
+        AUTH_METRICS.db_errors.fetch_add(1, Ordering::Relaxed);
         tracing::error!("failed to enable TOTP in DB: {}", err);
         return error_response(StatusCode::INTERNAL_SERVER_ERROR, "DB error");
     }
 
-    let refreshed_user = match db::get_user_by_email(&pool, &payload.email).await {
+    let refreshed_user = match db::get_user_by_email(&pool, &email).await {
         Ok(Some(user)) => user,
         Ok(None) => {
             return error_response(
@@ -447,6 +633,7 @@ pub async fn enable_totp(
             )
         }
         Err(err) => {
+            AUTH_METRICS.db_errors.fetch_add(1, Ordering::Relaxed);
             tracing::error!("failed to fetch refreshed user: {}", err);
             return error_response(StatusCode::INTERNAL_SERVER_ERROR, "DB error");
         }
@@ -455,11 +642,15 @@ pub async fn enable_totp(
     let session = match db::create_session(&pool, &user.id, Some(client_ip.to_string())).await {
         Ok(session) => session,
         Err(err) => {
+            AUTH_METRICS.db_errors.fetch_add(1, Ordering::Relaxed);
             tracing::error!("failed to create session: {}", err);
             return error_response(StatusCode::INTERNAL_SERVER_ERROR, "Session creation failed");
         }
     };
 
+    AUTH_METRICS
+        .totp_enable_success
+        .fetch_add(1, Ordering::Relaxed);
     (StatusCode::OK, Json(auth_response(refreshed_user, session))).into_response()
 }
 
@@ -468,21 +659,33 @@ pub async fn logout(
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
     headers: HeaderMap,
 ) -> impl IntoResponse {
+    AUTH_METRICS.logout_attempts.fetch_add(1, Ordering::Relaxed);
     let client_ip = get_client_ip(&headers, addr);
     if !ensure_auth_rate_limit("logout", client_ip) {
+        AUTH_METRICS.rate_limited.fetch_add(1, Ordering::Relaxed);
         return error_response(StatusCode::TOO_MANY_REQUESTS, "Too many requests");
     }
 
     let Some(token) = extract_session_token(&headers) else {
+        AUTH_METRICS
+            .validation_errors
+            .fetch_add(1, Ordering::Relaxed);
         return error_response(StatusCode::BAD_REQUEST, "Missing bearer token");
     };
     if !security::is_valid_session_token(&token) {
+        AUTH_METRICS
+            .validation_errors
+            .fetch_add(1, Ordering::Relaxed);
         return error_response(StatusCode::BAD_REQUEST, "Invalid session token");
     }
 
     match db::revoke_session(&pool, &token).await {
-        Ok(revoked) => (StatusCode::OK, Json(LogoutResponse { revoked })).into_response(),
+        Ok(revoked) => {
+            AUTH_METRICS.logout_success.fetch_add(1, Ordering::Relaxed);
+            (StatusCode::OK, Json(LogoutResponse { revoked })).into_response()
+        }
         Err(err) => {
+            AUTH_METRICS.db_errors.fetch_add(1, Ordering::Relaxed);
             tracing::error!("failed to revoke session: {}", err);
             error_response(StatusCode::INTERNAL_SERVER_ERROR, "Logout failed")
         }

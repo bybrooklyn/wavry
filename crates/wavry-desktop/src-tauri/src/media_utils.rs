@@ -1,11 +1,11 @@
-use wavry_media::{Codec, CapabilityProbe};
+use rift_core::Codec as RiftCodec;
 #[cfg(target_os = "linux")]
 use wavry_media::LinuxProbe;
 #[cfg(target_os = "macos")]
 use wavry_media::MacProbe;
 #[cfg(target_os = "windows")]
 use wavry_media::WindowsProbe;
-use rift_core::Codec as RiftCodec;
+use wavry_media::{CapabilityProbe, Codec};
 
 pub fn local_supported_encoders() -> Vec<Codec> {
     #[cfg(target_os = "windows")]

@@ -1,27 +1,34 @@
+use anyhow::{anyhow, Result};
+use bytes::Bytes;
 use std::net::SocketAddr;
-use std::sync::{Arc, Mutex, atomic::{Ordering, AtomicU64}};
+use std::sync::{
+    atomic::{AtomicU64, Ordering},
+    Arc, Mutex,
+};
 use std::time::{Duration, Instant};
 use tokio::net::UdpSocket;
 use tokio::sync::{mpsc, oneshot};
 use tokio::time;
 use tracing::{debug, info, warn};
-use anyhow::{anyhow, Result};
-use bytes::Bytes;
 
 use rift_core::{
     decode_msg, encode_msg,
-    relay::{RelayHeader, RelayPacketType, RELAY_HEADER_SIZE, PeerRole, LeasePresentPayload},
-    Codec as RiftCodec, ControlMessage as ProtoControl, Handshake,
-    Hello as ProtoHello, Message as ProtoMessage,
-    PhysicalPacket, Ping as ProtoPing, Resolution as ProtoResolution, Role,
-    StatsReport as ProtoStatsReport, RIFT_VERSION,
+    relay::{LeasePresentPayload, PeerRole, RelayHeader, RelayPacketType, RELAY_HEADER_SIZE},
+    Codec as RiftCodec, ControlMessage as ProtoControl, Handshake, Hello as ProtoHello,
+    Message as ProtoMessage, PhysicalPacket, Ping as ProtoPing, Resolution as ProtoResolution,
+    Role, StatsReport as ProtoStatsReport, RIFT_VERSION,
 };
 use socket2::SockRef;
 
-use crate::types::{ClientConfig, ClientRuntimeStats, RendererFactory, CryptoState, VrOutbound, RelayInfo};
-use crate::helpers::{env_bool, now_us, local_platform};
-use crate::media::{FrameAssembler, FecCache, ArrivalJitter, JitterBuffer, RttTracker, NackWindow, FRAME_TIMEOUT_US, NACK_WINDOW_SIZE};
+use crate::helpers::{env_bool, local_platform, now_us};
 use crate::input::spawn_input_threads;
+use crate::media::{
+    ArrivalJitter, FecCache, FrameAssembler, JitterBuffer, NackWindow, RttTracker,
+    FRAME_TIMEOUT_US, NACK_WINDOW_SIZE,
+};
+use crate::types::{
+    ClientConfig, ClientRuntimeStats, CryptoState, RelayInfo, RendererFactory, VrOutbound,
+};
 
 #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
 use wavry_media::CapabilityProbe;
@@ -33,9 +40,9 @@ use wavry_media::DummyRenderer as LinuxFallbackRenderer;
 use wavry_media::GstVideoRenderer as VideoRenderer;
 use wavry_media::{Codec, DecodeConfig, Renderer, Resolution as MediaResolution};
 use wavry_vr::types::{
-    EncoderControl as VrEncoderControl, NetworkStats as VrNetworkStats,
+    EncoderControl as VrEncoderControl, HandPose as VrHandPose, NetworkStats as VrNetworkStats,
     Pose as VrPose, StreamConfig as VrStreamConfig, VideoCodec as VrVideoCodec,
-    VideoFrame as VrVideoFrame, VrTiming, HandPose as VrHandPose
+    VideoFrame as VrVideoFrame, VrTiming,
 };
 use wavry_vr::{VrAdapter, VrAdapterCallbacks};
 
@@ -264,7 +271,10 @@ async fn run_client_inner(
         return Err(anyhow!("no connection targets available"));
     };
 
-    if config.no_encrypt && !connect_addr.ip().is_loopback() && !env_bool("WAVRY_CLIENT_ALLOW_PUBLIC_CONNECT", false) {
+    if config.no_encrypt
+        && !connect_addr.ip().is_loopback()
+        && !env_bool("WAVRY_CLIENT_ALLOW_PUBLIC_CONNECT", false)
+    {
         return Err(anyhow!(
             "refusing to connect to non-loopback address {} in --no-encrypt mode without WAVRY_CLIENT_ALLOW_PUBLIC_CONNECT=1",
             connect_addr

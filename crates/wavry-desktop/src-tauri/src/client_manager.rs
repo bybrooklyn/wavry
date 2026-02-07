@@ -1,7 +1,6 @@
-use std::sync::atomic::Ordering;
+use crate::state::{ClientSessionState, CLIENT_SESSION_STATE};
 use tokio::sync::oneshot;
 use wavry_client::{run_client_with_shutdown, ClientConfig};
-use crate::state::{CLIENT_SESSION_STATE, ClientSessionState};
 
 pub fn register_client_session(stop_tx: oneshot::Sender<()>) -> Result<(), String> {
     let mut state = CLIENT_SESSION_STATE.lock().unwrap();

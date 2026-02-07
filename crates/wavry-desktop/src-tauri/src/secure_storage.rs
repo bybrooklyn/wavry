@@ -36,4 +36,3 @@ pub fn get_token() -> Result<Option<String>, String> {
 pub fn delete_token() -> Result<(), String> {
     delete_data("session_token")
 }
-

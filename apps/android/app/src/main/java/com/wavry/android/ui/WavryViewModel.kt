@@ -13,6 +13,7 @@ import com.wavry.android.core.SessionStats
 import com.wavry.android.core.WavryCore
 import java.net.Inet4Address
 import java.net.InetAddress
+import java.net.URL
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -38,6 +39,25 @@ enum class AppTab {
     SETTINGS,
 }
 
+enum class AuthFormMode {
+    LOGIN,
+    REGISTER,
+}
+
+enum class CloudSignalingState {
+    DISCONNECTED,
+    CONNECTING,
+    CONNECTED,
+    ERROR,
+}
+
+private enum class SignalingRefreshReason {
+    RESTORE,
+    MODE_SWITCH,
+    SETTINGS_SAVE,
+    MANUAL_RETRY,
+}
+
 data class WavryUiState(
     val mode: ConnectionMode = ConnectionMode.CLIENT,
     val hostText: String = "192.168.1.10",
@@ -60,6 +80,8 @@ data class WavryUiState(
     val isAuthBusy: Boolean = false,
     val authStatusMessage: String = "",
     val authErrorMessage: String = "",
+    val authFormMode: AuthFormMode = AuthFormMode.LOGIN,
+    val cloudSignalingState: CloudSignalingState = CloudSignalingState.DISCONNECTED,
     val stats: SessionStats = SessionStats(),
 )
 
@@ -67,6 +89,7 @@ class WavryViewModel(application: Application) : AndroidViewModel(application) {
     private val core = WavryCore(application.applicationContext)
     private val prefs = application.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
     private var authToken: String = prefs.getString(KEY_AUTH_TOKEN, "") ?: ""
+    private val initialConnectivityMode = loadConnectivityMode()
 
     private val _state = MutableStateFlow(
         WavryUiState(
@@ -79,12 +102,17 @@ class WavryViewModel(application: Application) : AndroidViewModel(application) {
             supportsHost = BuildConfig.SUPPORTS_HOST,
             setupComplete = prefs.getBoolean(KEY_SETUP_COMPLETE, false),
             displayName = prefs.getString(KEY_DISPLAY_NAME, defaultDisplayName()) ?: defaultDisplayName(),
-            connectivityMode = loadConnectivityMode(),
+            connectivityMode = initialConnectivityMode,
             authServer = prefs.getString(KEY_AUTH_SERVER, DEFAULT_AUTH_SERVER) ?: DEFAULT_AUTH_SERVER,
             isAuthenticated = authToken.isNotBlank(),
             authEmail = prefs.getString(KEY_AUTH_EMAIL, "") ?: "",
             authUsername = prefs.getString(KEY_AUTH_USERNAME, "") ?: "",
             authStatusMessage = if (authToken.isNotBlank()) "Signed in" else "",
+            cloudSignalingState = if (authToken.isNotBlank() && initialConnectivityMode == ConnectivityMode.WAVRY) {
+                CloudSignalingState.CONNECTING
+            } else {
+                CloudSignalingState.DISCONNECTED
+            },
         ),
     )
     val state: StateFlow<WavryUiState> = _state.asStateFlow()
@@ -98,7 +126,11 @@ class WavryViewModel(application: Application) : AndroidViewModel(application) {
 
     init {
         if (authToken.isNotBlank() && _state.value.connectivityMode == ConnectivityMode.WAVRY) {
-            connectSignalingInBackground(_state.value.authServer, authToken)
+            refreshCloudSignaling(
+                server = _state.value.authServer,
+                token = authToken,
+                reason = SignalingRefreshReason.RESTORE,
+            )
         }
     }
 
@@ -107,7 +139,19 @@ class WavryViewModel(application: Application) : AndroidViewModel(application) {
             _state.update { it.copy(errorMessage = "Hosting is not available on Android builds") }
             return
         }
-        _state.update { it.copy(mode = mode, errorMessage = "") }
+        _state.update { current ->
+            val normalizeClientPort = mode == ConnectionMode.CLIENT && current.portText == "0"
+            current.copy(
+                mode = mode,
+                portText = if (normalizeClientPort) DEFAULT_PORT else current.portText,
+                statusMessage = if (normalizeClientPort) {
+                    "Client mode uses explicit remote ports. Port reset to $DEFAULT_PORT."
+                } else {
+                    current.statusMessage
+                },
+                errorMessage = "",
+            )
+        }
         persistMode(mode)
     }
 
@@ -124,19 +168,59 @@ class WavryViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun setConnectivityMode(value: ConnectivityMode) {
-        _state.update { it.copy(connectivityMode = value, authErrorMessage = "") }
+        _state.update {
+            it.copy(
+                connectivityMode = value,
+                authStatusMessage = if (value == ConnectivityMode.WAVRY && !it.isAuthenticated) {
+                    "Cloud mode enabled. Sign in for username connect, or use IP/host for direct fallback."
+                } else if (value == ConnectivityMode.DIRECT) {
+                    "Direct mode enabled."
+                } else {
+                    it.authStatusMessage
+                },
+                authErrorMessage = if (value == ConnectivityMode.DIRECT) "" else it.authErrorMessage,
+                cloudSignalingState = if (value == ConnectivityMode.WAVRY && it.isAuthenticated) {
+                    CloudSignalingState.CONNECTING
+                } else {
+                    CloudSignalingState.DISCONNECTED
+                },
+            )
+        }
         saveSetupFields(
             _state.value.displayName.trim().ifEmpty { defaultDisplayName() },
             value,
             _state.value.setupComplete,
         )
         if (value == ConnectivityMode.WAVRY && authToken.isNotBlank()) {
-            connectSignalingInBackground(_state.value.authServer, authToken)
+            refreshCloudSignaling(
+                server = _state.value.authServer,
+                token = authToken,
+                reason = SignalingRefreshReason.MODE_SWITCH,
+            )
         }
     }
 
     fun setActiveTab(tab: AppTab) {
         _state.update { it.copy(activeTab = tab) }
+    }
+
+    fun setAuthFormMode(mode: AuthFormMode) {
+        _state.update { it.copy(authFormMode = mode, authErrorMessage = "") }
+    }
+
+    fun openCloudAuth(mode: AuthFormMode) {
+        _state.update {
+            it.copy(
+                activeTab = AppTab.SETTINGS,
+                authFormMode = mode,
+                authStatusMessage = if (mode == AuthFormMode.REGISTER) {
+                    "Create an account to connect by username."
+                } else {
+                    "Sign in to enable cloud username connect."
+                },
+                authErrorMessage = "",
+            )
+        }
     }
 
     fun setAuthServer(value: String) {
@@ -152,18 +236,35 @@ class WavryViewModel(application: Application) : AndroidViewModel(application) {
         val snapshot = _state.value
         if (snapshot.isAuthBusy) return
         val sanitizedEmail = email.trim()
+        val wantsCloudSignaling = snapshot.connectivityMode == ConnectivityMode.WAVRY
         if (sanitizedEmail.isEmpty() || password.isBlank()) {
             _state.update { it.copy(authErrorMessage = "Email and password are required.") }
             return
         }
+        if (!isValidEmail(sanitizedEmail)) {
+            _state.update { it.copy(authErrorMessage = "Enter a valid email address.") }
+            return
+        }
 
         val server = AuthApi.normalizeServer(snapshot.authServer)
+        if (!isValidAuthServer(server)) {
+            _state.update {
+                it.copy(authErrorMessage = "Auth server must start with http:// or https://.")
+            }
+            return
+        }
         _state.update {
             it.copy(
                 isAuthBusy = true,
                 authServer = server,
                 authErrorMessage = "",
                 authStatusMessage = "Signing in...",
+                authFormMode = AuthFormMode.LOGIN,
+                cloudSignalingState = if (wantsCloudSignaling) {
+                    CloudSignalingState.CONNECTING
+                } else {
+                    CloudSignalingState.DISCONNECTED
+                },
             )
         }
 
@@ -171,7 +272,11 @@ class WavryViewModel(application: Application) : AndroidViewModel(application) {
             try {
                 val auth = AuthApi.login(server, sanitizedEmail, password)
                 authToken = auth.token
-                val signalingResult = connectSignalingInBackground(server, auth.token)
+                val signalingResult = if (wantsCloudSignaling) {
+                    connectSignalingWithRetry(server, auth.token)
+                } else {
+                    0
+                }
                 saveAuthSession(auth, server)
                 _state.update {
                     it.copy(
@@ -179,15 +284,24 @@ class WavryViewModel(application: Application) : AndroidViewModel(application) {
                         isAuthenticated = true,
                         authEmail = auth.email,
                         authUsername = auth.username,
-                        authStatusMessage = if (signalingResult == 0) {
+                        authStatusMessage = if (!wantsCloudSignaling) {
+                            "Signed in. Enable Cloud mode when you want username connect."
+                        } else if (signalingResult == 0) {
                             "Signed in and cloud signaling connected."
                         } else {
                             "Signed in. Signaling connection may be unavailable."
                         },
-                        authErrorMessage = if (signalingResult == 0) {
+                        authErrorMessage = if (!wantsCloudSignaling || signalingResult == 0) {
                             ""
                         } else {
-                            core.describeError(signalingResult)
+                            normalizeCloudConnectError(core.describeError(signalingResult))
+                        },
+                        cloudSignalingState = if (!wantsCloudSignaling) {
+                            CloudSignalingState.DISCONNECTED
+                        } else if (signalingResult == 0) {
+                            CloudSignalingState.CONNECTED
+                        } else {
+                            CloudSignalingState.ERROR
                         },
                     )
                 }
@@ -197,7 +311,8 @@ class WavryViewModel(application: Application) : AndroidViewModel(application) {
                         isAuthBusy = false,
                         isAuthenticated = false,
                         authStatusMessage = "Sign-in failed",
-                        authErrorMessage = error.message ?: "Authentication failed",
+                        authErrorMessage = normalizeAuthError(error),
+                        cloudSignalingState = CloudSignalingState.DISCONNECTED,
                     )
                 }
             }
@@ -209,10 +324,25 @@ class WavryViewModel(application: Application) : AndroidViewModel(application) {
         if (snapshot.isAuthBusy) return
         val sanitizedEmail = email.trim()
         val sanitizedUsername = username.trim()
+        val wantsCloudSignaling = snapshot.connectivityMode == ConnectivityMode.WAVRY
         if (sanitizedEmail.isEmpty() || sanitizedUsername.isEmpty() || password.isBlank()) {
             _state.update {
                 it.copy(authErrorMessage = "Email, username, and password are required.")
             }
+            return
+        }
+        if (!isValidEmail(sanitizedEmail)) {
+            _state.update { it.copy(authErrorMessage = "Enter a valid email address.") }
+            return
+        }
+        if (!isValidCloudUsername(sanitizedUsername, allowDot = true)) {
+            _state.update {
+                it.copy(authErrorMessage = "Username must be 3-32 characters and use letters, numbers, ., _, or -.")
+            }
+            return
+        }
+        if (password.length < 8) {
+            _state.update { it.copy(authErrorMessage = "Password must be at least 8 characters.") }
             return
         }
 
@@ -225,12 +355,24 @@ class WavryViewModel(application: Application) : AndroidViewModel(application) {
         }
 
         val server = AuthApi.normalizeServer(snapshot.authServer)
+        if (!isValidAuthServer(server)) {
+            _state.update {
+                it.copy(authErrorMessage = "Auth server must start with http:// or https://.")
+            }
+            return
+        }
         _state.update {
             it.copy(
                 isAuthBusy = true,
                 authServer = server,
                 authErrorMessage = "",
                 authStatusMessage = "Creating account...",
+                authFormMode = AuthFormMode.REGISTER,
+                cloudSignalingState = if (wantsCloudSignaling) {
+                    CloudSignalingState.CONNECTING
+                } else {
+                    CloudSignalingState.DISCONNECTED
+                },
             )
         }
 
@@ -246,7 +388,11 @@ class WavryViewModel(application: Application) : AndroidViewModel(application) {
                     publicKeyHex = publicKey,
                 )
                 authToken = auth.token
-                val signalingResult = connectSignalingInBackground(server, auth.token)
+                val signalingResult = if (wantsCloudSignaling) {
+                    connectSignalingWithRetry(server, auth.token)
+                } else {
+                    0
+                }
                 saveAuthSession(auth, server)
                 _state.update {
                     it.copy(
@@ -254,15 +400,25 @@ class WavryViewModel(application: Application) : AndroidViewModel(application) {
                         isAuthenticated = true,
                         authEmail = auth.email,
                         authUsername = auth.username,
-                        authStatusMessage = if (signalingResult == 0) {
+                        authStatusMessage = if (!wantsCloudSignaling) {
+                            "Account created. Enable Cloud mode when you want username connect."
+                        } else if (signalingResult == 0) {
                             "Account created. Cloud signaling connected."
                         } else {
                             "Account created. Signaling connection may be unavailable."
                         },
-                        authErrorMessage = if (signalingResult == 0) {
+                        authFormMode = AuthFormMode.LOGIN,
+                        authErrorMessage = if (!wantsCloudSignaling || signalingResult == 0) {
                             ""
                         } else {
-                            core.describeError(signalingResult)
+                            normalizeCloudConnectError(core.describeError(signalingResult))
+                        },
+                        cloudSignalingState = if (!wantsCloudSignaling) {
+                            CloudSignalingState.DISCONNECTED
+                        } else if (signalingResult == 0) {
+                            CloudSignalingState.CONNECTED
+                        } else {
+                            CloudSignalingState.ERROR
                         },
                     )
                 }
@@ -271,7 +427,8 @@ class WavryViewModel(application: Application) : AndroidViewModel(application) {
                     it.copy(
                         isAuthBusy = false,
                         authStatusMessage = "Sign-up failed",
-                        authErrorMessage = error.message ?: "Unable to create account",
+                        authErrorMessage = normalizeAuthError(error),
+                        cloudSignalingState = CloudSignalingState.DISCONNECTED,
                     )
                 }
             }
@@ -293,28 +450,90 @@ class WavryViewModel(application: Application) : AndroidViewModel(application) {
                 isAuthBusy = false,
                 authStatusMessage = "Signed out",
                 authErrorMessage = "",
+                authFormMode = AuthFormMode.LOGIN,
+                cloudSignalingState = CloudSignalingState.DISCONNECTED,
             )
         }
     }
 
+    fun reconnectCloudSignaling() {
+        val snapshot = _state.value
+        if (snapshot.isAuthBusy || !snapshot.isAuthenticated || authToken.isBlank()) {
+            return
+        }
+        refreshCloudSignaling(
+            server = snapshot.authServer,
+            token = authToken,
+            reason = SignalingRefreshReason.MANUAL_RETRY,
+        )
+    }
+
     fun requestCloudConnect(targetUsername: String) {
         val snapshot = _state.value
+        if (snapshot.isBusy || snapshot.isRunning) return
         if (!snapshot.isAuthenticated) {
             _state.update {
-                it.copy(authErrorMessage = "Sign in first to request cloud connection.")
+                it.copy(
+                    activeTab = AppTab.SETTINGS,
+                    authFormMode = AuthFormMode.LOGIN,
+                    authErrorMessage = "Sign in first to request cloud connection.",
+                )
             }
             return
         }
 
-        val target = targetUsername.trim()
+        val target = normalizeCloudTarget(targetUsername)
         if (target.isEmpty()) {
             _state.update {
-                it.copy(authErrorMessage = "Enter a target username.")
+                it.copy(errorMessage = "Enter a target username.")
             }
             return
+        }
+        if (!isValidCloudUsername(target, allowDot = true)) {
+            _state.update {
+                it.copy(errorMessage = "Cloud connect requires a username (3-32 chars, letters/numbers/., _, -).")
+            }
+            return
+        }
+
+        _state.update {
+            it.copy(
+                isBusy = true,
+                errorMessage = "",
+                authErrorMessage = "",
+                statusMessage = "Sending cloud request to @$target...",
+            )
         }
 
         viewModelScope.launch {
+            if (_state.value.cloudSignalingState != CloudSignalingState.CONNECTED) {
+                _state.update {
+                    it.copy(
+                        statusMessage = "Reconnecting cloud signaling...",
+                        cloudSignalingState = CloudSignalingState.CONNECTING,
+                    )
+                }
+                val signalingRc = connectSignalingWithRetry(_state.value.authServer, authToken)
+                if (signalingRc != 0) {
+                    _state.update {
+                        it.copy(
+                            isBusy = false,
+                            isRunning = false,
+                            statusMessage = "Cloud request failed",
+                            errorMessage = normalizeCloudConnectError(core.describeError(signalingRc)),
+                            cloudSignalingState = CloudSignalingState.ERROR,
+                        )
+                    }
+                    return@launch
+                }
+                _state.update {
+                    it.copy(
+                        authErrorMessage = "",
+                        cloudSignalingState = CloudSignalingState.CONNECTED,
+                    )
+                }
+            }
+
             val rc = withContext(Dispatchers.IO) {
                 core.sendConnectRequest(target)
             }
@@ -328,19 +547,24 @@ class WavryViewModel(application: Application) : AndroidViewModel(application) {
                     it.copy(
                         isBusy = false,
                         isRunning = true,
-                        statusMessage = "Waiting for @$target to acknowledge...",
-                        authStatusMessage = "Cloud request sent to @$target.",
+                        statusMessage = "Cloud request sent to @$target. Waiting for response...",
+                        authStatusMessage = "Cloud request sent to @$target",
                         authErrorMessage = "",
+                        errorMessage = "",
+                        cloudSignalingState = CloudSignalingState.CONNECTED,
                     )
                 }
                 startStatsPolling()
             } else {
+                val detail = normalizeCloudConnectError(core.describeError(rc))
                 _state.update {
                     it.copy(
                         isBusy = false,
                         isRunning = false,
                         statusMessage = "Cloud request failed",
-                        authErrorMessage = core.describeError(rc),
+                        authErrorMessage = "",
+                        errorMessage = detail,
+                        cloudSignalingState = CloudSignalingState.ERROR,
                     )
                 }
             }
@@ -354,8 +578,28 @@ class WavryViewModel(application: Application) : AndroidViewModel(application) {
                 setupComplete = true,
                 displayName = sanitizedName,
                 connectivityMode = mode,
-                statusMessage = "Setup complete",
+                statusMessage = if (mode == ConnectivityMode.WAVRY && !it.isAuthenticated) {
+                    "Setup complete. Create an account to use cloud username connect."
+                } else {
+                    "Setup complete"
+                },
                 errorMessage = "",
+                activeTab = if (mode == ConnectivityMode.WAVRY && !it.isAuthenticated) {
+                    AppTab.SETTINGS
+                } else {
+                    AppTab.SESSION
+                },
+                authFormMode = if (mode == ConnectivityMode.WAVRY && !it.isAuthenticated) {
+                    AuthFormMode.REGISTER
+                } else {
+                    it.authFormMode
+                },
+                authStatusMessage = if (mode == ConnectivityMode.WAVRY && !it.isAuthenticated) {
+                    "Create an account or sign in to enable cloud connect."
+                } else {
+                    it.authStatusMessage
+                },
+                authErrorMessage = "",
             )
         }
         saveSetupFields(sanitizedName, mode, true)
@@ -365,13 +609,19 @@ class WavryViewModel(application: Application) : AndroidViewModel(application) {
     fun saveSettings() {
         val snapshot = _state.value
         val port = snapshot.portText.toIntOrNull()
-        if (port == null || port !in 1..65535) {
+        if (port == null || port !in 0..65535) {
             _state.update {
-                it.copy(errorMessage = "Port must be between 1 and 65535")
+                it.copy(errorMessage = "Port must be between 0 and 65535 (0 = random host port)")
             }
             return
         }
         val normalizedServer = AuthApi.normalizeServer(snapshot.authServer)
+        if (!isValidAuthServer(normalizedServer)) {
+            _state.update {
+                it.copy(errorMessage = "Auth server URL must start with http:// or https://.")
+            }
+            return
+        }
         saveSetupFields(snapshot.displayName.trim().ifEmpty { defaultDisplayName() }, snapshot.connectivityMode, snapshot.setupComplete)
         saveConnectionFields(snapshot.hostText.trim(), snapshot.portText)
         prefs.edit().putString(KEY_AUTH_SERVER, normalizedServer).apply()
@@ -385,7 +635,11 @@ class WavryViewModel(application: Application) : AndroidViewModel(application) {
         }
 
         if (snapshot.connectivityMode == ConnectivityMode.WAVRY && authToken.isNotBlank()) {
-            connectSignalingInBackground(normalizedServer, authToken)
+            refreshCloudSignaling(
+                server = normalizedServer,
+                token = authToken,
+                reason = SignalingRefreshReason.SETTINGS_SAVE,
+            )
         }
     }
 
@@ -393,28 +647,42 @@ class WavryViewModel(application: Application) : AndroidViewModel(application) {
         val snapshot = _state.value
         if (snapshot.isBusy || snapshot.isRunning) return
 
-        if (snapshot.connectivityMode == ConnectivityMode.WAVRY && !snapshot.isAuthenticated) {
+        val wantsCloudUsernameConnect =
+            snapshot.mode == ConnectionMode.CLIENT &&
+                snapshot.connectivityMode == ConnectivityMode.WAVRY &&
+                looksLikeCloudUsernameTarget(snapshot.hostText)
+
+        if (wantsCloudUsernameConnect && !snapshot.isAuthenticated) {
             _state.update {
                 it.copy(
-                    errorMessage = "Sign in to Wavry Cloud in Settings before using cloud mode.",
+                    activeTab = AppTab.SETTINGS,
+                    authFormMode = AuthFormMode.LOGIN,
+                    errorMessage = "Sign in first to connect by username, or enter host/IP for direct connect.",
                 )
             }
             return
         }
 
-        if (
-            snapshot.mode == ConnectionMode.CLIENT &&
-                snapshot.connectivityMode == ConnectivityMode.WAVRY &&
-                looksLikeCloudUsernameTarget(snapshot.hostText)
-        ) {
+        if (wantsCloudUsernameConnect) {
             requestCloudConnect(snapshot.hostText)
             return
         }
 
         val fallbackPort = snapshot.portText.toIntOrNull()
-        if (fallbackPort == null || fallbackPort !in 1..65535) {
+        if (fallbackPort == null) {
+            _state.update { it.copy(errorMessage = "Port must be numeric") }
+            return
+        }
+        if (snapshot.mode == ConnectionMode.HOST) {
+            if (fallbackPort !in 0..65535) {
+                _state.update {
+                    it.copy(errorMessage = "Host port must be between 0 and 65535 (0 = random)")
+                }
+                return
+            }
+        } else if (fallbackPort !in 1..65535) {
             _state.update {
-                it.copy(errorMessage = "Port must be between 1 and 65535")
+                it.copy(errorMessage = "Client port must be between 1 and 65535")
             }
             return
         }
@@ -439,7 +707,7 @@ class WavryViewModel(application: Application) : AndroidViewModel(application) {
         }
 
         viewModelScope.launch {
-            val (resolvedHost, resolvedPort, targetLabel) =
+            val (resolvedHost, resolvedPort, _) =
                 if (snapshot.mode == ConnectionMode.CLIENT) {
                     when (val parsed = parseClientTarget(snapshot.hostText, fallbackPort)) {
                         null -> {
@@ -476,10 +744,20 @@ class WavryViewModel(application: Application) : AndroidViewModel(application) {
 
             val startup = if (snapshot.mode == ConnectionMode.HOST) {
                 val rc = withContext(Dispatchers.IO) { core.startHost(resolvedPort) }
+                val runtimePort = if (rc == 0) {
+                    val status = withContext(Dispatchers.IO) { core.lastCloudStatus() }
+                    parseHostedPortFromStatus(status) ?: resolvedPort
+                } else {
+                    resolvedPort
+                }
                 StartResult(
                     code = rc,
-                    connectedPort = resolvedPort,
-                    targetLabel = targetLabel,
+                    connectedPort = runtimePort,
+                    targetLabel = if (runtimePort == 0) {
+                        "UDP random"
+                    } else {
+                        "UDP $runtimePort"
+                    },
                 )
             } else {
                 networkHintForHost(resolvedHost)?.let { hint ->
@@ -513,7 +791,12 @@ class WavryViewModel(application: Application) : AndroidViewModel(application) {
                         errorMessage = "",
                     )
                 }
-                saveConnectionFields(snapshot.hostText.trim(), startup.connectedPort.toString())
+                val portToPersist = if (snapshot.mode == ConnectionMode.HOST) {
+                    snapshot.portText
+                } else {
+                    startup.connectedPort.toString()
+                }
+                saveConnectionFields(snapshot.hostText.trim(), portToPersist)
                 startStatsPolling()
             } else {
                 val detailed = startup.errorMessage.ifBlank { core.describeError(startup.code) }
@@ -579,6 +862,7 @@ class WavryViewModel(application: Application) : AndroidViewModel(application) {
                         }
                         if (cloudStatus.isNotBlank() && cloudStatus != lastCloudStatus) {
                             lastCloudStatus = cloudStatus
+                            val friendlyStatus = normalizeCloudProgressStatus(cloudStatus)
                             if (!stats.connected && isTerminalCloudFailure(cloudStatus)) {
                                 val detail = withContext(Dispatchers.IO) {
                                     core.lastError()
@@ -587,7 +871,7 @@ class WavryViewModel(application: Application) : AndroidViewModel(application) {
                                     core.stop()
                                 }
                                 resetConnectionTracking()
-                                val message = if (detail.isBlank()) cloudStatus else "$cloudStatus\n$detail"
+                                val message = normalizeCloudFailure(cloudStatus, detail)
                                 _state.update {
                                     it.copy(
                                         isBusy = false,
@@ -603,7 +887,7 @@ class WavryViewModel(application: Application) : AndroidViewModel(application) {
                             if (!stats.connected) {
                                 _state.update {
                                     it.copy(
-                                        statusMessage = cloudStatus,
+                                        statusMessage = friendlyStatus,
                                         errorMessage = "",
                                     )
                                 }
@@ -629,7 +913,7 @@ class WavryViewModel(application: Application) : AndroidViewModel(application) {
                         resetConnectionTracking()
                         val hint = networkHintForHost(activeResolvedHost)
                         val baseMessage = if (activeTargetLabel.startsWith("@")) {
-                            "Cloud handshake timed out. Ensure the target user is online and hosting."
+                            "Connection timed out. Check that the remote host is online, hosting, and ready to accept cloud requests."
                         } else {
                             "Timed out connecting. Verify host IP/port and ensure desktop host is running."
                         }
@@ -673,7 +957,9 @@ class WavryViewModel(application: Application) : AndroidViewModel(application) {
         val lower = status.lowercase()
         return lower.contains("rejected") ||
             lower.contains("failed") ||
-            lower.contains("invalid")
+            lower.contains("invalid") ||
+            lower.contains("timed out") ||
+            lower.contains("timeout")
     }
 
     private suspend fun startClientWithFallback(host: String, primaryPort: Int): StartResult {
@@ -784,6 +1070,19 @@ class WavryViewModel(application: Application) : AndroidViewModel(application) {
         return trimmed to defaultPort
     }
 
+    private fun parseHostedPortFromStatus(status: String): Int? {
+        val marker = "Hosting on UDP "
+        val idx = status.indexOf(marker)
+        if (idx < 0) return null
+        val digits = buildString {
+            for (ch in status.substring(idx + marker.length)) {
+                if (ch.isDigit()) append(ch) else break
+            }
+        }
+        val parsed = digits.toIntOrNull() ?: return null
+        return parsed.takeIf { it in 0..65535 }
+    }
+
     private fun resolveHost(host: String): String? {
         return try {
             val candidates = InetAddress.getAllByName(host)
@@ -823,19 +1122,247 @@ class WavryViewModel(application: Application) : AndroidViewModel(application) {
         return octets
     }
 
+    private fun normalizeCloudTarget(raw: String): String {
+        return raw.trim().removePrefix("@").trim()
+    }
+
     private fun looksLikeCloudUsernameTarget(value: String): Boolean {
+        return isValidCloudUsername(normalizeCloudTarget(value), allowDot = false)
+    }
+
+    private fun isValidCloudUsername(value: String, allowDot: Boolean): Boolean {
         val trimmed = value.trim()
         if (trimmed.isEmpty()) return false
         if (trimmed.contains(' ') || trimmed.contains(':') || trimmed.contains('/')) return false
-        if (trimmed.contains('.')) return false
+        if (!allowDot && trimmed.contains('.')) return false
         return trimmed.length in 3..32 && trimmed.all { ch ->
-            ch.isLetterOrDigit() || ch == '_' || ch == '-'
+            ch.isLetterOrDigit() || ch == '_' || ch == '-' || (allowDot && ch == '.')
         }
     }
 
-    private fun connectSignalingInBackground(server: String, token: String): Int {
+    private fun isValidEmail(value: String): Boolean {
+        if (value.isBlank()) return false
+        val atIndex = value.indexOf('@')
+        if (atIndex <= 0 || atIndex == value.length - 1) return false
+        val dotAfterAt = value.indexOf('.', startIndex = atIndex + 1)
+        return dotAfterAt > atIndex + 1 && dotAfterAt < value.length - 1
+    }
+
+    private fun isValidAuthServer(server: String): Boolean {
+        return try {
+            val url = URL(server)
+            (url.protocol == "http" || url.protocol == "https") && !url.host.isNullOrBlank()
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    private fun normalizeAuthError(error: Throwable): String {
+        val raw = error.message?.trim().orEmpty()
+        if (raw.isEmpty()) return "Authentication failed."
+        val lower = raw.lowercase()
+        return when {
+            lower.contains("timed out") || lower.contains("timeout") ->
+                "The auth request timed out. Check your connection and try again."
+            lower.contains("unable to resolve host") ||
+                lower.contains("failed to connect") ||
+                lower.contains("connection refused") ->
+                "Could not reach the auth server. Verify the server URL and network."
+            lower.contains("invalid credentials") ||
+                lower.contains("invalid email or password") ->
+                "Incorrect email or password."
+            lower.contains("already exists") ||
+                lower.contains("already registered") ->
+                "This account already exists. Sign in instead."
+            else -> raw
+        }
+    }
+
+    private fun normalizeCloudProgressStatus(status: String): String {
+        val trimmed = status.trim()
+        if (trimmed.isEmpty()) return trimmed
+        val lower = trimmed.lowercase()
+        return when {
+            lower.contains("request sent") ->
+                "Cloud request sent. Waiting for host acknowledgment..."
+            lower.contains("host acknowledged request") ->
+                "Host acknowledged. Preparing secure connection..."
+            lower.contains("host acknowledged. starting direct session") ->
+                "Host acknowledged. Starting direct session..."
+            lower.contains("direct route unavailable") ->
+                "Direct route unavailable. Trying relay route..."
+            lower.contains("relay allocated") ->
+                "Relay route allocated. Starting secure session..."
+            lower.contains("host acknowledged. establishing secure session") ->
+                "Host accepted. Establishing secure session..."
+            lower.contains("cloud request rejected") ->
+                "The host rejected this request."
+            lower.contains("relay request failed") ->
+                "Relay setup failed."
+            lower.contains("relay response invalid") ->
+                "Relay response was invalid."
+            lower.contains("cloud connect failed") ->
+                "Cloud connection failed."
+            else -> trimmed
+        }
+    }
+
+    private fun normalizeCloudFailure(status: String, detail: String): String {
+        val base = normalizeCloudProgressStatus(status)
+        val normalizedDetail = normalizeCloudConnectError(detail)
+        if (normalizedDetail.isBlank()) return base
+        return if (normalizedDetail.equals(base, ignoreCase = true)) {
+            base
+        } else {
+            "$base\n$normalizedDetail"
+        }
+    }
+
+    private fun normalizeCloudConnectError(raw: String): String {
+        val trimmed = raw.trim()
+        if (trimmed.isEmpty()) return ""
+        val lower = trimmed.lowercase()
+        return when {
+            lower.contains("timed out") || lower.contains("timeout") ->
+                "Connection timed out. Check that the remote host is online and reachable."
+            lower.contains("cloud request rejected") || lower.contains("rejected") ->
+                "The host rejected this request."
+            lower.contains("relay request failed") || lower.contains("relay response invalid") ->
+                "Relay routing failed. Retry, or use direct IP/host connect."
+            lower.contains("signaling is not connected") ->
+                "Cloud signaling is disconnected. Sign in again or check network."
+            lower.contains("not logged in") ->
+                "Sign in to use username-based cloud connect."
+            lower.contains("already active") ->
+                "A client session is already running. Stop the current session and retry."
+            else -> trimmed
+        }
+    }
+
+    private suspend fun connectSignaling(server: String, token: String): Int {
         val signalingUrl = AuthApi.signalingWsUrl(server)
-        return core.connectSignaling(signalingUrl, token)
+        return withContext(Dispatchers.IO) {
+            core.connectSignaling(signalingUrl, token)
+        }
+    }
+
+    private suspend fun connectSignalingWithRetry(
+        server: String,
+        token: String,
+        maxAttempts: Int = 3,
+        initialBackoffMs: Long = 400L,
+    ): Int {
+        var lastCode = -1
+        for (attempt in 1..maxAttempts) {
+            val rc = connectSignaling(server, token)
+            if (rc == 0) {
+                return 0
+            }
+            lastCode = rc
+            if (attempt < maxAttempts && shouldRetrySignaling(rc)) {
+                val delayMs = initialBackoffMs * (1L shl (attempt - 1))
+                delay(delayMs)
+            } else {
+                break
+            }
+        }
+        return lastCode
+    }
+
+    private fun shouldRetrySignaling(code: Int): Boolean {
+        if (code in setOf(-3, -4, -5, -11)) {
+            return true
+        }
+        val detail = core.describeError(code).lowercase()
+        return detail.contains("timed out") ||
+            detail.contains("timeout") ||
+            detail.contains("failed to connect") ||
+            detail.contains("connection refused") ||
+            detail.contains("unreachable") ||
+            detail.contains("network")
+    }
+
+    private fun refreshCloudSignaling(
+        server: String,
+        token: String,
+        reason: SignalingRefreshReason,
+    ) {
+        if (token.isBlank()) {
+            _state.update {
+                it.copy(
+                    cloudSignalingState = CloudSignalingState.DISCONNECTED,
+                )
+            }
+            return
+        }
+
+        val attempts = when (reason) {
+            SignalingRefreshReason.RESTORE -> 2
+            SignalingRefreshReason.MODE_SWITCH -> 3
+            SignalingRefreshReason.SETTINGS_SAVE -> 3
+            SignalingRefreshReason.MANUAL_RETRY -> 3
+        }
+
+        _state.update { current ->
+            current.copy(
+                cloudSignalingState = CloudSignalingState.CONNECTING,
+                authStatusMessage = when (reason) {
+                    SignalingRefreshReason.RESTORE -> current.authStatusMessage.ifBlank { "Restoring cloud signaling..." }
+                    SignalingRefreshReason.MODE_SWITCH -> "Connecting cloud signaling..."
+                    SignalingRefreshReason.SETTINGS_SAVE -> "Reconnecting cloud signaling..."
+                    SignalingRefreshReason.MANUAL_RETRY -> "Retrying cloud signaling..."
+                },
+            )
+        }
+
+        viewModelScope.launch {
+            val rc = connectSignalingWithRetry(server, token, maxAttempts = attempts)
+            if (_state.value.isAuthenticated.not()) return@launch
+
+            if (rc == 0) {
+                _state.update { current ->
+                    val nextStatus = when (reason) {
+                        SignalingRefreshReason.RESTORE ->
+                            "Signed in"
+                        SignalingRefreshReason.MODE_SWITCH ->
+                            "Cloud signaling connected."
+                        SignalingRefreshReason.SETTINGS_SAVE ->
+                            "Settings saved. Cloud signaling connected."
+                        SignalingRefreshReason.MANUAL_RETRY ->
+                            "Cloud signaling connected."
+                    }
+                    val nextError = if (current.authErrorMessage.contains("signaling", ignoreCase = true)) {
+                        ""
+                    } else {
+                        current.authErrorMessage
+                    }
+                    current.copy(
+                        authStatusMessage = nextStatus,
+                        authErrorMessage = nextError,
+                        cloudSignalingState = CloudSignalingState.CONNECTED,
+                    )
+                }
+            } else {
+                val detail = normalizeCloudConnectError(core.describeError(rc))
+                _state.update { current ->
+                    val nextStatus = when (reason) {
+                        SignalingRefreshReason.RESTORE ->
+                            "Signed in. Cloud signaling reconnect failed."
+                        SignalingRefreshReason.MODE_SWITCH ->
+                            "Cloud signaling unavailable."
+                        SignalingRefreshReason.SETTINGS_SAVE ->
+                            "Settings saved. Cloud signaling unavailable."
+                        SignalingRefreshReason.MANUAL_RETRY ->
+                            "Cloud signaling unavailable."
+                    }
+                    current.copy(
+                        authStatusMessage = nextStatus,
+                        authErrorMessage = detail,
+                        cloudSignalingState = CloudSignalingState.ERROR,
+                    )
+                }
+            }
+        }
     }
 
     private fun saveAuthSession(auth: CloudAuthSession, server: String) {

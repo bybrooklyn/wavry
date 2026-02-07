@@ -1,31 +1,35 @@
-use std::net::SocketAddr;
-use std::str::FromStr;
-use tokio::time;
-use crate::state::{SESSION_STATE, AUTH_STATE, AuthState};
-use crate::auth::{get_or_create_identity, normalize_auth_server, signaling_ws_url_for_server, parse_login_payload};
+use crate::auth::{
+    get_or_create_identity, normalize_auth_server, parse_login_payload, signaling_ws_url_for_server,
+};
 use crate::client_manager::spawn_client_session;
 use crate::secure_storage;
+use crate::state::{AuthState, AUTH_STATE, CLIENT_SESSION_STATE, SESSION_STATE};
+use std::net::SocketAddr;
+use std::str::FromStr;
 use wavry_client::ClientConfig;
 use wavry_media::CapabilityProbe;
 
+#[cfg(target_os = "macos")]
+use wavry_media::MacProbe;
 #[cfg(target_os = "linux")]
 use wavry_media::{PipewireAudioCapturer, PipewireEncoder};
-#[cfg(target_os = "macos")]
-use wavry_media::{MacAudioCapturer, MacProbe, MacScreenEncoder};
 #[cfg(target_os = "windows")]
 use wavry_media::{WindowsAudioCapturer, WindowsEncoder, WindowsProbe};
 
-use std::sync::atomic::Ordering;
-use std::sync::{Arc, Mutex};
-use tokio::sync::{mpsc, oneshot};
 use serde_json::json;
+use std::sync::atomic::Ordering;
+#[cfg(target_os = "linux")]
+use std::sync::{Arc, Mutex};
+#[cfg(target_os = "linux")]
+use tokio::sync::{mpsc, oneshot};
 
 #[tauri::command]
 pub async fn set_cc_config(config: rift_core::cc::DeltaConfig) -> Result<(), String> {
     if let Ok(state) = SESSION_STATE.lock() {
         if let Some(ref s) = *state {
             if let Some(ref tx) = s.cc_config_tx {
-                tx.send(config).map_err(|e: tokio::sync::mpsc::error::SendError<_>| e.to_string())?;
+                tx.send(config)
+                    .map_err(|e: tokio::sync::mpsc::error::SendError<_>| e.to_string())?;
             }
         }
     }
@@ -86,7 +90,10 @@ pub async fn register(
         Ok("Registration successful. Please login.".into())
     } else {
         let body: serde_json::Value = res.json().await.unwrap_or_default();
-        let err = body.get("error").and_then(|v| v.as_str()).unwrap_or("Registration failed");
+        let err = body
+            .get("error")
+            .and_then(|v| v.as_str())
+            .unwrap_or("Registration failed");
         Err(err.to_string())
     }
 }
@@ -114,8 +121,10 @@ pub async fn login_full(
         .map_err(|e: reqwest::Error| e.to_string())?;
 
     let login_payload = if challenge_res.status().is_success() {
-        let challenge_resp: serde_json::Value =
-            challenge_res.json().await.map_err(|e: reqwest::Error| e.to_string())?;
+        let challenge_resp: serde_json::Value = challenge_res
+            .json()
+            .await
+            .map_err(|e: reqwest::Error| e.to_string())?;
         let challenge_hex = challenge_resp["challenge"]
             .as_str()
             .ok_or("Missing challenge")?;
@@ -142,9 +151,12 @@ pub async fn login_full(
         .map_err(|e: reqwest::Error| e.to_string())?;
 
     if res.status().is_success() {
-        let payload: serde_json::Value = res.json().await.map_err(|e: reqwest::Error| e.to_string())?;
+        let payload: serde_json::Value = res
+            .json()
+            .await
+            .map_err(|e: reqwest::Error| e.to_string())?;
         let (username, token) = parse_login_payload(payload)?;
-        
+
         // Save token and username securely
         let _ = secure_storage::save_token(&token);
         let _ = secure_storage::save_data("username", &username);
@@ -161,13 +173,19 @@ pub async fn login_full(
         }))
     } else {
         let body: serde_json::Value = res.json().await.unwrap_or_default();
-        let err = body.get("error").and_then(|v| v.as_str()).unwrap_or("Login failed");
+        let err = body
+            .get("error")
+            .and_then(|v| v.as_str())
+            .unwrap_or("Login failed");
         Err(err.to_string())
     }
 }
 
 #[tauri::command]
-pub async fn set_signaling_token(token: Option<String>, server: Option<String>) -> Result<(), String> {
+pub async fn set_signaling_token(
+    token: Option<String>,
+    server: Option<String>,
+) -> Result<(), String> {
     let mut auth = AUTH_STATE.lock().unwrap();
     if let Some(t) = token {
         let _ = secure_storage::save_token(&t);
@@ -266,6 +284,36 @@ pub async fn start_session(
 }
 
 #[tauri::command]
+pub async fn stop_session() -> Result<String, String> {
+    let stop_tx = {
+        let mut state = CLIENT_SESSION_STATE.lock().unwrap();
+        state.as_mut().and_then(|s| s.stop_tx.take())
+    };
+
+    if let Some(tx) = stop_tx {
+        let _ = tx.send(());
+        Ok("Stopping client session".into())
+    } else {
+        Err("No active client session".into())
+    }
+}
+
+#[tauri::command]
+pub async fn stop_host() -> Result<String, String> {
+    let stop_tx = {
+        let mut state = SESSION_STATE.lock().unwrap();
+        state.as_mut().and_then(|s| s.stop_tx.take())
+    };
+
+    if let Some(tx) = stop_tx {
+        let _ = tx.send(());
+        Ok("Stopping host".into())
+    } else {
+        Err("No active host session".into())
+    }
+}
+
+#[tauri::command]
 pub async fn list_monitors() -> Result<Vec<wavry_media::DisplayInfo>, String> {
     #[cfg(target_os = "macos")]
     let probe = MacProbe;
@@ -275,7 +323,9 @@ pub async fn list_monitors() -> Result<Vec<wavry_media::DisplayInfo>, String> {
     let probe = wavry_media::LinuxProbe;
 
     #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
-    probe.enumerate_displays().map_err(|e: anyhow::Error| e.to_string())
+    probe
+        .enumerate_displays()
+        .map_err(|e: anyhow::Error| e.to_string())
 }
 
 #[tauri::command]
@@ -323,127 +373,136 @@ pub async fn connect_via_id(target_username: String) -> Result<String, String> {
     .await
     .map_err(|e: anyhow::Error| e.to_string())?;
 
-    let mut relay_info: Option<wavry_client::RelayInfo> = None;
+    let wait_target = target_username.clone();
+    tokio::time::timeout(std::time::Duration::from_secs(20), async {
+        let mut relay_info: Option<wavry_client::RelayInfo> = None;
 
-    loop {
-        match sig.recv().await {
-            Ok(SignalMessage::ANSWER_RIFT { ack_base64, .. }) => {
-                let ack = wavry_client::decode_hello_ack_base64(&ack_base64)
-                    .map_err(|e: anyhow::Error| e.to_string())?;
-                log::info!(
-                    "Received RIFT answer from {}: accepted={}",
-                    target_username,
-                    ack.accepted
-                );
-
-                if !ack.accepted {
-                    return Err("Connection rejected by host".into());
-                }
-
-                let connect_addr = if !ack.public_addr.is_empty() {
-                    ack.public_addr.parse::<std::net::SocketAddr>().ok()
-                } else {
-                    None
-                };
-
-                if connect_addr.is_none() && relay_info.is_none() {
+        loop {
+            match sig.recv().await {
+                Ok(SignalMessage::ANSWER_RIFT { ack_base64, .. }) => {
+                    let ack = wavry_client::decode_hello_ack_base64(&ack_base64)
+                        .map_err(|e: anyhow::Error| e.to_string())?;
                     log::info!(
-                        "Host {} did not provide direct endpoint; requesting relay fallback",
-                        target_username
+                        "Received RIFT answer from {}: accepted={}",
+                        target_username,
+                        ack.accepted
                     );
-                    sig.send(SignalMessage::REQUEST_RELAY {
-                        target_username: target_username.clone(),
-                    })
-                    .await
-                    .map_err(|e: anyhow::Error| format!("Failed to request relay: {}", e))?;
 
-                    let relay = tokio::time::timeout(std::time::Duration::from_secs(8), async {
-                        loop {
-                            match sig.recv().await {
-                                Ok(SignalMessage::RELAY_CREDENTIALS {
-                                    token,
-                                    addr,
-                                    session_id,
-                                }) => {
-                                    let relay_addr =
-                                        addr.parse::<std::net::SocketAddr>().map_err(|_| {
-                                            "Relay credentials contained invalid relay address"
-                                                .to_string()
-                                        })?;
-                                    break Ok(wavry_client::RelayInfo {
-                                        addr: relay_addr,
-                                        token,
-                                        session_id,
-                                    });
+                    if !ack.accepted {
+                        return Err("Connection rejected by host".into());
+                    }
+
+                    let connect_addr = if !ack.public_addr.is_empty() {
+                        ack.public_addr.parse::<std::net::SocketAddr>().ok()
+                    } else {
+                        None
+                    };
+
+                    if connect_addr.is_none() && relay_info.is_none() {
+                        log::info!(
+                            "Host {} did not provide direct endpoint; requesting relay fallback",
+                            target_username
+                        );
+                        sig.send(SignalMessage::REQUEST_RELAY {
+                            target_username: target_username.clone(),
+                        })
+                        .await
+                        .map_err(|e: anyhow::Error| format!("Failed to request relay: {}", e))?;
+
+                        let relay =
+                            tokio::time::timeout(std::time::Duration::from_secs(8), async {
+                                loop {
+                                    match sig.recv().await {
+                                        Ok(SignalMessage::RELAY_CREDENTIALS {
+                                            token,
+                                            addr,
+                                            session_id,
+                                        }) => {
+                                            let relay_addr = addr
+                                                .parse::<std::net::SocketAddr>()
+                                                .map_err(|_| {
+                                                "Relay credentials contained invalid relay address"
+                                                    .to_string()
+                                            })?;
+                                            break Ok(wavry_client::RelayInfo {
+                                                addr: relay_addr,
+                                                token,
+                                                session_id,
+                                            });
+                                        }
+                                        Ok(SignalMessage::ERROR { message, .. }) => {
+                                            break Err(message)
+                                        }
+                                        Ok(_) => continue,
+                                        Err(e) => break Err(e.to_string()),
+                                    }
                                 }
-                                Ok(SignalMessage::ERROR { message, .. }) => break Err(message),
-                                Ok(_) => continue,
-                                Err(e) => break Err(e.to_string()),
-                            }
-                        }
-                    })
-                    .await
-                    .map_err(|_| "Timed out waiting for relay credentials".to_string())??;
+                            })
+                            .await
+                            .map_err(|_| "Timed out waiting for relay credentials".to_string())??;
 
-                    relay_info = Some(relay);
+                        relay_info = Some(relay);
+                    }
+
+                    if connect_addr.is_none() && relay_info.is_none() {
+                        return Err(
+                            "Host acknowledged request but no direct or relay route was provided"
+                                .into(),
+                        );
+                    }
+
+                    let config = wavry_client::ClientConfig {
+                        connect_addr,
+                        client_name: "wavry-desktop".into(),
+                        no_encrypt: false,
+                        identity_key: None,
+                        relay_info,
+                        max_resolution: None,
+                        gamepad_enabled: true,
+                        gamepad_deadzone: 0.1,
+                        vr_adapter: None,
+                        runtime_stats: None,
+                    };
+
+                    spawn_client_session(config)?;
+
+                    return Ok("Connected".into());
                 }
-
-                if connect_addr.is_none() && relay_info.is_none() {
-                    return Err(
-                        "Host acknowledged request but no direct or relay route was provided"
-                            .into(),
-                    );
+                Ok(SignalMessage::RELAY_CREDENTIALS {
+                    token,
+                    addr,
+                    session_id,
+                }) => {
+                    log::info!("Received relay credentials: {}", addr);
+                    if let Ok(relay_addr) = addr.parse::<std::net::SocketAddr>() {
+                        relay_info = Some(wavry_client::RelayInfo {
+                            addr: relay_addr,
+                            token,
+                            session_id,
+                        });
+                    }
                 }
-
-                let config = wavry_client::ClientConfig {
-                    connect_addr,
-                    client_name: "wavry-desktop".into(),
-                    no_encrypt: false,
-                    identity_key: None,
-                    relay_info,
-                    max_resolution: None,
-                    gamepad_enabled: true,
-                    gamepad_deadzone: 0.1,
-                    vr_adapter: None,
-                    runtime_stats: None,
-                };
-
-                spawn_client_session(config)?;
-
-                return Ok("Connected".into());
+                Ok(SignalMessage::ERROR { message, .. }) => return Err(message),
+                Ok(_) => continue,
+                Err(e) => return Err(e.to_string()),
             }
-            Ok(SignalMessage::RELAY_CREDENTIALS {
-                token,
-                addr,
-                session_id,
-            }) => {
-                log::info!("Received relay credentials: {}", addr);
-                if let Ok(relay_addr) = addr.parse::<std::net::SocketAddr>() {
-                    relay_info = Some(wavry_client::RelayInfo {
-                        addr: relay_addr,
-                        token,
-                        session_id,
-                    });
-                }
-            }
-            Ok(SignalMessage::ERROR { message, .. }) => return Err(message),
-            Ok(_) => continue,
-            Err(e) => return Err(e.to_string()),
         }
-    }
+    })
+    .await
+    .map_err(|_| format!("Timed out waiting for {} to respond", wait_target))?
 }
 
 #[cfg(target_os = "linux")]
 #[tauri::command]
 pub async fn start_host(port: u16, display_id: Option<u32>) -> Result<String, String> {
+    use crate::media_utils::choose_rift_codec;
     use bytes::Bytes;
     use std::net::UdpSocket;
-    use std::thread;
-    use std::sync::Arc;
     use std::sync::atomic::AtomicU32;
+    use std::sync::Arc;
+    use std::thread;
     use wavry_client::signaling::{SignalMessage, SignalingClient};
     use wavry_media::{EncodeConfig, Resolution};
-    use crate::media_utils::choose_rift_codec;
 
     {
         let state = SESSION_STATE.lock().unwrap();
@@ -497,18 +556,26 @@ pub async fn start_host(port: u16, display_id: Option<u32>) -> Result<String, St
         }
     }
 
+    let socket = match UdpSocket::bind(format!("0.0.0.0:{}", port)) {
+        Ok(socket) => socket,
+        Err(e) => {
+            if let Ok(mut state) = SESSION_STATE.lock() {
+                *state = None;
+            }
+            return Err(format!("Failed to bind UDP socket: {}", e));
+        }
+    };
+    socket.set_nonblocking(true).ok();
+    let bound_port = socket.local_addr().map(|addr| addr.port()).unwrap_or(port);
+
     thread::spawn(move || {
         let mut video_encoder = video_encoder;
-        let socket = match UdpSocket::bind(format!("0.0.0.0:{}", port)) {
-            Ok(s) => s,
-            Err(e) => {
-                log::error!("Failed to bind socket: {}", e);
-                return;
-            }
-        };
-        socket.set_nonblocking(true).ok();
 
-        log::info!("Host thread started on port {}", port);
+        log::info!(
+            "Host thread started (requested port {}, bound port {})",
+            port,
+            bound_port
+        );
 
         let shared_client_addr = Arc::new(std::sync::Mutex::new(None));
 
@@ -773,7 +840,7 @@ pub async fn start_host(port: u16, display_id: Option<u32>) -> Result<String, St
         }
     });
 
-    Ok(format!("Hosting on port {}", port))
+    Ok(format!("Hosting on UDP {}", bound_port))
 }
 
 #[cfg(any(target_os = "macos", target_os = "windows"))]

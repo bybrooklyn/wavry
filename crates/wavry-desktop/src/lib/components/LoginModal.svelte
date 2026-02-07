@@ -6,13 +6,33 @@
     let password = $state("");
     let showAdvanced = $state(false);
     let customServer = $state("https://auth.wavry.dev");
-    let isRegistering = $state(false);
+    let isRegistering = $state(appState.authModalMode === "register");
     let isLoading = $state(false);
-    let errorMessage = $state("");
+    let feedbackMessage = $state("");
+    let feedbackType = $state<"error" | "success">("error");
+    let emailValue = $derived(email.trim());
+    let usernameValue = $derived(username.trim());
+    const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    const USERNAME_PATTERN = /^[a-zA-Z0-9_.-]{3,32}$/;
 
     function normalizeError(error: unknown): string {
-        if (error instanceof Error && error.message) return error.message;
-        if (typeof error === "string") return error;
+        const raw =
+            error instanceof Error && error.message
+                ? error.message
+                : typeof error === "string"
+                    ? error
+                    : "";
+        const lowered = raw.toLowerCase();
+        if (lowered.includes("timed out")) {
+            return "The server took too long to respond. Please try again.";
+        }
+        if (lowered.includes("invalid credentials") || lowered.includes("invalid email or password")) {
+            return "Incorrect email or password.";
+        }
+        if (lowered.includes("already exists") || lowered.includes("already registered")) {
+            return "This account already exists. Sign in instead.";
+        }
+        if (raw) return raw;
         try {
             return JSON.stringify(error);
         } catch {
@@ -20,48 +40,84 @@
         }
     }
 
+    function setMode(mode: "login" | "register") {
+        isRegistering = mode === "register";
+        appState.authModalMode = mode;
+        feedbackMessage = "";
+    }
+
+    function validateInputs(): string | null {
+        if (!emailValue) return "Email is required.";
+        if (!EMAIL_PATTERN.test(emailValue)) return "Enter a valid email address.";
+        if (!password) return "Password is required.";
+
+        if (isRegistering) {
+            if (!usernameValue) return "Username is required.";
+            if (!USERNAME_PATTERN.test(usernameValue)) {
+                return "Username must be 3-32 characters and use letters, numbers, ., _, or -.";
+            }
+            if (password.length < 8) return "Password must be at least 8 characters.";
+        }
+
+        return null;
+    }
+
+    function resolveServer(): string | null {
+        const server = showAdvanced ? customServer.trim() : "https://auth.wavry.dev";
+        if (!showAdvanced) return server;
+        try {
+            const parsed = new URL(server);
+            if (!["http:", "https:"].includes(parsed.protocol)) {
+                return null;
+            }
+            return server;
+        } catch {
+            return null;
+        }
+    }
+
     function close() {
-        appState.showLoginModal = false;
+        appState.closeAuthModal();
     }
 
     async function performAuth() {
-        isLoading = true;
-        errorMessage = "";
-
-        const server = showAdvanced ? customServer.trim() : "https://auth.wavry.dev";
-        if (showAdvanced) {
-            try {
-                const parsed = new URL(server);
-                if (!["http:", "https:"].includes(parsed.protocol)) {
-                    errorMessage = "Server URL must start with http:// or https://";
-                    isLoading = false;
-                    return;
-                }
-            } catch {
-                errorMessage = "Server URL is invalid.";
-                isLoading = false;
-                return;
-            }
+        feedbackMessage = "";
+        feedbackType = "error";
+        const validationError = validateInputs();
+        if (validationError) {
+            feedbackMessage = validationError;
+            return;
         }
+
+        const server = resolveServer();
+        if (!server) {
+            feedbackMessage = "Server URL is invalid. Use http:// or https://.";
+            return;
+        }
+
+        isLoading = true;
         appState.authServer = server;
 
         try {
             if (isRegistering) {
                 await appState.register({
-                    email,
+                    email: emailValue,
                     password,
                     display_name: appState.displayName || "Unknown", // Fallback
-                    username,
+                    username: usernameValue,
                     server,
                 });
-                isRegistering = false;
-                errorMessage = "Account created! Please sign in.";
+                setMode("login");
+                password = "";
+                feedbackType = "success";
+                feedbackMessage = "Account created. Sign in with the same email and password.";
             } else {
-                await appState.login({ email, password, server });
+                await appState.login({ email: emailValue, password, server });
                 close();
             }
         } catch (e: unknown) {
-            errorMessage = normalizeError(e);
+            feedbackType = "error";
+            feedbackMessage = normalizeError(e);
         } finally {
             isLoading = false;
         }
@@ -108,8 +164,8 @@
             <h2>{isRegistering ? "Create Account" : "Sign In"}</h2>
             <p class="subtitle">
                 {isRegistering
-                    ? "Join Wavry to connect via username"
-                    : "Sign in to sync your devices"}
+                    ? "Create one account to connect all hosts by username."
+                    : "Use the email from registration to access cloud connect."}
             </p>
         </div>
 
@@ -124,14 +180,16 @@
                 placeholder="Email"
                 bind:value={email}
                 disabled={isLoading}
+                autocomplete="email"
             />
 
             {#if isRegistering}
                 <input
                     type="text"
-                    placeholder="Username"
+                    placeholder="Username (3-32 chars)"
                     bind:value={username}
                     disabled={isLoading}
+                    autocomplete="username"
                 />
             {/if}
 
@@ -140,7 +198,12 @@
                 placeholder="Password"
                 bind:value={password}
                 disabled={isLoading}
+                autocomplete={isRegistering ? "new-password" : "current-password"}
             />
+
+            {#if isRegistering}
+                <div class="hint">Password must be at least 8 characters.</div>
+            {/if}
 
             <details class="advanced" bind:open={showAdvanced}>
                 <summary>Advanced</summary>
@@ -156,13 +219,13 @@
                 </div>
             </details>
 
-            {#if errorMessage}
+            {#if feedbackMessage}
                 <div
                     class="message"
-                    class:success={errorMessage.includes("created")}
+                    class:success={feedbackType === "success"}
                     aria-live="polite"
                 >
-                    {errorMessage}
+                    {feedbackMessage}
                 </div>
             {/if}
 
@@ -170,9 +233,9 @@
                 type="submit"
                 class="primary"
                 disabled={isLoading ||
-                    !email ||
+                    !emailValue ||
                     !password ||
-                    (isRegistering && !username)}
+                    (isRegistering && !usernameValue)}
             >
                 {#if isLoading}
                     <span class="spinner"></span>
@@ -183,7 +246,7 @@
 
         <button
             class="toggle-mode"
-            onclick={() => (isRegistering = !isRegistering)}
+            onclick={() => setMode(isRegistering ? "login" : "register")}
         >
             {isRegistering
                 ? "Already have an account? Sign In"
@@ -293,6 +356,12 @@
     .advanced-content label {
         font-size: var(--font-size-caption);
         color: var(--colors-text-secondary);
+    }
+
+    .hint {
+        color: var(--colors-text-secondary);
+        font-size: var(--font-size-caption);
+        margin-top: calc(var(--spacing-xs) * -1);
     }
 
     .message {

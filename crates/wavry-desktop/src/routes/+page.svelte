@@ -19,11 +19,34 @@
   let baselineSettingsFingerprint = $state("");
 
   let showAdvancedSettings = $state(false);
+  const USERNAME_PATTERN = /^[a-zA-Z0-9_.-]{3,32}$/;
 
   function normalizeError(err: unknown): string {
     if (err instanceof Error) return err.message;
     if (typeof err === "string") return err;
     return JSON.stringify(err);
+  }
+
+  function normalizeConnectError(err: unknown): string {
+    const raw = normalizeError(err);
+    const lowered = raw.toLowerCase();
+    if (lowered.includes("timed out")) {
+      return "Connection timed out. Check that the remote host is online and reachable.";
+    }
+    if (lowered.includes("connection rejected")) {
+      return "The host rejected this request.";
+    }
+    if (lowered.includes("not logged in")) {
+      return "Sign in to use username-based cloud connect.";
+    }
+    if (lowered.includes("client session already active")) {
+      return "A client session is already running. Disconnect first, then retry.";
+    }
+    return raw;
+  }
+
+  function openAuth(mode: "login" | "register" = "login") {
+    appState.openAuthModal(mode);
   }
 
   function settingsFingerprint(): string {
@@ -62,6 +85,7 @@
     isConnecting = true;
     connectError = "";
     appState.hostErrorMessage = "";
+    appState.hostStatusMessage = "Starting direct session...";
     const addressError = appState.validateConnectTarget(connectIp);
     if (addressError) {
       connectError = addressError;
@@ -72,7 +96,7 @@
     try {
       await appState.connect(connectIp.trim());
     } catch (e) {
-      connectError = normalizeError(e);
+      connectError = normalizeConnectError(e);
     } finally {
       isConnecting = false;
     }
@@ -86,7 +110,7 @@
 
     if (!appState.isAuthenticated) {
       isConnecting = false;
-      appState.showLoginModal = true;
+      openAuth("login");
       connectError = "Sign in first to connect via username.";
       return;
     }
@@ -95,12 +119,18 @@
       connectError = "Username is required.";
       return;
     }
+    if (!USERNAME_PATTERN.test(username)) {
+      isConnecting = false;
+      connectError = "Username must be 3-32 characters and use letters, numbers, ., _, or -.";
+      return;
+    }
 
     try {
+      appState.hostStatusMessage = `Sending cloud request to ${username}...`;
       await invoke("connect_via_id", { targetUsername: username });
-      appState.hostStatusMessage = `Connection request sent to ${username}`;
+      appState.hostStatusMessage = `Connected to ${username}`;
     } catch (e) {
-      connectError = normalizeError(e);
+      connectError = normalizeConnectError(e);
     } finally {
       isConnecting = false;
     }
@@ -141,6 +171,10 @@
     mode: "wavry" | "direct" | "custom",
   ) {
     appState.completeSetup(name, mode);
+    if (mode === "wavry" && !appState.isAuthenticated) {
+      appState.hostStatusMessage = "Create an account to connect by username.";
+      openAuth("register");
+    }
     captureSettingsBaseline();
   }
 
@@ -168,7 +202,7 @@
 </script>
 
 {#if !appState.isSetupCompleted}
-  <SetupWizard step={setupStep} onComplete={handleSetupComplete} />
+  <SetupWizard step={setupStep} onComplete={handleSetupComplete} onOpenAuth={openAuth} />
 {:else}
   <div class="content-view">
     <aside class="sidebar">
@@ -218,12 +252,11 @@
 
         <div
           class="user-badge"
-          onclick={() =>
-            !appState.isAuthenticated && (appState.showLoginModal = true)}
+          onclick={() => !appState.isAuthenticated && openAuth("login")}
           onkeydown={(e) =>
             (e.key === "Enter" || e.key === " ") &&
             !appState.isAuthenticated &&
-            (appState.showLoginModal = true)}
+            openAuth("login")}
           role="button"
           tabindex="0"
           aria-label={appState.isAuthenticated
@@ -270,13 +303,19 @@
                   {#if appState.connectivityMode === "wavry"}
                     {#if !appState.isAuthenticated}
                       <div class="auth-gate">
-                        <strong>Cloud connect needs sign-in.</strong>
-                        <p>Sign in once, then connect by username from any trusted device.</p>
-                        <button class="primary-btn" onclick={() => (appState.showLoginModal = true)}>
-                          Sign In
-                        </button>
+                        <strong>Cloud connect requires an account.</strong>
+                        <p>Sign in or create one now to connect to hosts by username from any device.</p>
+                        <div class="auth-actions">
+                          <button class="primary-btn" onclick={() => openAuth("login")}>
+                            Sign In
+                          </button>
+                          <button class="ghost-btn auth-cta" onclick={() => openAuth("register")}>
+                            Create Account
+                          </button>
+                        </div>
                       </div>
                     {:else}
+                      <p class="field-help">Send a secure cloud connect request to a host username.</p>
                       <label class="field-label" for="remote-username">Username</label>
                       <div class="field-row">
                         <input
@@ -306,6 +345,7 @@
                   {/if}
 
                   <label class="field-label" for="direct-host">Direct Host (IP or IP:PORT)</label>
+                  <p class="field-help">Use direct connect for LAN or self-hosted routing.</p>
                   <div class="field-row">
                     <input
                       id="direct-host"
@@ -423,8 +463,9 @@
 
                 <div class="setting-row">
                   <label for="setting-port">Host Port</label>
-                  <input id="setting-port" type="number" min="1" max="65535" bind:value={appState.hostPort} />
+                  <input id="setting-port" type="number" min="0" max="65535" bind:value={appState.hostPort} />
                 </div>
+                <p class="setting-hint">Use <code>0</code> to pick a random host port on each start.</p>
 
                 <div class="setting-row checkbox">
                   <label for="setting-upnp">Enable UPnP</label>
@@ -793,6 +834,13 @@
     margin-top: 2px;
   }
 
+  .field-help {
+    margin: 0;
+    font-size: 11px;
+    color: var(--colors-text-secondary);
+    line-height: 1.4;
+  }
+
   .field-row {
     display: flex;
     gap: 8px;
@@ -879,6 +927,18 @@
     margin: 0;
     font-size: 12px;
     color: var(--colors-text-secondary);
+  }
+
+  .auth-actions {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+
+  .auth-cta {
+    padding: 10px 12px;
+    font-size: 12px;
+    white-space: nowrap;
   }
 
   .active-session {

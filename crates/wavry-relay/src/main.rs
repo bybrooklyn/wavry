@@ -11,6 +11,7 @@ mod session;
 
 use std::collections::HashMap;
 use std::net::SocketAddr;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -34,7 +35,9 @@ use wavry_common::protocol::{RelayHeartbeatRequest, RelayRegisterRequest, RelayR
 const DEFAULT_MAX_SESSIONS: usize = 100;
 const DEFAULT_IDLE_TIMEOUT_SECS: u64 = 60;
 const DEFAULT_LEASE_DURATION_SECS: u64 = 300;
-const CLEANUP_INTERVAL_SECS: u64 = 10;
+const DEFAULT_CLEANUP_INTERVAL_SECS: u64 = 10;
+const DEFAULT_IP_RATE_LIMIT_PPS: u64 = 1000;
+const DEFAULT_STATS_LOG_INTERVAL_SECS: u64 = 30;
 
 #[derive(Parser, Debug)]
 #[command(name = "wavry-relay")]
@@ -67,6 +70,22 @@ struct Args {
     /// Log level
     #[arg(long, default_value = "info")]
     log_level: String,
+
+    /// Per-source-IP packet rate limit (packets/sec)
+    #[arg(long, default_value_t = DEFAULT_IP_RATE_LIMIT_PPS)]
+    ip_rate_limit_pps: u64,
+
+    /// Session cleanup interval in seconds
+    #[arg(long, default_value_t = DEFAULT_CLEANUP_INTERVAL_SECS)]
+    cleanup_interval_secs: u64,
+
+    /// Lease duration in seconds
+    #[arg(long, default_value_t = DEFAULT_LEASE_DURATION_SECS)]
+    lease_duration_secs: u64,
+
+    /// Relay stats log interval in seconds
+    #[arg(long, default_value_t = DEFAULT_STATS_LOG_INTERVAL_SECS)]
+    stats_log_interval_secs: u64,
 }
 
 fn env_bool(name: &str, default: bool) -> bool {
@@ -132,12 +151,60 @@ struct LeaseClaims {
     hard_limit_kbps: Option<u32>,
 }
 
+#[derive(Default)]
+struct RelayMetrics {
+    packets_rx: AtomicU64,
+    bytes_rx: AtomicU64,
+    packets_forwarded: AtomicU64,
+    bytes_forwarded: AtomicU64,
+    lease_present_packets: AtomicU64,
+    lease_renew_packets: AtomicU64,
+    dropped_packets: AtomicU64,
+    rate_limited_packets: AtomicU64,
+    invalid_packets: AtomicU64,
+    auth_reject_packets: AtomicU64,
+}
+
+#[derive(Debug, Serialize)]
+struct RelayMetricsSnapshot {
+    packets_rx: u64,
+    bytes_rx: u64,
+    packets_forwarded: u64,
+    bytes_forwarded: u64,
+    lease_present_packets: u64,
+    lease_renew_packets: u64,
+    dropped_packets: u64,
+    rate_limited_packets: u64,
+    invalid_packets: u64,
+    auth_reject_packets: u64,
+}
+
+impl RelayMetrics {
+    fn snapshot(&self) -> RelayMetricsSnapshot {
+        RelayMetricsSnapshot {
+            packets_rx: self.packets_rx.load(Ordering::Relaxed),
+            bytes_rx: self.bytes_rx.load(Ordering::Relaxed),
+            packets_forwarded: self.packets_forwarded.load(Ordering::Relaxed),
+            bytes_forwarded: self.bytes_forwarded.load(Ordering::Relaxed),
+            lease_present_packets: self.lease_present_packets.load(Ordering::Relaxed),
+            lease_renew_packets: self.lease_renew_packets.load(Ordering::Relaxed),
+            dropped_packets: self.dropped_packets.load(Ordering::Relaxed),
+            rate_limited_packets: self.rate_limited_packets.load(Ordering::Relaxed),
+            invalid_packets: self.invalid_packets.load(Ordering::Relaxed),
+            auth_reject_packets: self.auth_reject_packets.load(Ordering::Relaxed),
+        }
+    }
+}
+
 /// Relay server state
 struct RelayServer {
     socket: UdpSocket,
     sessions: RwLock<SessionPool>,
     ip_limiter: RwLock<IpRateLimiter>,
     lease_duration: Duration,
+    cleanup_interval: Duration,
+    stats_log_interval: Duration,
+    metrics: RelayMetrics,
     master_public_key: Option<pasetors::keys::AsymmetricPublicKey<pasetors::version4::V4>>,
 }
 
@@ -146,11 +213,16 @@ impl RelayServer {
         listen: SocketAddr,
         max_sessions: usize,
         idle_timeout: Duration,
+        lease_duration: Duration,
+        cleanup_interval: Duration,
+        stats_log_interval: Duration,
+        ip_rate_limit_pps: u64,
         master_key_hex: Option<&str>,
         allow_insecure_dev: bool,
     ) -> Result<Self> {
         let socket = UdpSocket::bind(listen).await?;
-        info!("Relay listening on {}", listen);
+        let local_addr = socket.local_addr().unwrap_or(listen);
+        info!("Relay listening on {} (requested {})", local_addr, listen);
 
         let master_public_key = if let Some(hex_key) = master_key_hex {
             let key_bytes = hex::decode(hex_key)?;
@@ -174,8 +246,11 @@ impl RelayServer {
         Ok(Self {
             socket,
             sessions: RwLock::new(SessionPool::new(max_sessions, idle_timeout)),
-            ip_limiter: RwLock::new(IpRateLimiter::new(1000)),
-            lease_duration: Duration::from_secs(DEFAULT_LEASE_DURATION_SECS),
+            ip_limiter: RwLock::new(IpRateLimiter::new(ip_rate_limit_pps.max(1))),
+            lease_duration,
+            cleanup_interval,
+            stats_log_interval,
+            metrics: RelayMetrics::default(),
             master_public_key,
         })
     }
@@ -186,21 +261,28 @@ impl RelayServer {
 
     async fn run(&self) -> Result<()> {
         let mut buf = vec![0u8; RELAY_MAX_PACKET_SIZE];
-        let mut cleanup_interval =
-            tokio::time::interval(Duration::from_secs(CLEANUP_INTERVAL_SECS));
+        let mut cleanup_interval = tokio::time::interval(self.cleanup_interval);
+        let mut last_stats_log = std::time::Instant::now();
 
         loop {
             tokio::select! {
                 result = self.socket.recv_from(&mut buf) => {
                     let (len, src) = result?;
                     let packet = &buf[..len];
+                    self.metrics.packets_rx.fetch_add(1, Ordering::Relaxed);
+                    self.metrics.bytes_rx.fetch_add(packet.len() as u64, Ordering::Relaxed);
 
                     if let Err(e) = self.handle_packet(packet, src).await {
+                        self.record_packet_error(&e);
                         debug!("Packet from {} dropped: {}", src, e);
                     }
                 }
                 _ = cleanup_interval.tick() => {
                     self.cleanup().await;
+                    if last_stats_log.elapsed() >= self.stats_log_interval {
+                        self.log_metrics().await;
+                        last_stats_log = std::time::Instant::now();
+                    }
                 }
             }
         }
@@ -227,12 +309,25 @@ impl RelayServer {
 
         // 4. Parse header
         let header = RelayHeader::decode(packet).map_err(|_| PacketError::InvalidHeader)?;
+        if header.session_id.is_nil() {
+            return Err(PacketError::InvalidSessionId);
+        }
         let payload = &packet[RELAY_HEADER_SIZE..];
 
         // 5. Dispatch by type
         match header.packet_type {
-            RelayPacketType::LeasePresent => self.handle_lease_present(&header, payload, src).await,
-            RelayPacketType::LeaseRenew => self.handle_lease_renew(&header, src).await,
+            RelayPacketType::LeasePresent => {
+                self.metrics
+                    .lease_present_packets
+                    .fetch_add(1, Ordering::Relaxed);
+                self.handle_lease_present(&header, payload, src).await
+            }
+            RelayPacketType::LeaseRenew => {
+                self.metrics
+                    .lease_renew_packets
+                    .fetch_add(1, Ordering::Relaxed);
+                self.handle_lease_renew(&header, src).await
+            }
             RelayPacketType::Forward => self.handle_forward(&header, payload, src).await,
             _ => Err(PacketError::UnexpectedType),
         }
@@ -280,6 +375,20 @@ impl RelayServer {
             // Verify session ID matches
             if claims_json.session_id != header.session_id {
                 return Err(PacketError::InvalidPayload);
+            }
+            if claims_json.session_id.is_nil() {
+                return Err(PacketError::InvalidSessionId);
+            }
+            let lease_expiration = chrono::DateTime::parse_from_rfc3339(&claims_json.expiration)
+                .map_err(|_| PacketError::InvalidPayload)?
+                .with_timezone(&chrono::Utc);
+            if lease_expiration <= chrono::Utc::now() {
+                self.send_lease_reject(header.session_id, src, LeaseRejectReason::Expired)
+                    .await;
+                return Err(PacketError::ExpiredLease);
+            }
+            if !matches!(claims_json.role.as_str(), "client" | "server") {
+                return Err(PacketError::InvalidRole);
             }
 
             let id = claims_json.wavry_id.clone();
@@ -429,6 +538,12 @@ impl RelayServer {
         drop(sessions); // Release lock before sending
 
         self.socket.send_to(&forward_buf, dest_addr).await?;
+        self.metrics
+            .packets_forwarded
+            .fetch_add(1, Ordering::Relaxed);
+        self.metrics
+            .bytes_forwarded
+            .fetch_add(forward_buf.len() as u64, Ordering::Relaxed);
 
         Ok(())
     }
@@ -501,6 +616,51 @@ impl RelayServer {
         let mut limiter = self.ip_limiter.write().await;
         limiter.cleanup();
     }
+
+    fn record_packet_error(&self, err: &PacketError) {
+        self.metrics.dropped_packets.fetch_add(1, Ordering::Relaxed);
+        match err {
+            PacketError::RateLimited => {
+                self.metrics
+                    .rate_limited_packets
+                    .fetch_add(1, Ordering::Relaxed);
+            }
+            PacketError::InvalidSignature | PacketError::ExpiredLease => {
+                self.metrics
+                    .auth_reject_packets
+                    .fetch_add(1, Ordering::Relaxed);
+            }
+            PacketError::InvalidSize
+            | PacketError::InvalidMagic
+            | PacketError::InvalidHeader
+            | PacketError::InvalidPayload
+            | PacketError::InvalidSessionId
+            | PacketError::InvalidRole
+            | PacketError::UnexpectedType => {
+                self.metrics.invalid_packets.fetch_add(1, Ordering::Relaxed);
+            }
+            _ => {}
+        }
+    }
+
+    async fn log_metrics(&self) {
+        let active_sessions = self.active_session_count().await;
+        let snapshot = self.metrics.snapshot();
+        info!(
+            "relay metrics active_sessions={} packets_rx={} bytes_rx={} forwarded_packets={} forwarded_bytes={} lease_present={} lease_renew={} dropped={} rate_limited={} invalid={} auth_rejects={}",
+            active_sessions,
+            snapshot.packets_rx,
+            snapshot.bytes_rx,
+            snapshot.packets_forwarded,
+            snapshot.bytes_forwarded,
+            snapshot.lease_present_packets,
+            snapshot.lease_renew_packets,
+            snapshot.dropped_packets,
+            snapshot.rate_limited_packets,
+            snapshot.invalid_packets,
+            snapshot.auth_reject_packets
+        );
+    }
 }
 
 /// Packet handling errors
@@ -516,6 +676,12 @@ enum PacketError {
     InvalidHeader,
     #[error("invalid payload")]
     InvalidPayload,
+    #[error("invalid session id")]
+    InvalidSessionId,
+    #[error("expired lease")]
+    ExpiredLease,
+    #[error("invalid role in lease")]
+    InvalidRole,
     #[error("unexpected packet type")]
     UnexpectedType,
     #[error("invalid signature")]
@@ -562,6 +728,15 @@ async fn main() -> Result<()> {
     tracing_subscriber::fmt().with_env_filter(filter).init();
 
     info!("Starting wavry-relay v{}", env!("CARGO_PKG_VERSION"));
+    info!(
+        "Relay limits: max_sessions={}, idle_timeout={}s, lease_duration={}s, ip_rate_limit={}pps, cleanup_interval={}s, stats_log_interval={}s",
+        args.max_sessions,
+        args.idle_timeout,
+        args.lease_duration_secs,
+        args.ip_rate_limit_pps,
+        args.cleanup_interval_secs,
+        args.stats_log_interval_secs
+    );
 
     // Generate Relay ID
     let relay_id = Uuid::new_v4();
@@ -615,6 +790,10 @@ async fn main() -> Result<()> {
             args.listen,
             args.max_sessions,
             Duration::from_secs(args.idle_timeout),
+            Duration::from_secs(args.lease_duration_secs.max(1)),
+            Duration::from_secs(args.cleanup_interval_secs.max(1)),
+            Duration::from_secs(args.stats_log_interval_secs.max(5)),
+            args.ip_rate_limit_pps.max(1),
             args.master_public_key.as_deref(),
             args.allow_insecure_dev,
         )

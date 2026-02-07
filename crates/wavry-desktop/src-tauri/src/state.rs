@@ -1,4 +1,4 @@
-use std::sync::{Arc, Mutex, atomic::AtomicU32};
+use std::sync::{atomic::AtomicU32, Arc, Mutex};
 use tokio::sync::{mpsc, oneshot};
 
 /// Global session state for the desktop app

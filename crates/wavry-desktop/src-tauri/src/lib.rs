@@ -1,9 +1,9 @@
-pub mod state;
 pub mod auth;
-pub mod media_utils;
 pub mod client_manager;
 pub mod commands;
+pub mod media_utils;
 pub mod secure_storage;
+pub mod state;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -18,9 +18,11 @@ pub fn run() {
             commands::login_full,
             commands::set_signaling_token,
             commands::start_session,
+            commands::stop_session,
             commands::list_monitors,
             commands::connect_via_id,
             commands::start_host,
+            commands::stop_host,
             commands::save_secure_token,
             commands::load_secure_token,
             commands::delete_secure_token,

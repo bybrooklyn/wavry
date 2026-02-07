@@ -44,7 +44,7 @@
         <h3>{appState.displayName || "Local Host"}</h3>
         <span class="mode-badge">{modeLabel()}</span>
       </div>
-      <p class="subtle">Port {appState.hostPort} • {appState.isHosting ? "Ready for incoming peers" : "Idle"}</p>
+      <p class="subtle">Port {appState.hostPort === 0 ? "Random" : appState.hostPort} • {appState.isHosting ? "Ready for incoming peers" : "Idle"}</p>
 
       {#if appState.isHosting}
         <div class="stats-row">

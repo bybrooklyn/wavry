@@ -1,12 +1,16 @@
 <script lang="ts">
-    let { step = $bindable(0), onComplete } = $props<{
+    let { step = $bindable(0), onComplete, onOpenAuth } = $props<{
         step: number;
         onComplete: (name: string, mode: "wavry" | "direct" | "custom") => void;
+        onOpenAuth?: (mode: "login" | "register") => void;
     }>();
 
     let displayName = $state("");
     let selectedMode = $state<"wavry" | "direct" | "custom">("wavry");
-    let showLogin = $state(false);
+
+    function openAuth(mode: "login" | "register") {
+        onOpenAuth?.(mode);
+    }
 </script>
 
 <div class="wizard-container">
@@ -44,7 +48,7 @@
                     <button class="primary" onclick={() => (step = 1)}
                         >Get Started</button
                     >
-                    <button class="link" onclick={() => (showLogin = true)}
+                    <button class="link" onclick={() => openAuth("login")}
                         >I already have an account</button
                     >
                 </div>
@@ -132,6 +136,21 @@
                         {/if}
                     </button>
                 </div>
+
+                {#if selectedMode === "wavry"}
+                    <div class="cloud-note">
+                        <strong>Cloud mode works best with an account.</strong>
+                        <p>Create one now or sign in after setup to connect by username.</p>
+                        <div class="cloud-actions">
+                            <button class="link-chip" onclick={() => openAuth("register")}>
+                                Create Account
+                            </button>
+                            <button class="link-chip" onclick={() => openAuth("login")}>
+                                Sign In
+                            </button>
+                        </div>
+                    </div>
+                {/if}
 
                 <div class="button-row">
                     <button class="secondary" onclick={() => (step = 1)}
@@ -321,5 +340,46 @@
     .check {
         color: var(--colors-accent-primary);
         font-size: 18px;
+    }
+
+    .cloud-note {
+        width: 100%;
+        padding: var(--spacing-md);
+        border-radius: var(--radius-xl);
+        border: 1px solid rgba(58, 130, 246, 0.35);
+        background: rgba(58, 130, 246, 0.1);
+        text-align: left;
+    }
+
+    .cloud-note strong {
+        display: block;
+        color: var(--colors-text-primary);
+        font-size: var(--font-size-caption);
+    }
+
+    .cloud-note p {
+        margin: var(--spacing-xs) 0 0;
+        color: var(--colors-text-secondary);
+        font-size: var(--font-size-caption);
+        line-height: 1.4;
+    }
+
+    .cloud-actions {
+        margin-top: var(--spacing-sm);
+        display: flex;
+        gap: var(--spacing-sm);
+    }
+
+    .link-chip {
+        padding: 6px 10px;
+        border-radius: 999px;
+        background: rgba(0, 0, 0, 0.24);
+        border: 1px solid rgba(255, 255, 255, 0.12);
+        color: var(--colors-text-primary);
+        font-size: var(--font-size-caption);
+    }
+
+    .link-chip:hover {
+        border-color: rgba(255, 255, 255, 0.24);
     }
 </style>

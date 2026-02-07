@@ -47,6 +47,11 @@ mod host {
     const PACER_MAX_US: u64 = 500;
     const PACER_BASE_US: f64 = 30.0;
     const NACK_HISTORY: usize = 512;
+    const PEER_CLEANUP_INTERVAL_SECS: u64 = 2;
+    const DEFAULT_RESOLUTION_WIDTH: u16 = 1280;
+    const DEFAULT_RESOLUTION_HEIGHT: u16 = 720;
+    const MIN_STREAM_DIMENSION: u32 = 320;
+    const MAX_STREAM_DIMENSION: u32 = 8192;
 
     #[derive(Parser, Debug)]
     #[command(name = "wavry-server")]
@@ -57,6 +62,57 @@ mod host {
         /// Disable encryption (for testing/debugging)
         #[arg(long, default_value = "false")]
         no_encrypt: bool,
+
+        /// Default stream width used when client does not request a resolution
+        #[arg(long, default_value_t = DEFAULT_RESOLUTION_WIDTH as u32)]
+        width: u32,
+
+        /// Default stream height used when client does not request a resolution
+        #[arg(long, default_value_t = DEFAULT_RESOLUTION_HEIGHT as u32)]
+        height: u32,
+
+        /// Target stream FPS
+        #[arg(long, default_value_t = 60)]
+        fps: u32,
+
+        /// Initial target bitrate in kbps
+        #[arg(long, default_value_t = 20_000)]
+        bitrate_kbps: u32,
+
+        /// Keyframe interval in milliseconds
+        #[arg(long, default_value_t = 1_000)]
+        keyframe_interval_ms: u32,
+
+        /// Display ID for capture backends that support multi-monitor selection
+        #[arg(long)]
+        display_id: Option<u32>,
+
+        /// Disable mDNS host advertisement
+        #[arg(long, default_value_t = false)]
+        disable_mdns: bool,
+
+        /// Maximum number of tracked peer endpoints (active + pending handshakes)
+        #[arg(long, default_value_t = 64)]
+        max_peers: usize,
+
+        /// Drop peers that stay silent for this many seconds
+        #[arg(long, default_value_t = 30)]
+        peer_idle_timeout_secs: u64,
+
+        /// Minimum interval between detailed stats logs for each peer
+        #[arg(long, default_value_t = 10)]
+        stats_log_interval_secs: u64,
+    }
+
+    #[derive(Clone, Copy, Debug)]
+    struct HostRuntimeConfig {
+        default_resolution: MediaResolution,
+        fps: u32,
+        initial_bitrate_kbps: u32,
+        keyframe_interval_ms: u32,
+        max_peers: usize,
+        peer_idle_timeout: Duration,
+        stats_log_interval: Duration,
     }
 
     fn env_bool(name: &str, default: bool) -> bool {
@@ -117,6 +173,9 @@ mod host {
         skip_frames: u32,
         #[allow(dead_code)]
         fec_builder: FecBuilder,
+        last_seen: time::Instant,
+        last_stats_log: time::Instant,
+        client_name: Option<String>,
     }
 
     async fn ensure_encoder(
@@ -244,7 +303,8 @@ mod host {
     }
 
     impl PeerState {
-        fn new(no_encrypt: bool) -> Self {
+        fn new(no_encrypt: bool, initial_bitrate_kbps: u32) -> Self {
+            let now = time::Instant::now();
             Self {
                 crypto: CryptoState::new(no_encrypt),
                 handshake: Handshake::new(Role::Host),
@@ -255,9 +315,12 @@ mod host {
                 frame_id: 0,
                 pacer: Pacer::new(),
                 send_history: SendHistory::new(NACK_HISTORY),
-                target_bitrate_kbps: 20_000,
+                target_bitrate_kbps: initial_bitrate_kbps,
                 skip_frames: 0,
                 fec_builder: FecBuilder::new(FEC_SHARD_COUNT).unwrap(),
+                last_seen: now,
+                last_stats_log: now,
+                client_name: None,
             }
         }
     }
@@ -378,6 +441,7 @@ mod host {
         let args = Args::parse();
         tracing_subscriber::fmt().with_env_filter("info").init();
 
+        let runtime = validate_runtime_config(&args)?;
         if !args.listen.ip().is_loopback() && !env_bool("WAVRY_SERVER_ALLOW_PUBLIC_BIND", false) {
             return Err(anyhow!(
                 "refusing non-loopback server bind without WAVRY_SERVER_ALLOW_PUBLIC_BIND=1"
@@ -392,20 +456,22 @@ mod host {
         if args.no_encrypt {
             warn!("ENCRYPTION DISABLED - not for production use");
         }
-        let _mdns = advertise_mdns(args.listen)?;
+        let _mdns = if args.disable_mdns {
+            info!("mDNS advertisement disabled");
+            None
+        } else {
+            Some(advertise_mdns(args.listen)?)
+        };
 
         let mut injector = InjectorImpl::new()?;
 
         let base_config = EncodeConfig {
             codec: Codec::H264,
-            resolution: MediaResolution {
-                width: 1280,
-                height: 720,
-            },
-            fps: 60,
-            bitrate_kbps: 20_000,
-            keyframe_interval_ms: 1000,
-            display_id: None,
+            resolution: runtime.default_resolution,
+            fps: runtime.fps as u16,
+            bitrate_kbps: runtime.initial_bitrate_kbps,
+            keyframe_interval_ms: runtime.keyframe_interval_ms,
+            display_id: args.display_id,
         };
 
         let mut buf = vec![0u8; 64 * 1024];
@@ -416,9 +482,18 @@ mod host {
         let local_supported = local_supported_encoders();
         info!("Local encoder candidates: {:?}", local_supported);
         let no_encrypt = args.no_encrypt;
+        let mut peer_cleanup_interval =
+            time::interval(Duration::from_secs(PEER_CLEANUP_INTERVAL_SECS));
 
         loop {
             tokio::select! {
+                _ = peer_cleanup_interval.tick() => {
+                    cleanup_inactive_peers(
+                        &mut peers,
+                        &mut active_peer,
+                        runtime.peer_idle_timeout,
+                    );
+                }
                 Some(frame) = async {
                     if let Some(rx) = frame_rx.as_mut() {
                         rx.recv().await
@@ -443,8 +518,18 @@ mod host {
                     let (len, peer) = recv?;
                     let raw = &buf[..len];
 
+                    if !peers.contains_key(&peer) && peers.len() >= runtime.max_peers {
+                        warn!(
+                            "dropping packet from {}: peer table full (max_peers={})",
+                            peer, runtime.max_peers
+                        );
+                        continue;
+                    }
+
                     // Get or create peer state
-                    let peer_state = peers.entry(peer).or_insert_with(|| PeerState::new(no_encrypt));
+                    let peer_state = peers
+                        .entry(peer)
+                        .or_insert_with(|| PeerState::new(no_encrypt, runtime.initial_bitrate_kbps));
 
                     // Handle raw packet
                     match handle_raw_packet(
@@ -454,6 +539,7 @@ mod host {
                         peer,
                         raw,
                         &mut injector,
+                        runtime,
                         &local_supported,
                     )
                     .await
@@ -482,8 +568,10 @@ mod host {
         peer: SocketAddr,
         raw: &[u8],
         injector: &mut InjectorImpl,
+        runtime: HostRuntimeConfig,
         local_supported: &[Codec],
     ) -> Result<Option<Codec>> {
+        peer_state.last_seen = time::Instant::now();
         let phys = PhysicalPacket::decode(Bytes::copy_from_slice(raw))
             .map_err(|e| anyhow!("RIFT decode error: {}", e))?;
 
@@ -499,6 +587,7 @@ mod host {
                     peer,
                     msg,
                     injector,
+                    runtime,
                     local_supported,
                 )
                 .await
@@ -565,6 +654,7 @@ mod host {
                     peer,
                     msg,
                     injector,
+                    runtime,
                     local_supported,
                 )
                 .await
@@ -579,6 +669,7 @@ mod host {
         peer: SocketAddr,
         msg: ProtoMessage,
         injector: &mut InjectorImpl,
+        runtime: HostRuntimeConfig,
         local_supported: &[Codec],
     ) -> Result<Option<Codec>> {
         use rift_core::message::Content;
@@ -626,7 +717,13 @@ mod host {
                             return Ok(None);
                         }
 
-                        info!("RIFT hello from {}", hello.client_name);
+                        info!(
+                            "RIFT hello from {} (platform={:?}, codecs={:?}, max_fps={})",
+                            hello.client_name,
+                            hello.platform(),
+                            hello.supported_codecs,
+                            hello.max_fps
+                        );
                         peer_state
                             .handshake
                             .on_receive_hello(&hello)
@@ -635,8 +732,14 @@ mod host {
                         let session_id = rand::random::<[u8; 16]>().to_vec();
                         peer_state.session_id = Some(session_id.clone());
                         peer_state.frame_id = 0;
+                        peer_state.client_name = Some(hello.client_name.clone());
+                        peer_state.target_bitrate_kbps = runtime.initial_bitrate_kbps;
 
                         let desired_codec = choose_codec_for_hello(&hello, local_supported);
+                        let stream_resolution = normalize_stream_resolution(
+                            hello.max_resolution,
+                            runtime.default_resolution,
+                        );
                         let ack = ProtoHelloAck {
                             accepted: true,
                             selected_codec: match desired_codec {
@@ -644,15 +747,10 @@ mod host {
                                 Codec::Hevc => RiftCodec::Hevc as i32,
                                 Codec::H264 => RiftCodec::H264 as i32,
                             },
-                            stream_resolution: Some(hello.max_resolution.unwrap_or(
-                                ProtoResolution {
-                                    width: 1280,
-                                    height: 720,
-                                },
-                            )),
-                            fps: 60,
-                            initial_bitrate_kbps: 20_000,
-                            keyframe_interval_ms: 1000,
+                            stream_resolution: Some(stream_resolution),
+                            fps: runtime.fps,
+                            initial_bitrate_kbps: runtime.initial_bitrate_kbps,
+                            keyframe_interval_ms: runtime.keyframe_interval_ms,
                             session_id: session_id.clone(),
                             session_alias: peer_state.session_alias,
                             public_addr: String::new(),
@@ -678,8 +776,12 @@ mod host {
                         )
                         .await?;
                         info!(
-                            "session established with {}: {}",
+                            "session established with {} (client={}, codec={:?}, resolution={}x{}, session_id={})",
                             peer,
+                            hello.client_name,
+                            desired_codec,
+                            stream_resolution.width,
+                            stream_resolution.height,
                             hex::encode(&session_id)
                         );
                         return Ok(Some(desired_codec));
@@ -701,12 +803,39 @@ mod host {
                         .await?;
                     }
                     rift_core::control_message::Content::Stats(report) => {
-                        info!("stats from {}: rtt={}ms", peer, report.rtt_us / 1000);
+                        if peer_state.last_stats_log.elapsed() >= runtime.stats_log_interval {
+                            let total = report.received_packets.saturating_add(report.lost_packets);
+                            let loss_percent = if total == 0 {
+                                0.0
+                            } else {
+                                (report.lost_packets as f64 * 100.0) / total as f64
+                            };
+                            info!(
+                                "stats from {}: rtt={}ms jitter={}us loss={:.2}% rx={} lost={}",
+                                peer,
+                                report.rtt_us / 1000,
+                                report.jitter_us,
+                                loss_percent,
+                                report.received_packets,
+                                report.lost_packets
+                            );
+                            peer_state.last_stats_log = time::Instant::now();
+                        }
                         peer_state.pacer.on_stats(
                             report.rtt_us,
                             report.jitter_us,
                             peer_state.target_bitrate_kbps,
                         );
+                    }
+                    rift_core::control_message::Content::Congestion(cc) => {
+                        let requested = cc.target_bitrate_kbps.clamp(1_000, 100_000);
+                        if requested != peer_state.target_bitrate_kbps {
+                            debug!(
+                                "peer {} congestion target update: {} -> {} kbps",
+                                peer, peer_state.target_bitrate_kbps, requested
+                            );
+                            peer_state.target_bitrate_kbps = requested;
+                        }
                     }
                     rift_core::control_message::Content::Nack(nack) => {
                         for packet_id in nack.packet_ids {
@@ -755,6 +884,109 @@ mod host {
             _ => {} // Handle scroll/absolute if needed
         }
         Ok(())
+    }
+
+    fn validate_runtime_config(args: &Args) -> Result<HostRuntimeConfig> {
+        if args.width < MIN_STREAM_DIMENSION || args.width > MAX_STREAM_DIMENSION {
+            return Err(anyhow!(
+                "--width must be between {} and {}",
+                MIN_STREAM_DIMENSION,
+                MAX_STREAM_DIMENSION
+            ));
+        }
+        if args.height < MIN_STREAM_DIMENSION || args.height > MAX_STREAM_DIMENSION {
+            return Err(anyhow!(
+                "--height must be between {} and {}",
+                MIN_STREAM_DIMENSION,
+                MAX_STREAM_DIMENSION
+            ));
+        }
+        if args.width > u16::MAX as u32 || args.height > u16::MAX as u32 {
+            return Err(anyhow!(
+                "--width/--height must fit within 16-bit capture backends"
+            ));
+        }
+        if args.fps == 0 || args.fps > 240 {
+            return Err(anyhow!("--fps must be between 1 and 240"));
+        }
+        if args.bitrate_kbps < 500 || args.bitrate_kbps > 200_000 {
+            return Err(anyhow!("--bitrate-kbps must be between 500 and 200000"));
+        }
+        if args.keyframe_interval_ms < 100 || args.keyframe_interval_ms > 10_000 {
+            return Err(anyhow!(
+                "--keyframe-interval-ms must be between 100 and 10000"
+            ));
+        }
+        if args.max_peers == 0 {
+            return Err(anyhow!("--max-peers must be at least 1"));
+        }
+        if args.peer_idle_timeout_secs == 0 {
+            return Err(anyhow!("--peer-idle-timeout-secs must be at least 1"));
+        }
+        if args.stats_log_interval_secs == 0 {
+            return Err(anyhow!("--stats-log-interval-secs must be at least 1"));
+        }
+
+        Ok(HostRuntimeConfig {
+            default_resolution: MediaResolution {
+                width: args.width as u16,
+                height: args.height as u16,
+            },
+            fps: args.fps,
+            initial_bitrate_kbps: args.bitrate_kbps,
+            keyframe_interval_ms: args.keyframe_interval_ms,
+            max_peers: args.max_peers,
+            peer_idle_timeout: Duration::from_secs(args.peer_idle_timeout_secs),
+            stats_log_interval: Duration::from_secs(args.stats_log_interval_secs),
+        })
+    }
+
+    fn normalize_stream_resolution(
+        requested: Option<ProtoResolution>,
+        fallback: MediaResolution,
+    ) -> ProtoResolution {
+        let (requested_w, requested_h) = requested
+            .map(|r| (r.width, r.height))
+            .unwrap_or((fallback.width as u32, fallback.height as u32));
+        let width = requested_w
+            .clamp(MIN_STREAM_DIMENSION, MAX_STREAM_DIMENSION)
+            .min(u16::MAX as u32);
+        let height = requested_h
+            .clamp(MIN_STREAM_DIMENSION, MAX_STREAM_DIMENSION)
+            .min(u16::MAX as u32);
+        ProtoResolution { width, height }
+    }
+
+    fn cleanup_inactive_peers(
+        peers: &mut HashMap<SocketAddr, PeerState>,
+        active_peer: &mut Option<SocketAddr>,
+        idle_timeout: Duration,
+    ) {
+        let now = time::Instant::now();
+        let mut removed = 0usize;
+        let mut removed_active_peer = false;
+        peers.retain(|addr, state| {
+            let stale = now.duration_since(state.last_seen) > idle_timeout;
+            if stale {
+                removed += 1;
+                if Some(*addr) == *active_peer {
+                    removed_active_peer = true;
+                }
+                warn!(
+                    "dropping stale peer {} after {:?} of inactivity",
+                    addr,
+                    now.duration_since(state.last_seen)
+                );
+            }
+            !stale
+        });
+        if removed_active_peer {
+            *active_peer = None;
+            info!("active peer expired; host is ready for new clients");
+        }
+        if removed > 0 {
+            debug!("peer cleanup removed {} stale peer(s)", removed);
+        }
     }
 
     async fn send_rift_msg(
@@ -836,6 +1068,28 @@ mod host {
         .enable_addr_auto();
         mdns.register(service_info)?;
         Ok(mdns)
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn normalize_stream_resolution_clamps_bounds() {
+            let fallback = MediaResolution {
+                width: DEFAULT_RESOLUTION_WIDTH,
+                height: DEFAULT_RESOLUTION_HEIGHT,
+            };
+            let out = normalize_stream_resolution(
+                Some(ProtoResolution {
+                    width: 10,
+                    height: 90_000,
+                }),
+                fallback,
+            );
+            assert_eq!(out.width, MIN_STREAM_DIMENSION);
+            assert_eq!(out.height, MAX_STREAM_DIMENSION);
+        }
     }
 }
 

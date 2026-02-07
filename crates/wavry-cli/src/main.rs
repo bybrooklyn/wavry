@@ -66,8 +66,10 @@ fn main() -> Result<()> {
             println!("{}", keypair.wavry_id());
         }
         Command::Ping { server } => {
-            let addr: std::net::SocketAddr = server.parse().map_err(|e| anyhow::anyhow!("Invalid server address: {}", e))?;
-            
+            let addr: std::net::SocketAddr = server
+                .parse()
+                .map_err(|e| anyhow::anyhow!("Invalid server address: {}", e))?;
+
             println!("Pinging {}...", addr);
 
             let rt = tokio::runtime::Builder::new_current_thread()
@@ -75,10 +77,13 @@ fn main() -> Result<()> {
                 .build()?;
 
             rt.block_on(async {
+                use bytes::Bytes;
+                use rift_core::{
+                    control_message::Content, decode_msg, encode_msg, ControlMessage, Message,
+                    PhysicalPacket, RIFT_VERSION,
+                };
                 use tokio::net::UdpSocket;
                 use tokio::time::{timeout, Duration, Instant};
-                use rift_core::{PhysicalPacket, RIFT_VERSION, Message, ControlMessage, control_message::Content, encode_msg, decode_msg};
-                use bytes::Bytes;
 
                 let socket = UdpSocket::bind("0.0.0.0:0").await?;
                 socket.connect(addr).await?;
@@ -109,16 +114,20 @@ fn main() -> Result<()> {
                 match timeout(Duration::from_secs(2), socket.recv(&mut buf)).await {
                     Ok(Ok(len)) => {
                         let rtt = start_time.elapsed();
-                        let resp_phys = PhysicalPacket::decode(Bytes::copy_from_slice(&buf[..len]))?;
+                        let resp_phys =
+                            PhysicalPacket::decode(Bytes::copy_from_slice(&buf[..len]))?;
                         let resp_msg = decode_msg(&resp_phys.payload)?;
-                        
+
                         match resp_msg.content {
                             Some(rift_core::message::Content::Control(ctrl)) => {
                                 match ctrl.content {
                                     Some(Content::Pong(_)) => {
                                         println!("Response from {}: RTT={:?}", addr, rtt);
                                     }
-                                    _ => println!("Received unexpected RIFT message type from {}", addr),
+                                    _ => println!(
+                                        "Received unexpected RIFT message type from {}",
+                                        addr
+                                    ),
                                 }
                             }
                             _ => println!("Received non-control RIFT message from {}", addr),

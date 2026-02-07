@@ -1,11 +1,11 @@
-use std::time::Duration;
+use crate::helpers::now_us;
+use anyhow::Result;
+use gilrs::{Event, EventType as GilrsEventType, Gilrs};
+use rift_core::InputMessage as ProtoInputMessage;
 use std::thread;
+use std::time::Duration;
 use tokio::sync::mpsc;
 use tracing::warn;
-use rift_core::InputMessage as ProtoInputMessage;
-use gilrs::{Event, EventType as GilrsEventType, Gilrs};
-use anyhow::Result;
-use crate::helpers::now_us;
 
 #[cfg(target_os = "linux")]
 use evdev::{Device, EventType, Key, RelativeAxisType};

@@ -1,11 +1,14 @@
-use std::net::SocketAddr;
-use std::sync::{Arc, Mutex, atomic::{AtomicBool, AtomicU64}};
-use uuid::Uuid;
+use anyhow::Result;
 use rift_crypto::connection::SecureClient;
+use std::fmt;
+use std::net::SocketAddr;
+use std::sync::{
+    atomic::{AtomicBool, AtomicU64},
+    Arc, Mutex,
+};
+use uuid::Uuid;
 use wavry_media::{DecodeConfig, Renderer, Resolution as MediaResolution};
 use wavry_vr::VrAdapter;
-use anyhow::Result;
-use std::fmt;
 
 #[derive(Clone)]
 pub struct ClientConfig {
