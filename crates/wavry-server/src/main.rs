@@ -106,6 +106,7 @@ mod host {
     struct PeerState {
         crypto: CryptoState,
         handshake: Handshake,
+        pending_crypto_msg2: Option<Bytes>,
         session_id: Option<Vec<u8>>,
         session_alias: u32,
         next_packet_id: u64,
@@ -247,6 +248,7 @@ mod host {
             Self {
                 crypto: CryptoState::new(no_encrypt),
                 handshake: Handshake::new(Role::Host),
+                pending_crypto_msg2: None,
                 session_id: None,
                 session_alias: rand::random::<u32>().max(1),
                 next_packet_id: 1,
@@ -504,17 +506,26 @@ mod host {
             CryptoState::Handshaking(server) => {
                 if let Some(sid) = phys.session_id {
                     if sid == 0 {
-                        info!("crypto handshake msg1 from {}", peer);
-                        let msg2_payload = server
-                            .process_client_hello(&phys.payload)
-                            .map_err(|e| anyhow!("Noise error: {}", e))?;
+                        let msg2_payload =
+                            if let Some(cached) = peer_state.pending_crypto_msg2.clone() {
+                                debug!("resending cached crypto msg2 to {}", peer);
+                                cached
+                            } else {
+                                info!("crypto handshake msg1 from {}", peer);
+                                let msg2_payload = server
+                                    .process_client_hello(&phys.payload)
+                                    .map_err(|e| anyhow!("Noise error: {}", e))?;
+                                let cached = Bytes::copy_from_slice(&msg2_payload);
+                                peer_state.pending_crypto_msg2 = Some(cached.clone());
+                                cached
+                            };
 
                         let resp = PhysicalPacket {
                             version: RIFT_VERSION,
                             session_id: Some(0),
                             session_alias: None,
                             packet_id: 0,
-                            payload: Bytes::copy_from_slice(&msg2_payload),
+                            payload: msg2_payload,
                         };
                         socket.send_to(&resp.encode(), peer).await?;
                         Ok(None)
@@ -532,6 +543,7 @@ mod host {
                         std::mem::replace(&mut peer_state.crypto, CryptoState::Disabled);
                     if let CryptoState::Handshaking(server) = old_crypto {
                         peer_state.crypto = CryptoState::Established(server);
+                        peer_state.pending_crypto_msg2 = None;
                         info!("crypto established with {}", peer);
                     }
                     Ok(None)

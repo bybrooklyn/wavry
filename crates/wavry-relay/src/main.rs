@@ -158,6 +158,11 @@ impl RelayServer {
                 pasetors::keys::AsymmetricPublicKey::<pasetors::version4::V4>::from(&key_bytes)?;
             Some(key)
         } else if allow_insecure_dev {
+            if !env_bool("WAVRY_ALLOW_INSECURE_RELAY", false) {
+                return Err(anyhow::anyhow!(
+                    "refusing to start in insecure dev mode; set WAVRY_ALLOW_INSECURE_RELAY=1 to override (NOT FOR PRODUCTION)"
+                ));
+            }
             warn!("relay running in insecure dev mode (lease signature checks disabled)");
             None
         } else {

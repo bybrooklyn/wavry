@@ -66,8 +66,70 @@ fn main() -> Result<()> {
             println!("{}", keypair.wavry_id());
         }
         Command::Ping { server } => {
-            println!("Ping not yet implemented for: {}", server);
-            // TODO: Send RIFT ping packet
+            let addr: std::net::SocketAddr = server.parse().map_err(|e| anyhow::anyhow!("Invalid server address: {}", e))?;
+            
+            println!("Pinging {}...", addr);
+
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()?;
+
+            rt.block_on(async {
+                use tokio::net::UdpSocket;
+                use tokio::time::{timeout, Duration, Instant};
+                use rift_core::{PhysicalPacket, RIFT_VERSION, Message, ControlMessage, control_message::Content, encode_msg, decode_msg};
+                use bytes::Bytes;
+
+                let socket = UdpSocket::bind("0.0.0.0:0").await?;
+                socket.connect(addr).await?;
+
+                let start_time = Instant::now();
+                let timestamp_us = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_micros() as u64;
+
+                let ping_msg = Message {
+                    content: Some(rift_core::message::Content::Control(ControlMessage {
+                        content: Some(Content::Ping(rift_core::Ping { timestamp_us })),
+                    })),
+                };
+
+                let phys = PhysicalPacket {
+                    version: RIFT_VERSION,
+                    session_id: Some(0),
+                    session_alias: None,
+                    packet_id: 0,
+                    payload: Bytes::from(encode_msg(&ping_msg)),
+                };
+
+                socket.send(&phys.encode()).await?;
+
+                let mut buf = [0u8; 1500];
+                match timeout(Duration::from_secs(2), socket.recv(&mut buf)).await {
+                    Ok(Ok(len)) => {
+                        let rtt = start_time.elapsed();
+                        let resp_phys = PhysicalPacket::decode(Bytes::copy_from_slice(&buf[..len]))?;
+                        let resp_msg = decode_msg(&resp_phys.payload)?;
+                        
+                        match resp_msg.content {
+                            Some(rift_core::message::Content::Control(ctrl)) => {
+                                match ctrl.content {
+                                    Some(Content::Pong(_)) => {
+                                        println!("Response from {}: RTT={:?}", addr, rtt);
+                                    }
+                                    _ => println!("Received unexpected RIFT message type from {}", addr),
+                                }
+                            }
+                            _ => println!("Received non-control RIFT message from {}", addr),
+                        }
+                    }
+                    Ok(Err(e)) => println!("Error receiving from {}: {}", addr, e),
+                    Err(_) => println!("Ping timeout for {}", addr),
+                }
+
+                Ok::<(), anyhow::Error>(())
+            })?;
         }
         Command::Version => {
             println!("wavry {}", env!("CARGO_PKG_VERSION"));

@@ -3,6 +3,16 @@ plugins {
     id("org.jetbrains.kotlin.android")
 }
 
+val releaseStoreFile = System.getenv("WAVRY_ANDROID_RELEASE_STORE_FILE")
+val releaseStorePassword = System.getenv("WAVRY_ANDROID_RELEASE_STORE_PASSWORD")
+val releaseKeyAlias = System.getenv("WAVRY_ANDROID_RELEASE_KEY_ALIAS")
+val releaseKeyPassword = System.getenv("WAVRY_ANDROID_RELEASE_KEY_PASSWORD")
+val hasReleaseSigningEnv =
+    !releaseStoreFile.isNullOrBlank() &&
+        !releaseStorePassword.isNullOrBlank() &&
+        !releaseKeyAlias.isNullOrBlank() &&
+        !releaseKeyPassword.isNullOrBlank()
+
 android {
     namespace = "com.wavry.android"
     compileSdk = 35
@@ -59,9 +69,28 @@ android {
         }
     }
 
+    signingConfigs {
+        create("release") {
+            if (hasReleaseSigningEnv) {
+                storeFile = file(releaseStoreFile!!)
+                storePassword = releaseStorePassword
+                keyAlias = releaseKeyAlias
+                keyPassword = releaseKeyPassword
+            }
+        }
+    }
+
     buildTypes {
         release {
             isMinifyEnabled = false
+            // For local testing, make release APK installable by signing with the debug key.
+            // For production, set WAVRY_ANDROID_RELEASE_* env vars to use your real keystore.
+            signingConfig =
+                if (hasReleaseSigningEnv) {
+                    signingConfigs.getByName("release")
+                } else {
+                    signingConfigs.getByName("debug")
+                }
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro",

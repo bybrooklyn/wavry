@@ -214,6 +214,64 @@ apk_path() {
   echo "$REPO_ROOT/apps/android/app/build/outputs/apk/${variant}/${profile}/app-${variant}-${profile}.apk"
 }
 
+find_apksigner() {
+  if command -v apksigner >/dev/null 2>&1; then
+    command -v apksigner
+    return 0
+  fi
+
+  local sdk_root="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-$HOME/Library/Android/sdk}}"
+  if [[ -d "$sdk_root/build-tools" ]]; then
+    find "$sdk_root/build-tools" -name apksigner -type f 2>/dev/null | sort | tail -n 1
+    return 0
+  fi
+
+  return 1
+}
+
+resolve_apk_path() {
+  local variant="$1"
+  local profile="$2"
+  local dir="$REPO_ROOT/apps/android/app/build/outputs/apk/${variant}/${profile}"
+  local preferred
+  preferred="$(apk_path "$variant" "$profile")"
+
+  if [[ -f "$preferred" ]]; then
+    echo "$preferred"
+    return 0
+  fi
+
+  if [[ -d "$dir" ]]; then
+    local fallback
+    fallback="$(find "$dir" -maxdepth 1 -type f -name "*.apk" ! -name "*-unsigned.apk" | sort | head -n 1)"
+    if [[ -n "$fallback" ]]; then
+      echo "$fallback"
+      return 0
+    fi
+  fi
+
+  return 1
+}
+
+ensure_release_apk_signed() {
+  local apk="$1"
+  if [[ "$apk" == *"-unsigned.apk" ]]; then
+    echo "Release APK is unsigned: $apk" >&2
+    return 1
+  fi
+
+  local apksigner_bin
+  apksigner_bin="$(find_apksigner || true)"
+  if [[ -n "${apksigner_bin:-}" && -x "$apksigner_bin" ]]; then
+    if ! "$apksigner_bin" verify "$apk" >/dev/null 2>&1; then
+      echo "Release APK signature verification failed: $apk" >&2
+      return 1
+    fi
+  fi
+
+  return 0
+}
+
 package_name() {
   local variant="$1"
   if [[ "$variant" == "quest" ]]; then
@@ -226,13 +284,22 @@ package_name() {
 install_variant() {
   local variant="$1"
   local apk
-  apk="$(apk_path "$variant" "$BUILD_TYPE")"
-  if [[ ! -f "$apk" ]]; then
-    echo "APK not found: $apk" >&2
+  if ! apk="$(resolve_apk_path "$variant" "$BUILD_TYPE")"; then
+    echo "APK not found for ${variant}/${BUILD_TYPE}" >&2
     echo "Build first with: ./scripts/dev-android.sh --variant $variant --$BUILD_TYPE" >&2
     exit 1
   fi
+
+  if [[ "$BUILD_TYPE" == "release" ]]; then
+    if ! ensure_release_apk_signed "$apk"; then
+      echo "Release signing is required for install." >&2
+      echo "Set WAVRY_ANDROID_RELEASE_* env vars for production keystore or use the default local signing path." >&2
+      exit 1
+    fi
+  fi
+
   echo "Installing ${variant} APK..."
+  echo "APK: $apk"
   "${ADB_CMD[@]}" install -r "$apk" >/dev/null
   echo "Installed: $apk"
 }

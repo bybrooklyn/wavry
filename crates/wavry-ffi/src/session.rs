@@ -34,7 +34,7 @@ use rift_core::{
 };
 use rift_crypto::connection::SecureServer;
 use wavry_client::{
-    run_client as run_rift_client, ClientConfig, ClientRuntimeStats, RendererFactory,
+    run_client as run_rift_client, ClientConfig, ClientRuntimeStats, RelayInfo, RendererFactory,
 };
 #[cfg(not(target_os = "macos"))]
 use wavry_media::DummyRenderer as MacVideoRenderer;
@@ -191,6 +191,7 @@ impl CryptoState {
 struct PeerState {
     session_alias: u32,
     session_id: Option<Vec<u8>>,
+    pending_crypto_msg2: Option<Bytes>,
     crypto: CryptoState,
     handshake: Handshake,
     next_packet_id: u64,
@@ -205,6 +206,7 @@ impl PeerState {
         Ok(Self {
             session_alias: rand::random::<u32>().max(1),
             session_id: None,
+            pending_crypto_msg2: None,
             crypto: CryptoState::Handshaking(crypto),
             handshake: Handshake::new(Role::Host),
             next_packet_id: 1,
@@ -478,14 +480,22 @@ pub async fn run_host(
                         if let CryptoState::Handshaking(server) = &mut state.crypto {
                             if let Some(session_id) = phys.session_id {
                                 if session_id == 0 {
-                                    let msg2 = server.process_client_hello(&phys.payload)
-                                        .map_err(|e| anyhow!("crypto msg1 error: {}", e))?;
+                                    let msg2 = if let Some(cached) = state.pending_crypto_msg2.clone() {
+                                        log::debug!("resending cached crypto msg2 to {}", src);
+                                        cached
+                                    } else {
+                                        let msg2 = server.process_client_hello(&phys.payload)
+                                            .map_err(|e| anyhow!("crypto msg1 error: {}", e))?;
+                                        let cached = Bytes::copy_from_slice(&msg2);
+                                        state.pending_crypto_msg2 = Some(cached.clone());
+                                        cached
+                                    };
                                     let resp = PhysicalPacket {
                                         version: RIFT_VERSION,
                                         session_id: Some(0),
                                         session_alias: None,
                                         packet_id: 0,
-                                        payload: Bytes::copy_from_slice(&msg2),
+                                        payload: msg2,
                                     };
                                     let _ = socket.send_to(&resp.encode(), src).await;
                                 }
@@ -502,6 +512,7 @@ pub async fn run_host(
                                     return Err(anyhow!("crypto msg3 error: {}", e));
                                 }
                                 state.crypto = CryptoState::Established(server);
+                                state.pending_crypto_msg2 = None;
                                 log::info!("crypto established with {}", src);
                             }
                             return Ok(());
@@ -679,32 +690,51 @@ impl Renderer for SharedRenderer {
 }
 
 pub async fn run_client(
-    host_ip: String,
-    port: u16,
+    direct_target: Option<(String, u16)>,
+    relay_info: Option<RelayInfo>,
+    client_name: String,
     renderer_handle: Arc<std::sync::Mutex<Option<Box<MacVideoRenderer>>>>,
     stats: Arc<SessionStats>,
     mut stop_rx: oneshot::Receiver<()>,
     init_tx: oneshot::Sender<Result<()>>,
 ) -> Result<()> {
     let mut init_tx = Some(init_tx);
-    let connect_addr = match format!("{}:{}", host_ip, port).parse() {
-        Ok(a) => Some(a),
-        Err(e) => {
-            if let Some(tx) = init_tx.take() {
-                let _ = tx.send(Err(anyhow!("Invalid address: {}", e)));
+    let connect_addr = match direct_target.as_ref() {
+        Some((host_ip, port)) => match format!("{}:{}", host_ip, port).parse::<SocketAddr>() {
+            Ok(a) => Some(a),
+            Err(e) => {
+                if let Some(tx) = init_tx.take() {
+                    let _ = tx.send(Err(anyhow!("Invalid address: {}", e)));
+                }
+                return Err(anyhow!("Invalid address: {}", e));
             }
-            return Err(anyhow!("Invalid address: {}", e));
-        }
+        },
+        None => None,
     };
+    if connect_addr.is_none() && relay_info.is_none() {
+        if let Some(tx) = init_tx.take() {
+            let _ = tx.send(Err(anyhow!("No client targets available")));
+        }
+        return Err(anyhow!("No client targets available"));
+    }
+
+    let target_label = if let Some(addr) = connect_addr {
+        addr.to_string()
+    } else if let Some(relay) = relay_info.as_ref() {
+        format!("relay {}", relay.addr)
+    } else {
+        "unknown target".to_string()
+    };
+
     let runtime_stats = Arc::new(ClientRuntimeStats::default());
 
     // Config for lib
     let config = ClientConfig {
         connect_addr,
-        client_name: "WavryAndroid".to_string(),
+        client_name,
         no_encrypt: false,
         identity_key: crate::identity::get_private_key(),
-        relay_info: None,
+        relay_info,
         max_resolution: None,
         gamepad_enabled: true,
         gamepad_deadzone: 0.1,
@@ -719,9 +749,8 @@ pub async fn run_client(
     });
 
     log::info!(
-        "Starting Wavry Client (Refactored) connecting to {}:{}",
-        host_ip,
-        port
+        "Starting Wavry Client (Refactored) connecting to {}",
+        target_label
     );
     let mut started = false;
     let startup_deadline = Instant::now() + Duration::from_secs(12);
@@ -779,11 +808,7 @@ pub async fn run_client(
                         let _ = tx.send(Ok(()));
                     }
                 } else if !started && Instant::now() >= startup_deadline {
-                    let err = anyhow!(
-                        "Timed out waiting for host acknowledgment at {}:{}",
-                        host_ip,
-                        port
-                    );
+                    let err = anyhow!("Timed out waiting for host acknowledgment at {}", target_label);
                     if let Some(tx) = init_tx.take() {
                         let _ = tx.send(Err(anyhow!(err.to_string())));
                     }

@@ -273,6 +273,9 @@ pub fn is_valid_session_token(token: &str) -> bool {
 }
 
 fn insecure_totp_allowed() -> bool {
+    if env_bool("WAVRY_ENVIRONMENT_PRODUCTION", false) || std::env::var("WAVRY_ENVIRONMENT").map(|v| v == "production").unwrap_or(false) {
+        return false;
+    }
     env_bool("WAVRY_ALLOW_INSECURE_TOTP", false)
 }
 

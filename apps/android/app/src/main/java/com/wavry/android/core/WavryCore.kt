@@ -13,11 +13,34 @@ class WavryCore(
 
     fun version(): String = native.nativeVersion()
 
+    fun publicKeyHex(): String = native.nativeGetPublicKeyHex()
+
     fun startHost(port: Int): Int = native.nativeStartHost(port)
 
     fun startClient(host: String, port: Int): Int = native.nativeStartClient(host, port)
 
+    fun connectSignaling(url: String, token: String): Int = native.nativeConnectSignaling(url, token)
+
+    fun sendConnectRequest(username: String): Int = native.nativeSendConnectRequest(username)
+
     fun stop(): Int = native.nativeStop()
+
+    fun lastError(): String = native.nativeLastError().trim()
+
+    fun lastCloudStatus(): String = native.nativeLastCloudStatus().trim()
+
+    fun describeError(code: Int): String {
+        val base = messageForCode(code)
+        val detail = lastError()
+        if (detail.isBlank()) {
+            return base
+        }
+        return if (detail.equals(base, ignoreCase = true)) {
+            base
+        } else {
+            "$base\n$detail"
+        }
+    }
 
     fun stats(): SessionStats {
         val raw = native.nativeGetStats() ?: return SessionStats()
@@ -40,7 +63,7 @@ class WavryCore(
                 -1 -> "A session is already active"
                 -2 -> "Invalid argument or failed to initialize runtime"
                 -3 -> "Runtime or channel failure"
-                -4 -> "Session startup failed. Verify host and network."
+                -4 -> "Session startup failed"
                 -5 -> "Startup failed"
                 -10 -> "Invalid host/port values"
                 -11 -> "String conversion failure"

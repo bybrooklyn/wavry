@@ -17,6 +17,7 @@ export class AppState {
     isSetupCompleted = $state(false);
     isAuthenticated = $state(false);
     username = $state("");
+    signalingToken = $state<string | null>(null);
     showLoginModal = $state(false);
 
     // CC Stats
@@ -214,13 +215,24 @@ export class AppState {
         this.saveToStorage();
     }
 
-    loadFromStorage() {
+    async initialize() {
         this.isSetupCompleted = localStorage.getItem("isSetupCompleted") === "true";
         this.displayName = localStorage.getItem("displayName") || "";
         const mode = localStorage.getItem("connectivityMode");
         this.connectivityMode = mode === "wavry" || mode === "direct" || mode === "custom" ? mode : "wavry";
-        this.username = localStorage.getItem("username") || "";
-        this.isAuthenticated = !!this.username;
+        
+        try {
+            this.username = await invoke<string | null>("load_secure_data", { key: "username" }) || "";
+            this.signalingToken = await invoke<string | null>("load_secure_token");
+            this.isAuthenticated = !!this.username && !!this.signalingToken;
+            if (this.signalingToken) {
+                await invoke("set_signaling_token", { token: this.signalingToken, server: this.authServer });
+            }
+        } catch (e) {
+            console.error("Failed to load secure state:", e);
+            this.isAuthenticated = false;
+        }
+
         this.authServer = localStorage.getItem("authServer") || "https://auth.wavry.dev";
         this.hostPort = this.parseStoredNumber("hostPort", 8000);
         this.upnpEnabled = localStorage.getItem("upnpEnabled") !== "false";
@@ -255,9 +267,9 @@ export class AppState {
         try {
             const res = await invoke<any>("login_full", details);
             this.username = res.username;
+            this.signalingToken = res.token;
             this.isAuthenticated = true;
-            localStorage.setItem("username", res.username);
-            await invoke("set_signaling_token", { token: res.token });
+            // Note: login_full already saves the token and username to secure storage on the Rust side
             this.showLoginModal = false;
             return res.username;
         } catch (e: any) {
@@ -266,11 +278,13 @@ export class AppState {
         }
     }
 
-    logout() {
+    async logout() {
         this.username = "";
+        this.signalingToken = null;
         this.isAuthenticated = false;
-        localStorage.removeItem("username");
-        invoke("set_signaling_token", { token: null });
+        await invoke("delete_secure_token");
+        await invoke("delete_secure_data", { key: "username" });
+        await invoke("set_signaling_token", { token: null, server: this.authServer });
     }
 
     get effectiveDisplayName() {

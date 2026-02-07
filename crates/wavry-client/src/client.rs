@@ -1,36 +1,28 @@
-use base64::{engine::general_purpose, Engine as _};
-use std::{
-    collections::{BTreeSet, HashMap, VecDeque},
-    fmt,
-    net::SocketAddr,
-    sync::{
-        atomic::{AtomicBool, AtomicU64, Ordering},
-        Arc, Mutex,
-    },
-    thread,
-    time::{Duration, Instant},
-};
-use uuid::Uuid;
-
+use std::net::SocketAddr;
+use std::sync::{Arc, Mutex, atomic::{Ordering, AtomicU64}};
+use std::time::{Duration, Instant};
+use tokio::net::UdpSocket;
+use tokio::sync::{mpsc, oneshot};
+use tokio::time;
+use tracing::{debug, info, warn};
 use anyhow::{anyhow, Result};
 use bytes::Bytes;
-#[cfg(target_os = "linux")]
-use evdev::{Device, EventType, Key, RelativeAxisType};
-use gilrs::{Event, EventType as GilrsEventType, Gilrs};
-use mdns_sd::{ServiceDaemon, ServiceEvent};
+
 use rift_core::{
     decode_msg, encode_msg,
-    relay::{LeasePresentPayload, PeerRole, RelayHeader, RelayPacketType, RELAY_HEADER_SIZE},
-    Codec as RiftCodec, ControlMessage as ProtoControl, FecPacket as ProtoFecPacket, Handshake,
-    Hello as ProtoHello, InputMessage as ProtoInputMessage, Message as ProtoMessage,
+    relay::{RelayHeader, RelayPacketType, RELAY_HEADER_SIZE, PeerRole, LeasePresentPayload},
+    Codec as RiftCodec, ControlMessage as ProtoControl, Handshake,
+    Hello as ProtoHello, Message as ProtoMessage,
     PhysicalPacket, Ping as ProtoPing, Resolution as ProtoResolution, Role,
     StatsReport as ProtoStatsReport, RIFT_VERSION,
 };
-use rift_crypto::connection::SecureClient;
 use socket2::SockRef;
-use tokio::sync::oneshot;
-use tokio::{net::UdpSocket, sync::mpsc, time};
-use tracing::{debug, info, warn};
+
+use crate::types::{ClientConfig, ClientRuntimeStats, RendererFactory, CryptoState, VrOutbound, RelayInfo};
+use crate::helpers::{env_bool, now_us, local_platform};
+use crate::media::{FrameAssembler, FecCache, ArrivalJitter, JitterBuffer, RttTracker, NackWindow, FRAME_TIMEOUT_US, NACK_WINDOW_SIZE};
+use crate::input::spawn_input_threads;
+
 #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
 use wavry_media::CapabilityProbe;
 #[cfg(not(target_os = "linux"))]
@@ -41,11 +33,15 @@ use wavry_media::DummyRenderer as LinuxFallbackRenderer;
 use wavry_media::GstVideoRenderer as VideoRenderer;
 use wavry_media::{Codec, DecodeConfig, Renderer, Resolution as MediaResolution};
 use wavry_vr::types::{
-    EncoderControl as VrEncoderControl, HandPose as VrHandPose, NetworkStats as VrNetworkStats,
+    EncoderControl as VrEncoderControl, NetworkStats as VrNetworkStats,
     Pose as VrPose, StreamConfig as VrStreamConfig, VideoCodec as VrVideoCodec,
-    VideoFrame as VrVideoFrame, VrTiming,
+    VideoFrame as VrVideoFrame, VrTiming, HandPose as VrHandPose
 };
 use wavry_vr::{VrAdapter, VrAdapterCallbacks};
+
+const CRYPTO_HANDSHAKE_ATTEMPTS: u32 = 6;
+const CRYPTO_HANDSHAKE_STEP_TIMEOUT: Duration = Duration::from_secs(2);
+const DSCP_EF: u32 = 0x2E;
 
 fn probe_supported_codecs() -> Vec<Codec> {
     #[cfg(target_os = "windows")]
@@ -72,83 +68,9 @@ fn probe_supported_codecs() -> Vec<Codec> {
     }
 }
 
-fn local_platform() -> rift_core::Platform {
-    if cfg!(target_os = "windows") {
-        rift_core::Platform::Windows
-    } else if cfg!(target_os = "macos") {
-        rift_core::Platform::Macos
-    } else {
-        rift_core::Platform::Linux
-    }
-}
-
 #[cfg(target_os = "linux")]
 fn linux_has_display() -> bool {
     std::env::var_os("WAYLAND_DISPLAY").is_some() || std::env::var_os("DISPLAY").is_some()
-}
-
-const FRAME_TIMEOUT_US: u64 = 50_000;
-const MAX_FEC_CACHE: usize = 256;
-const DSCP_EF: u32 = 0x2E;
-const NACK_WINDOW_SIZE: u64 = 128;
-const JITTER_GROW_THRESHOLD_US: f64 = 2_000.0;
-const JITTER_SHRINK_THRESHOLD_US: f64 = 500.0;
-const JITTER_MAX_BUFFER_US: u64 = 10_000;
-
-#[derive(Clone)]
-pub struct ClientConfig {
-    pub connect_addr: Option<SocketAddr>,
-    pub client_name: String,
-    pub no_encrypt: bool,
-    pub identity_key: Option<[u8; 32]>,
-    pub relay_info: Option<RelayInfo>,
-    pub max_resolution: Option<MediaResolution>,
-    pub gamepad_enabled: bool,
-    pub gamepad_deadzone: f32,
-    pub vr_adapter: Option<Arc<Mutex<dyn VrAdapter>>>,
-    pub runtime_stats: Option<Arc<ClientRuntimeStats>>,
-}
-
-#[derive(Debug, Clone)]
-pub struct RelayInfo {
-    pub addr: SocketAddr,
-    pub token: String,
-    pub session_id: Uuid,
-}
-
-#[derive(Debug, Default)]
-pub struct ClientRuntimeStats {
-    pub connected: AtomicBool,
-    pub frames_decoded: AtomicU64,
-}
-
-pub type RendererFactory = Box<dyn Fn(DecodeConfig) -> Result<Box<dyn Renderer + Send>> + Send>;
-
-/// Crypto state for the client
-enum CryptoState {
-    /// No encryption (--no-encrypt mode)
-    Disabled,
-    /// Crypto handshake in progress
-    Handshaking(SecureClient),
-    /// Crypto established
-    Established(SecureClient),
-}
-
-impl fmt::Debug for CryptoState {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Disabled => write!(f, "Disabled"),
-            Self::Handshaking(_) => write!(f, "Handshaking"),
-            Self::Established(_) => write!(f, "Established"),
-        }
-    }
-}
-
-enum VrOutbound {
-    Pose(rift_core::PoseUpdate),
-    HandPose(rift_core::HandPoseUpdate),
-    Timing(rift_core::VrTiming),
-    Gamepad(rift_core::InputMessage),
 }
 
 struct ClientVrCallbacks {
@@ -234,18 +156,6 @@ impl VrAdapterCallbacks for ClientVrCallbacks {
     }
 }
 
-impl CryptoState {
-    fn new(disabled: bool, identity_key: Option<[u8; 32]>) -> Result<Self> {
-        if disabled {
-            Ok(CryptoState::Disabled)
-        } else if let Some(key) = identity_key {
-            Ok(CryptoState::Handshaking(SecureClient::with_keypair(key)?))
-        } else {
-            Ok(CryptoState::Handshaking(SecureClient::new()?))
-        }
-    }
-}
-
 struct RuntimeStatsGuard {
     stats: Option<Arc<ClientRuntimeStats>>,
 }
@@ -266,20 +176,6 @@ impl Drop for RuntimeStatsGuard {
             stats.connected.store(false, Ordering::Relaxed);
         }
     }
-}
-
-pub async fn discover_public_addr(socket: &UdpSocket) -> Result<SocketAddr> {
-    use rift_core::stun::StunMessage;
-    let stun_server = "stun.l.google.com:19302";
-    let stun_msg = StunMessage::new_binding_request();
-    let encoded = stun_msg.encode();
-
-    socket.send_to(&encoded, stun_server).await?;
-
-    let mut buf = [0u8; 1024];
-    let (len, _) = time::timeout(Duration::from_secs(2), socket.recv_from(&mut buf)).await??;
-
-    StunMessage::decode_address(&buf[..len])
 }
 
 async fn punch_hole(socket: &UdpSocket, target: SocketAddr) -> Result<()> {
@@ -333,9 +229,17 @@ async fn run_client_inner(
     renderer_factory: Option<RendererFactory>,
     mut shutdown_rx: Option<oneshot::Receiver<()>>,
 ) -> Result<()> {
-    // Note: Logging init removed, caller should init tracing
     let runtime_stats = config.runtime_stats.clone();
     let _runtime_stats_guard = RuntimeStatsGuard::new(runtime_stats.clone());
+
+    if config.no_encrypt {
+        if !env_bool("WAVRY_ALLOW_INSECURE_NO_ENCRYPT", false) {
+            return Err(anyhow!(
+                "refusing to start without encryption; set WAVRY_ALLOW_INSECURE_NO_ENCRYPT=1 to override (NOT FOR PRODUCTION)"
+            ));
+        }
+        warn!("ENCRYPTION DISABLED - not for production use");
+    }
 
     let socket = UdpSocket::bind("0.0.0.0:0").await?;
     if let Err(e) = SockRef::from(&socket).set_tos_v4(DSCP_EF) {
@@ -360,15 +264,28 @@ async fn run_client_inner(
         return Err(anyhow!("no connection targets available"));
     };
 
-    if config.no_encrypt {
-        warn!("ENCRYPTION DISABLED - not for production use");
+    if config.no_encrypt && !connect_addr.ip().is_loopback() && !env_bool("WAVRY_CLIENT_ALLOW_PUBLIC_CONNECT", false) {
+        return Err(anyhow!(
+            "refusing to connect to non-loopback address {} in --no-encrypt mode without WAVRY_CLIENT_ALLOW_PUBLIC_CONNECT=1",
+            connect_addr
+        ));
     }
 
     // Initialize crypto state
-    let mut crypto = CryptoState::new(config.no_encrypt, config.identity_key)?;
+    let mut crypto = match config.no_encrypt {
+        true => CryptoState::Disabled,
+        false => {
+            use rift_crypto::connection::SecureClient;
+            if let Some(key) = config.identity_key {
+                CryptoState::Handshaking(SecureClient::with_keypair(key)?)
+            } else {
+                CryptoState::Handshaking(SecureClient::new()?)
+            }
+        }
+    };
 
     // Create input channel
-    let (input_tx, mut input_rx) = mpsc::channel::<ProtoInputMessage>(128);
+    let (input_tx, mut input_rx) = mpsc::channel::<rift_core::InputMessage>(128);
     spawn_input_threads(input_tx, config.gamepad_enabled, config.gamepad_deadzone)?;
 
     // VR adapter wiring (optional)
@@ -414,23 +331,83 @@ async fn run_client_inner(
             packet_id: 0,
             payload: Bytes::copy_from_slice(&msg1_payload),
         };
-        socket.send_to(&phys1.encode(), connect_addr).await?;
-        debug!("sent crypto msg1");
+        let phys1_wire = phys1.encode();
 
-        // Wait for msg2
+        // Retransmit msg1 on timeout and tolerate unrelated packets while waiting for msg2.
         let mut buf_arr = [0u8; 4096];
-        let (len, _) = time::timeout(Duration::from_secs(5), socket.recv_from(&mut buf_arr))
-            .await
-            .map_err(|_| anyhow!("crypto handshake timeout"))??;
+        let mut msg2_payload: Option<Bytes> = None;
+        let mut last_msg2_decode_err: Option<String> = None;
 
-        let phys2 = PhysicalPacket::decode(Bytes::copy_from_slice(&buf_arr[..len]))
-            .map_err(|e| anyhow!("RIFT decode error in handshake: {}", e))?;
+        for attempt in 1..=CRYPTO_HANDSHAKE_ATTEMPTS {
+            socket.send_to(&phys1_wire, connect_addr).await?;
+            debug!(
+                "sent crypto msg1 (attempt {}/{})",
+                attempt, CRYPTO_HANDSHAKE_ATTEMPTS
+            );
 
-        debug!("received crypto msg2");
+            let deadline = time::Instant::now() + CRYPTO_HANDSHAKE_STEP_TIMEOUT;
+            loop {
+                let now = time::Instant::now();
+                if now >= deadline {
+                    break;
+                }
+
+                let remaining = deadline - now;
+                let recv = match time::timeout(remaining, socket.recv_from(&mut buf_arr)).await {
+                    Ok(v) => v?,
+                    Err(_) => break,
+                };
+
+                let (len, src) = recv;
+                if src != connect_addr {
+                    debug!("ignoring handshake packet from unexpected peer {}", src);
+                    continue;
+                }
+
+                let phys2 = match PhysicalPacket::decode(Bytes::copy_from_slice(&buf_arr[..len])) {
+                    Ok(p) => p,
+                    Err(e) => {
+                        last_msg2_decode_err =
+                            Some(format!("RIFT decode error in handshake: {}", e));
+                        continue;
+                    }
+                };
+
+                // Crypto msg2 always uses session_id=0.
+                if phys2.session_id != Some(0) {
+                    continue;
+                }
+
+                msg2_payload = Some(phys2.payload);
+                debug!("received crypto msg2 on attempt {}", attempt);
+                break;
+            }
+
+            if msg2_payload.is_some() {
+                break;
+            }
+        }
+
+        let msg2_payload = msg2_payload.ok_or_else(|| {
+            if let Some(detail) = last_msg2_decode_err {
+                anyhow!(
+                    "crypto handshake timeout after {} attempts with {}: {}",
+                    CRYPTO_HANDSHAKE_ATTEMPTS,
+                    connect_addr,
+                    detail
+                )
+            } else {
+                anyhow!(
+                    "crypto handshake timeout after {} attempts waiting for host response from {}; verify host is running and port is correct",
+                    CRYPTO_HANDSHAKE_ATTEMPTS,
+                    connect_addr
+                )
+            }
+        })?;
 
         // Process msg2 and send msg3
         let msg3_payload = client
-            .process_server_response(&phys2.payload)
+            .process_server_response(&msg2_payload)
             .map_err(|e| anyhow!("crypto handshake error in msg3: {}", e))?;
 
         let phys3 = PhysicalPacket {
@@ -1056,696 +1033,19 @@ fn decrypt_packet(crypto: &mut CryptoState, phys: &PhysicalPacket) -> Result<Vec
     }
 }
 
-// ============= Frame/FEC Types =============
-
-struct FrameAssembler {
-    timeout_us: u64,
-    frames: HashMap<u64, FrameBuffer>,
-}
-
-struct FrameBuffer {
-    first_seen_us: u64,
-    timestamp_us: u64,
-    #[allow(dead_code)]
-    keyframe: bool,
-    chunk_count: u32,
-    chunks: Vec<Option<Vec<u8>>>,
-}
-
-struct AssembledFrame {
-    frame_id: u64,
-    timestamp_us: u64,
-    keyframe: bool,
-    data: Vec<u8>,
-}
-
-impl FrameAssembler {
-    fn new(timeout_us: u64) -> Self {
-        Self {
-            timeout_us,
-            frames: HashMap::new(),
-        }
-    }
-
-    fn push(&mut self, chunk: rift_core::VideoChunk) -> Option<AssembledFrame> {
-        let now = now_us();
-        self.frames
-            .retain(|_, frame| now.saturating_sub(frame.first_seen_us) < self.timeout_us);
-
-        let entry = self
-            .frames
-            .entry(chunk.frame_id)
-            .or_insert_with(|| FrameBuffer {
-                first_seen_us: now,
-                timestamp_us: chunk.timestamp_us,
-                keyframe: chunk.keyframe,
-                chunk_count: chunk.chunk_count,
-                chunks: vec![None; chunk.chunk_count as usize],
-            });
-
-        if chunk.chunk_index < entry.chunk_count {
-            entry.chunks[chunk.chunk_index as usize] = Some(chunk.payload);
-        }
-
-        if entry.chunks.iter().all(|c| c.is_some()) {
-            let mut assembled = Vec::new();
-            for part in entry.chunks.iter_mut() {
-                if let Some(bytes) = part.take() {
-                    assembled.extend_from_slice(&bytes);
-                }
-            }
-            let timestamp_us = entry.timestamp_us;
-            let keyframe = entry.keyframe;
-            let frame_id = chunk.frame_id;
-            self.frames.remove(&chunk.frame_id);
-            return Some(AssembledFrame {
-                frame_id,
-                timestamp_us,
-                keyframe,
-                data: assembled,
-            });
-        }
-        None
-    }
-}
-
-struct FecCache {
-    packets: HashMap<u64, Vec<u8>>,
-}
-
-impl FecCache {
-    fn new() -> Self {
-        Self {
-            packets: HashMap::new(),
-        }
-    }
-
-    #[allow(dead_code)]
-    fn insert(&mut self, packet_id: u64, data: Vec<u8>) {
-        if self.packets.len() >= MAX_FEC_CACHE {
-            if let Some(min_id) = self.packets.keys().min().copied() {
-                self.packets.remove(&min_id);
-            }
-        }
-        self.packets.insert(packet_id, data);
-    }
-
-    fn try_recover(&self, fec: &ProtoFecPacket) -> Option<Vec<u8>> {
-        let mut missing_id = None;
-        let mut recovered_payload = fec.payload.clone();
-        let mut present_count = 0;
-
-        for offset in 0..(fec.shard_count - 1) {
-            let pid = fec.first_packet_id + offset as u64;
-            if let Some(p) = self.packets.get(&pid) {
-                // XOR in the present packets
-                for (i, b) in p.iter().enumerate() {
-                    if i < recovered_payload.len() {
-                        recovered_payload[i] ^= b;
-                    }
-                }
-                present_count += 1;
-            } else {
-                if missing_id.is_some() {
-                    // More than one missing, can't recover
-                    return None;
-                }
-                missing_id = Some(pid);
-            }
-        }
-
-        if present_count == (fec.shard_count - 2) {
-            // Exactly one missing, we've XORed everything else into the parity
-            if let Some(id) = missing_id {
-                debug!("FEC: Recovered packet {}", id);
-            }
-            Some(recovered_payload)
-        } else {
-            None
-        }
-    }
-}
-
 async fn discover_host(timeout: Duration) -> Result<SocketAddr> {
-    let handle = tokio::task::spawn_blocking(discover_host_blocking);
-    let addr = time::timeout(timeout, handle).await??;
-    addr
-}
-
-fn discover_host_blocking() -> Result<SocketAddr> {
-    let daemon = ServiceDaemon::new()?;
-    let receiver = daemon.browse("_wavry._udp.local.")?;
-    for event in receiver {
-        if let ServiceEvent::ServiceResolved(info) = event {
-            if let Some(addr) = info.get_addresses().iter().next() {
-                return Ok(SocketAddr::new(*addr, info.get_port()));
+    use mdns_sd::ServiceEvent;
+    let handle = tokio::task::spawn_blocking(move || {
+        let daemon = mdns_sd::ServiceDaemon::new()?;
+        let receiver = daemon.browse("_wavry._udp.local.")?;
+        for event in receiver {
+            if let ServiceEvent::ServiceResolved(info) = event {
+                if let Some(addr) = info.get_addresses().iter().next() {
+                    return Ok(SocketAddr::new(*addr, info.get_port()));
+                }
             }
         }
-    }
-    Err(anyhow!("no wavry hosts discovered"))
-}
-
-fn normalize_gamepad_deadzone(deadzone: f32) -> f32 {
-    deadzone.clamp(0.0, 0.95)
-}
-
-fn apply_gamepad_deadzone(value: f32, deadzone: f32) -> f32 {
-    let deadzone = normalize_gamepad_deadzone(deadzone);
-    let abs = value.abs();
-    if abs <= deadzone {
-        0.0
-    } else {
-        let scaled = (abs - deadzone) / (1.0 - deadzone);
-        scaled.copysign(value).clamp(-1.0, 1.0)
-    }
-}
-
-#[cfg(target_os = "linux")]
-fn spawn_input_threads(
-    input_tx: mpsc::Sender<ProtoInputMessage>,
-    gamepad_enabled: bool,
-    gamepad_deadzone: f32,
-) -> Result<()> {
-    if gamepad_enabled {
-        let tx_gamepad = input_tx.clone();
-        let deadzone = normalize_gamepad_deadzone(gamepad_deadzone);
-        thread::spawn(move || {
-            let mut gilrs = match Gilrs::new() {
-                Ok(g) => g,
-                Err(e) => {
-                    warn!("gilrs init failed: {}", e);
-                    return;
-                }
-            };
-            loop {
-                while let Some(Event { id, event, .. }) = gilrs.next_event() {
-                    let gamepad_id = Into::<usize>::into(id) as u32;
-                    let mut msg = ProtoInputMessage {
-                        timestamp_us: now_us(),
-                        event: None,
-                    };
-                    match event {
-                        GilrsEventType::ButtonPressed(button, _) => {
-                            msg.event = Some(rift_core::input_message::Event::Gamepad(
-                                rift_core::GamepadMessage {
-                                    gamepad_id,
-                                    buttons: vec![rift_core::GamepadButton {
-                                        button: button as u32,
-                                        pressed: true,
-                                    }],
-                                    axes: vec![],
-                                },
-                            ));
-                        }
-                        GilrsEventType::ButtonReleased(button, _) => {
-                            msg.event = Some(rift_core::input_message::Event::Gamepad(
-                                rift_core::GamepadMessage {
-                                    gamepad_id,
-                                    buttons: vec![rift_core::GamepadButton {
-                                        button: button as u32,
-                                        pressed: false,
-                                    }],
-                                    axes: vec![],
-                                },
-                            ));
-                        }
-                        GilrsEventType::AxisChanged(axis, value, _) => {
-                            msg.event = Some(rift_core::input_message::Event::Gamepad(
-                                rift_core::GamepadMessage {
-                                    gamepad_id,
-                                    axes: vec![rift_core::GamepadAxis {
-                                        axis: axis as u32,
-                                        value: apply_gamepad_deadzone(value, deadzone),
-                                    }],
-                                    buttons: vec![],
-                                },
-                            ));
-                        }
-                        _ => continue,
-                    }
-                    if tx_gamepad.blocking_send(msg).is_err() {
-                        return;
-                    }
-                }
-                thread::sleep(Duration::from_millis(8));
-            }
-        });
-    }
-
-    let keyboard = find_device(DeviceKind::Keyboard)?;
-    if keyboard.is_none() {
-        warn!("no keyboard input device found");
-    }
-    let mouse = find_device(DeviceKind::Mouse)?;
-    if mouse.is_none() {
-        warn!("no mouse input device found");
-    }
-
-    if let Some(mut keyboard) = keyboard {
-        let tx = input_tx.clone();
-        thread::spawn(move || loop {
-            let mut had_events = false;
-            if let Ok(events) = keyboard.fetch_events() {
-                for event in events {
-                    had_events = true;
-                    if event.event_type() == EventType::KEY {
-                        let keycode = event.code();
-                        let pressed = event.value() != 0;
-                        let input = ProtoInputMessage {
-                            event: Some(rift_core::input_message::Event::Key(rift_core::Key {
-                                keycode: keycode as u32,
-                                pressed,
-                            })),
-                            timestamp_us: now_us(),
-                        };
-                        if tx.blocking_send(input).is_err() {
-                            return;
-                        }
-                    }
-                }
-            }
-            if !had_events {
-                thread::sleep(Duration::from_millis(1));
-            }
-        });
-    }
-
-    if let Some(mut mouse) = mouse {
-        let _tx = input_tx;
-        thread::spawn(move || {
-            loop {
-                let mut had_events = false;
-                if let Ok(events) = mouse.fetch_events() {
-                    for _event in events {
-                        had_events = true;
-                        // ... simple mouse handling ...
-                    }
-                }
-                if !had_events {
-                    thread::sleep(Duration::from_millis(1));
-                }
-            }
-        });
-    }
-    Ok(())
-}
-
-#[cfg(not(target_os = "linux"))]
-fn spawn_input_threads(
-    input_tx: mpsc::Sender<ProtoInputMessage>,
-    gamepad_enabled: bool,
-    gamepad_deadzone: f32,
-) -> Result<()> {
-    if gamepad_enabled {
-        let tx_gamepad = input_tx.clone();
-        let deadzone = normalize_gamepad_deadzone(gamepad_deadzone);
-        thread::spawn(move || {
-            let mut gilrs = match Gilrs::new() {
-                Ok(g) => g,
-                Err(e) => {
-                    warn!("gilrs init failed: {}", e);
-                    return;
-                }
-            };
-            loop {
-                while let Some(Event { id, event, .. }) = gilrs.next_event() {
-                    let gamepad_id = Into::<usize>::into(id) as u32;
-                    let mut msg = ProtoInputMessage {
-                        timestamp_us: now_us(),
-                        event: None,
-                    };
-                    match event {
-                        GilrsEventType::ButtonPressed(button, _) => {
-                            msg.event = Some(rift_core::input_message::Event::Gamepad(
-                                rift_core::GamepadMessage {
-                                    gamepad_id,
-                                    buttons: vec![rift_core::GamepadButton {
-                                        button: button as u32,
-                                        pressed: true,
-                                    }],
-                                    axes: vec![],
-                                },
-                            ));
-                        }
-                        GilrsEventType::ButtonReleased(button, _) => {
-                            msg.event = Some(rift_core::input_message::Event::Gamepad(
-                                rift_core::GamepadMessage {
-                                    gamepad_id,
-                                    buttons: vec![rift_core::GamepadButton {
-                                        button: button as u32,
-                                        pressed: false,
-                                    }],
-                                    axes: vec![],
-                                },
-                            ));
-                        }
-                        GilrsEventType::AxisChanged(axis, value, _) => {
-                            msg.event = Some(rift_core::input_message::Event::Gamepad(
-                                rift_core::GamepadMessage {
-                                    gamepad_id,
-                                    axes: vec![rift_core::GamepadAxis {
-                                        axis: axis as u32,
-                                        value: apply_gamepad_deadzone(value, deadzone),
-                                    }],
-                                    buttons: vec![],
-                                },
-                            ));
-                        }
-                        _ => continue,
-                    }
-                    if tx_gamepad.blocking_send(msg).is_err() {
-                        return;
-                    }
-                }
-                thread::sleep(Duration::from_millis(8));
-            }
-        });
-    }
-
-    thread::spawn(move || loop {
-        thread::sleep(Duration::from_secs(2));
-        let press = ProtoInputMessage {
-            event: Some(rift_core::input_message::Event::Key(rift_core::Key {
-                keycode: 30,
-                pressed: true,
-            })),
-            timestamp_us: now_us(),
-        };
-        if input_tx.blocking_send(press).is_err() {
-            break;
-        }
-        thread::sleep(Duration::from_millis(100));
-        let release = ProtoInputMessage {
-            event: Some(rift_core::input_message::Event::Key(rift_core::Key {
-                keycode: 30,
-                pressed: false,
-            })),
-            timestamp_us: now_us(),
-        };
-        if input_tx.blocking_send(release).is_err() {
-            break;
-        }
+        Err(anyhow!("no wavry hosts discovered"))
     });
-    Ok(())
-}
-
-#[cfg(target_os = "linux")]
-enum DeviceKind {
-    Keyboard,
-    Mouse,
-}
-
-#[cfg(target_os = "linux")]
-fn is_keyboard(device: &Device) -> bool {
-    let keys = match device.supported_keys() {
-        Some(keys) => keys,
-        None => return false,
-    };
-    keys.contains(Key::KEY_A)
-        || keys.contains(Key::KEY_Z)
-        || keys.contains(Key::KEY_ENTER)
-        || keys.contains(Key::KEY_SPACE)
-}
-
-#[cfg(target_os = "linux")]
-fn is_mouse(device: &Device) -> bool {
-    let rel = match device.supported_relative_axes() {
-        Some(rel) => rel,
-        None => return false,
-    };
-    let keys = device.supported_keys();
-    let rel_ok = rel.contains(RelativeAxisType::REL_X) && rel.contains(RelativeAxisType::REL_Y);
-    let btn_ok = keys
-        .map(|k| k.contains(Key::BTN_LEFT) || k.contains(Key::BTN_RIGHT))
-        .unwrap_or(false);
-    rel_ok && btn_ok
-}
-
-#[cfg(target_os = "linux")]
-fn find_device(kind: DeviceKind) -> Result<Option<Device>> {
-    let mut fallback: Option<Device> = None;
-    for (_path, device) in evdev::enumerate() {
-        match kind {
-            DeviceKind::Keyboard => {
-                if is_keyboard(&device) {
-                    return Ok(Some(device));
-                }
-                if fallback.is_none() && device.supported_keys().is_some() {
-                    fallback = Some(device);
-                }
-            }
-            DeviceKind::Mouse => {
-                if is_mouse(&device) {
-                    return Ok(Some(device));
-                }
-                if fallback.is_none() && device.supported_relative_axes().is_some() {
-                    fallback = Some(device);
-                }
-            }
-        }
-    }
-    Ok(fallback)
-}
-
-pub fn create_hello_base64(client_name: String, public_addr: Option<String>) -> Result<String> {
-    let supported_codecs = probe_supported_codecs();
-
-    let supported_codecs: Vec<i32> = supported_codecs
-        .into_iter()
-        .map(|c| match c {
-            Codec::Av1 => RiftCodec::Av1 as i32,
-            Codec::Hevc => RiftCodec::Hevc as i32,
-            Codec::H264 => RiftCodec::H264 as i32,
-        })
-        .collect();
-
-    let hello = ProtoHello {
-        client_name,
-        platform: local_platform() as i32,
-        supported_codecs,
-        max_resolution: Some(ProtoResolution {
-            width: 1920,
-            height: 1080,
-        }),
-        max_fps: 60,
-        input_caps: 0xF,
-        protocol_version: RIFT_VERSION as u32,
-        public_addr: public_addr.unwrap_or_default(),
-    };
-    let msg = ProtoMessage {
-        content: Some(rift_core::message::Content::Control(ProtoControl {
-            content: Some(rift_core::control_message::Content::Hello(hello)),
-        })),
-    };
-    let bytes = encode_msg(&msg);
-    Ok(general_purpose::STANDARD.encode(bytes))
-}
-
-pub fn create_hello_ack_base64(
-    accepted: bool,
-    session_id: [u8; 16],
-    session_alias: u32,
-    public_addr: Option<String>,
-    width: u32,
-    height: u32,
-    selected_codec: RiftCodec,
-) -> Result<String> {
-    let ack = rift_core::HelloAck {
-        accepted,
-        selected_codec: selected_codec as i32,
-        stream_resolution: Some(ProtoResolution { width, height }),
-        fps: 60,
-        initial_bitrate_kbps: 8000,
-        keyframe_interval_ms: 2000,
-        session_id: session_id.to_vec(),
-        session_alias,
-        public_addr: public_addr.unwrap_or_default(),
-    };
-    let msg = ProtoMessage {
-        content: Some(rift_core::message::Content::Control(ProtoControl {
-            content: Some(rift_core::control_message::Content::HelloAck(ack)),
-        })),
-    };
-    let bytes = encode_msg(&msg);
-    Ok(general_purpose::STANDARD.encode(bytes))
-}
-
-pub fn decode_hello_base64(b64: &str) -> Result<ProtoHello> {
-    let bytes = general_purpose::STANDARD.decode(b64)?;
-    let msg = decode_msg(&bytes)?;
-    match msg.content {
-        Some(rift_core::message::Content::Control(ctrl)) => match ctrl.content {
-            Some(rift_core::control_message::Content::Hello(h)) => Ok(h),
-            _ => Err(anyhow!("Not a Hello message")),
-        },
-        _ => Err(anyhow!("Not a Control message")),
-    }
-}
-
-pub fn decode_hello_ack_base64(b64: &str) -> Result<rift_core::HelloAck> {
-    let bytes = general_purpose::STANDARD.decode(b64)?;
-    let msg = decode_msg(&bytes)?;
-    match msg.content {
-        Some(rift_core::message::Content::Control(ctrl)) => match ctrl.content {
-            Some(rift_core::control_message::Content::HelloAck(a)) => Ok(a),
-            _ => Err(anyhow!("Not a HelloAck message")),
-        },
-        _ => Err(anyhow!("Not a Control message")),
-    }
-}
-fn now_us() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_micros() as u64
-}
-
-struct ArrivalJitter {
-    last_arrival_us: Option<u64>,
-    ia_avg_us: f64,
-    jitter_us: f64,
-}
-
-impl ArrivalJitter {
-    fn new() -> Self {
-        Self {
-            last_arrival_us: None,
-            ia_avg_us: 0.0,
-            jitter_us: 0.0,
-        }
-    }
-
-    fn on_arrival(&mut self, arrival_us: u64) {
-        if let Some(last) = self.last_arrival_us {
-            let ia = arrival_us.saturating_sub(last) as f64;
-            if self.ia_avg_us == 0.0 {
-                self.ia_avg_us = ia;
-            } else {
-                self.ia_avg_us += (ia - self.ia_avg_us) / 16.0;
-            }
-            let deviation = (ia - self.ia_avg_us).abs();
-            self.jitter_us += (deviation - self.jitter_us) / 16.0;
-        }
-        self.last_arrival_us = Some(arrival_us);
-    }
-
-    fn jitter_us(&self) -> u32 {
-        self.jitter_us.max(0.0) as u32
-    }
-
-    fn jitter_us_f64(&self) -> f64 {
-        self.jitter_us.max(0.0)
-    }
-}
-
-struct RttTracker {
-    smooth_us: f64,
-}
-
-impl RttTracker {
-    fn new() -> Self {
-        Self { smooth_us: 0.0 }
-    }
-
-    fn on_sample(&mut self, rtt_us: u64) -> f64 {
-        if self.smooth_us == 0.0 {
-            self.smooth_us = rtt_us as f64;
-        } else {
-            self.smooth_us = 0.875 * self.smooth_us + 0.125 * (rtt_us as f64);
-        }
-        self.smooth_us
-    }
-}
-
-struct NackWindow {
-    window: u64,
-    highest: Option<u64>,
-    received: BTreeSet<u64>,
-    missing: BTreeSet<u64>,
-}
-
-impl NackWindow {
-    fn new(window: u64) -> Self {
-        Self {
-            window,
-            highest: None,
-            received: BTreeSet::new(),
-            missing: BTreeSet::new(),
-        }
-    }
-
-    fn on_packet(&mut self, packet_id: u64) -> Vec<u64> {
-        let mut newly_missing = Vec::new();
-        if let Some(highest) = self.highest {
-            if packet_id > highest + 1 {
-                let gap_start = highest + 1;
-                let gap_end = packet_id - 1;
-                let min_start = packet_id.saturating_sub(self.window).max(gap_start);
-                for id in min_start..=gap_end {
-                    if !self.received.contains(&id) && !self.missing.contains(&id) {
-                        self.missing.insert(id);
-                        newly_missing.push(id);
-                    }
-                }
-                self.highest = Some(packet_id);
-            } else if packet_id > highest {
-                self.highest = Some(packet_id);
-            }
-        } else {
-            self.highest = Some(packet_id);
-        }
-
-        self.received.insert(packet_id);
-        self.missing.remove(&packet_id);
-        self.evict_old();
-        newly_missing
-    }
-
-    fn evict_old(&mut self) {
-        if let Some(highest) = self.highest {
-            let cutoff = highest.saturating_sub(self.window);
-            self.received = self.received.split_off(&cutoff);
-            self.missing = self.missing.split_off(&cutoff);
-        }
-    }
-}
-
-struct JitterBuffer {
-    target_delay_us: u64,
-    queue: VecDeque<BufferedFrame>,
-}
-
-struct BufferedFrame {
-    arrival_us: u64,
-    frame: AssembledFrame,
-}
-
-impl JitterBuffer {
-    fn new() -> Self {
-        Self {
-            target_delay_us: 0,
-            queue: VecDeque::new(),
-        }
-    }
-
-    fn update(&mut self, jitter_us: f64) {
-        if jitter_us > JITTER_GROW_THRESHOLD_US {
-            self.target_delay_us = (self.target_delay_us + 1_000).min(JITTER_MAX_BUFFER_US);
-        } else if jitter_us < JITTER_SHRINK_THRESHOLD_US {
-            self.target_delay_us = self.target_delay_us.saturating_sub(500);
-        }
-    }
-
-    fn push(&mut self, frame: AssembledFrame, arrival_us: u64) {
-        self.queue.push_back(BufferedFrame { arrival_us, frame });
-    }
-
-    fn pop_ready(&mut self, now_us: u64) -> Option<AssembledFrame> {
-        if let Some(front) = self.queue.front() {
-            if now_us.saturating_sub(front.arrival_us) >= self.target_delay_us {
-                return self.queue.pop_front().map(|f| f.frame);
-            }
-        }
-        None
-    }
+    time::timeout(timeout, handle).await??
 }

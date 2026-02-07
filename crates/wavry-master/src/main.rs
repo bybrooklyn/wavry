@@ -17,7 +17,7 @@ use axum::{
 use clap::Parser;
 use std::sync::Arc;
 use tower_http::cors::{AllowOrigin, CorsLayer};
-use tracing::info;
+use tracing::{info, warn};
 
 use ed25519_dalek::{Signature, Verifier, VerifyingKey};
 use futures_util::{SinkExt, StreamExt};
@@ -127,7 +127,23 @@ async fn main() -> Result<()> {
     let state = Arc::new(AppState {
         challenges: Mutex::new(HashMap::new()),
         peers: Arc::new(RwLock::new(HashMap::new())),
-        insecure_dev: args.insecure_dev || env_bool("WAVRY_MASTER_INSECURE_DEV", false),
+        insecure_dev: {
+            let requested = args.insecure_dev || env_bool("WAVRY_MASTER_INSECURE_DEV", false);
+            if requested {
+                #[cfg(feature = "insecure-dev-auth")]
+                {
+                    info!("Insecure dev mode ENABLED via feature-gate and flag");
+                    true
+                }
+                #[cfg(not(feature = "insecure-dev-auth"))]
+                {
+                    warn!("Insecure dev mode requested but 'insecure-dev-auth' feature is NOT enabled. Staying in secure mode.");
+                    false
+                }
+            } else {
+                false
+            }
+        },
     });
 
     let app = Router::new()
@@ -154,6 +170,7 @@ async fn health_check() -> &'static str {
     "OK"
 }
 
+#[cfg(feature = "insecure-dev-auth")]
 async fn handle_register(
     axum::extract::State(state): axum::extract::State<Arc<AppState>>,
     Json(payload): Json<RegisterRequest>,
@@ -191,6 +208,15 @@ async fn handle_register(
     })))
 }
 
+#[cfg(not(feature = "insecure-dev-auth"))]
+async fn handle_register(
+    axum::extract::State(_): axum::extract::State<Arc<AppState>>,
+    Json(_): Json<RegisterRequest>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    Err(StatusCode::NOT_IMPLEMENTED)
+}
+
+#[cfg(feature = "insecure-dev-auth")]
 async fn handle_login(
     axum::extract::State(state): axum::extract::State<Arc<AppState>>,
     Json(payload): Json<RegisterRequest>,
@@ -198,6 +224,15 @@ async fn handle_login(
     handle_register(axum::extract::State(state), Json(payload)).await
 }
 
+#[cfg(not(feature = "insecure-dev-auth"))]
+async fn handle_login(
+    axum::extract::State(_): axum::extract::State<Arc<AppState>>,
+    Json(_): Json<RegisterRequest>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    Err(StatusCode::NOT_IMPLEMENTED)
+}
+
+#[cfg(feature = "insecure-dev-auth")]
 async fn handle_verify(
     axum::extract::State(state): axum::extract::State<Arc<AppState>>,
     Json(payload): Json<VerifyRequest>,
@@ -247,6 +282,14 @@ async fn handle_verify(
     }
 }
 
+#[cfg(not(feature = "insecure-dev-auth"))]
+async fn handle_verify(
+    axum::extract::State(_): axum::extract::State<Arc<AppState>>,
+    Json(_): Json<VerifyRequest>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    Err(StatusCode::NOT_IMPLEMENTED)
+}
+
 // --- WebSocket ---
 async fn ws_handler(
     ws: WebSocketUpgrade,
@@ -268,6 +311,7 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
     let (tx, mut rx) = mpsc::channel::<Message>(128);
 
     // Outgoing loop
+    let tx_clone = tx.clone();
     tokio::spawn(async move {
         while let Some(msg) = rx.recv().await {
             if sender.send(msg).await.is_err() {
@@ -293,11 +337,12 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
                     // Master doesn't handle RIFT signaling
                 }
                 SignalMessage::BIND { token } => {
-                    if !state.insecure_dev {
-                        let _ = tx.try_send(Message::Text(
+                    #[cfg(not(feature = "insecure-dev-auth"))]
+                    {
+                        let _ = tx_clone.try_send(Message::Text(
                             serde_json::to_string(&SignalMessage::ERROR {
                                 code: None,
-                                message: "Master WS bind disabled outside insecure dev mode".into(),
+                                message: "Master WS bind disabled (feature-gated)".into(),
                             })
                             .unwrap_or_else(|_| {
                                 "{\"type\":\"ERROR\",\"payload\":{\"message\":\"disabled\"}}".into()
@@ -306,26 +351,42 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
                         break;
                     }
 
-                    if token.len() < 8 {
-                        let _ = tx.try_send(Message::Text(
-                            serde_json::to_string(&SignalMessage::ERROR {
-                                code: None,
-                                message: "Invalid token".into(),
-                            })
-                            .unwrap_or_else(|_| {
-                                "{\"type\":\"ERROR\",\"payload\":{\"message\":\"invalid token\"}}"
-                                    .into()
-                            }),
-                        ));
-                        continue;
-                    }
+                    #[cfg(feature = "insecure-dev-auth")]
+                    {
+                        if !state.insecure_dev {
+                            let _ = tx_clone.try_send(Message::Text(
+                                serde_json::to_string(&SignalMessage::ERROR {
+                                    code: None,
+                                    message: "Master WS bind disabled outside insecure dev mode".into(),
+                                })
+                                .unwrap_or_else(|_| {
+                                    "{\"type\":\"ERROR\",\"payload\":{\"message\":\"disabled\"}}".into()
+                                }),
+                            ));
+                            break;
+                        }
 
-                    // MOCK: In prod, verify token against DB/auth service
-                    let prefix: String = token.chars().take(8).collect();
-                    let username = format!("user_{}", prefix);
-                    my_username = Some(username.clone());
-                    state.peers.write().await.insert(username, tx.clone());
-                    info!("Peer bound: {}", my_username.as_ref().unwrap());
+                        if token.len() < 8 {
+                            let _ = tx_clone.try_send(Message::Text(
+                                serde_json::to_string(&SignalMessage::ERROR {
+                                    code: None,
+                                    message: "Invalid token".into(),
+                                })
+                                .unwrap_or_else(|_| {
+                                    "{\"type\":\"ERROR\",\"payload\":{\"message\":\"invalid token\"}}"
+                                        .into()
+                                }),
+                            ));
+                            continue;
+                        }
+
+                        // MOCK: In prod, verify token against DB/auth service
+                        let prefix: String = token.chars().take(8).collect();
+                        let username = format!("user_{}", prefix);
+                        my_username = Some(username.clone());
+                        state.peers.write().await.insert(username, tx_clone.clone());
+                        info!("Peer bound: {}", my_username.as_ref().unwrap());
+                    }
                 }
                 SignalMessage::OFFER {
                     target_username,

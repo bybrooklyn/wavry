@@ -51,8 +51,8 @@
     baselineSettingsFingerprint = settingsFingerprint();
   }
 
-  onMount(() => {
-    appState.loadFromStorage();
+  onMount(async () => {
+    await appState.initialize();
     appState.refreshPcvrStatus();
     appState.loadMonitors();
     captureSettingsBaseline();

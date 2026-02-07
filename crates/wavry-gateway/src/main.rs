@@ -196,9 +196,11 @@ async fn main() -> anyhow::Result<()> {
 
     #[cfg(feature = "webtransport-runtime")]
     {
-        if env_bool("WAVRY_ENABLE_WEBTRANSPORT_RUNTIME", false) {
+        if env_bool("WAVRY_ENABLE_INSECURE_WEBTRANSPORT_RUNTIME", false) {
             let bind_addr = std::env::var("WEBTRANSPORT_BIND_ADDR")
                 .unwrap_or_else(|_| "127.0.0.1:4444".to_string());
+            let socket_addr: SocketAddr = bind_addr.parse().expect("invalid WEBTRANSPORT_BIND_ADDR");
+            check_public_bind_allowed(socket_addr).expect("WebTransport bind rejected");
             tokio::spawn(async move {
                 if let Err(err) = web::run_webtransport_runtime(&bind_addr).await {
                     tracing::error!("WebTransport runtime crashed: {}", err);
@@ -206,7 +208,7 @@ async fn main() -> anyhow::Result<()> {
             });
         } else {
             tracing::warn!(
-                "webtransport runtime disabled; set WAVRY_ENABLE_WEBTRANSPORT_RUNTIME=1 to enable"
+                "webtransport runtime disabled; set WAVRY_ENABLE_INSECURE_WEBTRANSPORT_RUNTIME=1 to enable (NOT FOR PRODUCTION)"
             );
         }
     }

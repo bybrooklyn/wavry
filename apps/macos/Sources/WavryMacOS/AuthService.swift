@@ -1,11 +1,66 @@
 import Foundation
 import Combine
 
-struct LoginResponse: Codable {
+struct LoginResponse: Decodable {
     let token: String
     let user_id: String
     let email: String
     let totp_required: Bool
+    let username: String?
+
+    private struct SessionPayload: Codable {
+        let token: String
+    }
+
+    private struct UserPayload: Codable {
+        let id: String
+        let email: String
+        let username: String?
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case token
+        case user_id
+        case email
+        case username
+        case totp_required
+        case user
+        case session
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+
+        let directToken = try container.decodeIfPresent(String.self, forKey: .token)
+        let directUserId = try container.decodeIfPresent(String.self, forKey: .user_id)
+        let directEmail = try container.decodeIfPresent(String.self, forKey: .email)
+        let directUsername = try container.decodeIfPresent(String.self, forKey: .username)
+        if let directToken, let directUserId, let directEmail {
+            token = directToken
+            user_id = directUserId
+            email = directEmail
+            username = directUsername
+            totp_required = try container.decodeIfPresent(Bool.self, forKey: .totp_required) ?? false
+            return
+        }
+
+        let nestedSession = try container.decodeIfPresent(SessionPayload.self, forKey: .session)
+        let nestedUser = try container.decodeIfPresent(UserPayload.self, forKey: .user)
+        if let nestedSession, let nestedUser {
+            token = nestedSession.token
+            user_id = nestedUser.id
+            email = nestedUser.email
+            username = nestedUser.username
+            totp_required = false
+            return
+        }
+
+        throw DecodingError.dataCorruptedError(
+            forKey: .token,
+            in: container,
+            debugDescription: "Unsupported auth response payload.",
+        )
+    }
 }
 
 struct ErrorResponse: Codable {

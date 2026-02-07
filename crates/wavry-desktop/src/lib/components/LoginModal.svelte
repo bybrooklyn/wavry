@@ -52,11 +52,12 @@
                     password,
                     display_name: appState.displayName || "Unknown", // Fallback
                     username,
+                    server,
                 });
                 isRegistering = false;
                 errorMessage = "Account created! Please sign in.";
             } else {
-                await appState.login({ email, password });
+                await appState.login({ email, password, server });
                 close();
             }
         } catch (e: unknown) {

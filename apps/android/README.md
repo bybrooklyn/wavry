@@ -54,6 +54,15 @@ Useful variants:
 ./scripts/run-android.sh --mobile --serial <adb-device-id>
 ```
 
+## Release APK signing behavior
+
+- Local release builds are signed with the Android debug keystore so they can be installed directly for testing.
+- For production signing, set:
+  - `WAVRY_ANDROID_RELEASE_STORE_FILE`
+  - `WAVRY_ANDROID_RELEASE_STORE_PASSWORD`
+  - `WAVRY_ANDROID_RELEASE_KEY_ALIAS`
+  - `WAVRY_ANDROID_RELEASE_KEY_PASSWORD`
+
 ## FFI-only
 
 ```bash

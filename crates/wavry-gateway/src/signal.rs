@@ -22,13 +22,21 @@ use uuid::Uuid;
 use crate::db;
 use crate::relay::{RelayMap, RelaySession};
 use crate::security;
+use rift_crypto::seq_window::SequenceWindow;
 
 const WS_OUTBOX_CAPACITY: usize = 128;
 const WS_MAX_TEXT_BYTES: usize = 64 * 1024;
 const WS_MAX_MESSAGES_PER_MINUTE: u32 = 600;
 const MAX_SIGNAL_SDP_BYTES: usize = 32 * 1024;
 const MAX_SIGNAL_CANDIDATE_BYTES: usize = 4096;
+const WS_BIND_TIMEOUT: Duration = Duration::from_secs(10);
+
 static ACTIVE_WS_CONNECTIONS: AtomicUsize = AtomicUsize::new(0);
+static IP_CONNECTIONS: Lazy<Mutex<HashMap<std::net::IpAddr, usize>>> =
+    Lazy::new(|| Mutex::new(HashMap::new()));
+
+use once_cell::sync::Lazy;
+use std::sync::Mutex;
 
 pub type ConnectionMap = Arc<RwLock<HashMap<String, mpsc::Sender<Message>>>>;
 
@@ -132,6 +140,13 @@ fn ws_connection_limit() -> usize {
         .unwrap_or(4096)
 }
 
+fn ws_max_per_ip() -> usize {
+    std::env::var("WAVRY_WS_MAX_PER_IP")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(16)
+}
+
 pub async fn ws_handler(
     ws: WebSocketUpgrade,
     State(connections): State<ConnectionMap>,
@@ -144,7 +159,22 @@ pub async fn ws_handler(
     if !security::ws_origin_allowed(origin) {
         return StatusCode::FORBIDDEN.into_response();
     }
+
+    let ip = addr.ip();
+    {
+        let mut counts = IP_CONNECTIONS.lock().unwrap();
+        let count = counts.get(&ip).cloned().unwrap_or(0);
+        if count >= ws_max_per_ip() {
+            return StatusCode::TOO_MANY_REQUESTS.into_response();
+        }
+        counts.insert(ip, count + 1);
+    }
+
     if ACTIVE_WS_CONNECTIONS.load(Ordering::Relaxed) >= ws_connection_limit() {
+        let mut counts = IP_CONNECTIONS.lock().unwrap();
+        if let Some(count) = counts.get_mut(&ip) {
+            *count = count.saturating_sub(1);
+        }
         return StatusCode::SERVICE_UNAVAILABLE.into_response();
     }
 
@@ -166,407 +196,430 @@ async fn handle_socket(
     let (mut sender, mut receiver) = stream.split();
     let (tx, mut rx) = mpsc::channel::<Message>(WS_OUTBOX_CAPACITY);
 
+    let (disconnect_tx, mut disconnect_rx) = mpsc::channel::<()>(1);
+
     tokio::spawn(async move {
         while let Some(msg) = rx.recv().await {
-            if sender.send(msg).await.is_err() {
+            if let Err(_) = sender.send(msg).await {
                 break;
             }
         }
+        let _ = disconnect_tx.try_send(());
     });
 
     let mut authenticated_username: Option<String> = None;
     let mut message_window_start = Instant::now();
     let mut message_count: u32 = 0;
+    let connection_start = Instant::now();
 
-    while let Some(Ok(msg)) = receiver.next().await {
-        let now = Instant::now();
-        if now.duration_since(message_window_start) >= Duration::from_secs(60) {
-            message_window_start = now;
-            message_count = 0;
-        }
-        message_count = message_count.saturating_add(1);
-        if message_count > WS_MAX_MESSAGES_PER_MINUTE {
-            let _ = send_signal(
-                &tx,
-                &SignalMessage::Error {
-                    message: "Rate limit exceeded".into(),
-                },
-            )
-            .await;
-            break;
-        }
-
-        let text = match msg {
-            Message::Text(text) => text,
-            Message::Binary(_) => {
-                let _ = send_signal(
-                    &tx,
-                    &SignalMessage::Error {
-                        message: "Binary messages are not supported".into(),
-                    },
-                )
-                .await;
+    loop {
+        tokio::select! {
+            _ = disconnect_rx.recv() => {
                 break;
             }
-            Message::Close(_) => break,
-            Message::Ping(_) | Message::Pong(_) => continue,
-        };
+            msg = receiver.next() => {
+                let Some(msg) = msg else { break; };
+                let Ok(msg) = msg else { break; };
 
-        if text.len() > WS_MAX_TEXT_BYTES {
-            let _ = send_signal(
-                &tx,
-                &SignalMessage::Error {
-                    message: "Message too large".into(),
-                },
-            )
-            .await;
-            break;
-        }
-
-        let signal: SignalMessage = match serde_json::from_str(&text) {
-            Ok(signal) => signal,
-            Err(err) => {
-                warn!("invalid JSON from {}: {}", addr, err);
-                let _ = send_signal(
-                    &tx,
-                    &SignalMessage::Error {
-                        message: "Invalid JSON".into(),
-                    },
-                )
-                .await;
-                break;
-            }
-        };
-
-        match signal {
-            SignalMessage::Bind { token } => {
-                if authenticated_username.is_some() {
-                    let _ = send_signal(
-                        &tx,
-                        &SignalMessage::Error {
-                            message: "Already bound".into(),
-                        },
-                    )
-                    .await;
-                    break;
-                }
-
-                if !security::allow_ws_bind_request(&format!("bind:{}", addr.ip())) {
-                    let _ = send_signal(
-                        &tx,
-                        &SignalMessage::Error {
-                            message: "Bind rate limit exceeded".into(),
-                        },
-                    )
-                    .await;
-                    break;
-                }
-
-                if !security::is_valid_session_token(&token) {
-                    let _ = send_signal(
-                        &tx,
-                        &SignalMessage::Error {
-                            message: "Invalid token format".into(),
-                        },
-                    )
-                    .await;
-                    break;
-                }
-
-                let username = match db::get_username_by_session_token(&pool, &token).await {
-                    Ok(Some(username)) => username,
-                    Ok(None) => {
-                        let _ = send_signal(
-                            &tx,
-                            &SignalMessage::Error {
-                                message: "Invalid Token".into(),
-                            },
-                        )
-                        .await;
-                        break;
-                    }
-                    Err(err) => {
-                        warn!("token lookup failed for {}: {}", addr, err);
-                        let _ = send_signal(
-                            &tx,
-                            &SignalMessage::Error {
-                                message: "Token lookup failed".into(),
-                            },
-                        )
-                        .await;
-                        break;
-                    }
-                };
-
-                let replaced = connections
-                    .write()
-                    .await
-                    .insert(username.clone(), tx.clone());
-                if let Some(previous) = replaced {
-                    let _ = try_send_signal(
-                        &previous,
-                        &SignalMessage::Error {
-                            message: "Session replaced by a newer connection".into(),
-                        },
-                    );
-                }
-
-                authenticated_username = Some(username.clone());
-                let _ = send_signal(&tx, &SignalMessage::Bound).await;
-                info!("bound signaling session for user {}", username);
-            }
-            SignalMessage::OfferRift {
-                target_username,
-                hello_base64,
-            } => {
-                let Some(src) = &authenticated_username else {
-                    let _ = send_signal(
-                        &tx,
-                        &SignalMessage::Error {
-                            message: "Bind required before signaling".into(),
-                        },
-                    )
-                    .await;
-                    break;
-                };
-                if !security::is_valid_username(&target_username) || hello_base64.len() > 8192 {
-                    let _ = send_signal(
-                        &tx,
-                        &SignalMessage::Error {
-                            message: "Invalid OFFER_RIFT payload".into(),
-                        },
-                    )
-                    .await;
-                    continue;
-                }
-                relay_message(
-                    &connections,
-                    &target_username,
-                    SignalMessage::OfferRift {
-                        target_username: src.clone(),
-                        hello_base64,
-                    },
-                )
-                .await;
-            }
-            SignalMessage::AnswerRift {
-                target_username,
-                ack_base64,
-            } => {
-                let Some(src) = &authenticated_username else {
-                    let _ = send_signal(
-                        &tx,
-                        &SignalMessage::Error {
-                            message: "Bind required before signaling".into(),
-                        },
-                    )
-                    .await;
-                    break;
-                };
-                if !security::is_valid_username(&target_username) || ack_base64.len() > 8192 {
-                    let _ = send_signal(
-                        &tx,
-                        &SignalMessage::Error {
-                            message: "Invalid ANSWER_RIFT payload".into(),
-                        },
-                    )
-                    .await;
-                    continue;
-                }
-                relay_message(
-                    &connections,
-                    &target_username,
-                    SignalMessage::AnswerRift {
-                        target_username: src.clone(),
-                        ack_base64,
-                    },
-                )
-                .await;
-            }
-            SignalMessage::Offer {
-                target_username,
-                sdp,
-            } => {
-                let Some(src) = &authenticated_username else {
-                    let _ = send_signal(
-                        &tx,
-                        &SignalMessage::Error {
-                            message: "Bind required before signaling".into(),
-                        },
-                    )
-                    .await;
-                    break;
-                };
-                if !security::is_valid_username(&target_username)
-                    || sdp.len() > MAX_SIGNAL_SDP_BYTES
-                {
-                    let _ = send_signal(
-                        &tx,
-                        &SignalMessage::Error {
-                            message: "Invalid OFFER payload".into(),
-                        },
-                    )
-                    .await;
-                    continue;
-                }
-                relay_message(
-                    &connections,
-                    &target_username,
-                    SignalMessage::Offer {
-                        target_username: src.clone(),
-                        sdp,
-                    },
-                )
-                .await;
-            }
-            SignalMessage::Answer {
-                target_username,
-                sdp,
-            } => {
-                let Some(src) = &authenticated_username else {
-                    let _ = send_signal(
-                        &tx,
-                        &SignalMessage::Error {
-                            message: "Bind required before signaling".into(),
-                        },
-                    )
-                    .await;
-                    break;
-                };
-                if !security::is_valid_username(&target_username)
-                    || sdp.len() > MAX_SIGNAL_SDP_BYTES
-                {
-                    let _ = send_signal(
-                        &tx,
-                        &SignalMessage::Error {
-                            message: "Invalid ANSWER payload".into(),
-                        },
-                    )
-                    .await;
-                    continue;
-                }
-                relay_message(
-                    &connections,
-                    &target_username,
-                    SignalMessage::Answer {
-                        target_username: src.clone(),
-                        sdp,
-                    },
-                )
-                .await;
-            }
-            SignalMessage::Candidate {
-                target_username,
-                candidate,
-            } => {
-                let Some(src) = &authenticated_username else {
-                    let _ = send_signal(
-                        &tx,
-                        &SignalMessage::Error {
-                            message: "Bind required before signaling".into(),
-                        },
-                    )
-                    .await;
-                    break;
-                };
-                if !security::is_valid_username(&target_username)
-                    || candidate.len() > MAX_SIGNAL_CANDIDATE_BYTES
-                {
-                    let _ = send_signal(
-                        &tx,
-                        &SignalMessage::Error {
-                            message: "Invalid CANDIDATE payload".into(),
-                        },
-                    )
-                    .await;
-                    continue;
-                }
-                relay_message(
-                    &connections,
-                    &target_username,
-                    SignalMessage::Candidate {
-                        target_username: src.clone(),
-                        candidate,
-                    },
-                )
-                .await;
-            }
-            SignalMessage::RequestRelay { target_username } => {
-                let Some(src) = &authenticated_username else {
-                    let _ = send_signal(
-                        &tx,
-                        &SignalMessage::Error {
-                            message: "Bind required before signaling".into(),
-                        },
-                    )
-                    .await;
-                    break;
-                };
-
-                if !security::is_valid_username(&target_username) {
-                    let _ = send_signal(
-                        &tx,
-                        &SignalMessage::Error {
-                            message: "Invalid target username".into(),
-                        },
-                    )
-                    .await;
-                    continue;
-                }
-
-                let session_id = Uuid::new_v4();
-                let token = random_relay_token();
-                let ttl = relay_session_ttl();
                 let now = Instant::now();
 
-                {
-                    let mut guard = relay_sessions.write().await;
-                    guard.retain(|_, session| now.duration_since(session.created_at) < ttl);
-                    if guard.len() >= relay_session_limit() {
+                // Bind timeout
+                if authenticated_username.is_none() && now.duration_since(connection_start) > WS_BIND_TIMEOUT {
+                    let _ = send_signal(&tx, &SignalMessage::Error { message: "Bind timeout".into() }).await;
+                    break;
+                }
+
+                if now.duration_since(message_window_start) >= Duration::from_secs(60) {
+                    message_window_start = now;
+                    message_count = 0;
+                }
+                message_count = message_count.saturating_add(1);
+                if message_count > WS_MAX_MESSAGES_PER_MINUTE {
+                    let _ = send_signal(
+                        &tx,
+                        &SignalMessage::Error {
+                            message: "Rate limit exceeded".into(),
+                        },
+                    )
+                    .await;
+                    break;
+                }
+
+                let text = match msg {
+                    Message::Text(text) => text,
+                    Message::Binary(_) => {
                         let _ = send_signal(
                             &tx,
                             &SignalMessage::Error {
-                                message: "Relay session capacity reached".into(),
+                                message: "Binary messages are not supported".into(),
                             },
                         )
                         .await;
-                        continue;
+                        break;
                     }
-
-                    guard.insert(
-                        token.clone(),
-                        RelaySession {
-                            host_email: src.clone(),
-                            client_email: target_username.clone(),
-                            session_id,
-                            host_addr: None,
-                            client_addr: None,
-                            created_at: Instant::now(),
-                            bytes_sent: 0,
-                            last_tick: Instant::now(),
-                        },
-                    );
-                }
-
-                let resp = SignalMessage::RelayCredentials {
-                    token: token.clone(),
-                    addr: relay_public_addr(),
-                    session_id,
+                    Message::Close(_) => break,
+                    Message::Ping(_) | Message::Pong(_) => continue,
                 };
 
-                let _ = send_signal(&tx, &resp).await;
-                relay_message(&connections, &target_username, resp).await;
-            }
-            SignalMessage::RelayCredentials { .. }
-            | SignalMessage::Error { .. }
-            | SignalMessage::Bound => {
-                let _ = send_signal(
-                    &tx,
-                    &SignalMessage::Error {
-                        message: "Unsupported client message type".into(),
-                    },
-                )
-                .await;
+                if text.len() > WS_MAX_TEXT_BYTES {
+                    let _ = send_signal(
+                        &tx,
+                        &SignalMessage::Error {
+                            message: "Message too large".into(),
+                        },
+                    )
+                    .await;
+                    break;
+                }
+
+                let signal: SignalMessage = match serde_json::from_str(&text) {
+                    Ok(signal) => signal,
+                    Err(err) => {
+                        warn!("invalid JSON from {}: {}", addr, err);
+                        let _ = send_signal(
+                            &tx,
+                            &SignalMessage::Error {
+                                message: "Invalid JSON".into(),
+                            },
+                        )
+                        .await;
+                        break;
+                    }
+                };
+
+                match signal {
+                    SignalMessage::Bind { token } => {
+                        if authenticated_username.is_some() {
+                            let _ = send_signal(
+                                &tx,
+                                &SignalMessage::Error {
+                                    message: "Already bound".into(),
+                                },
+                            )
+                            .await;
+                            break;
+                        }
+
+                        if !security::allow_ws_bind_request(&format!("bind:{}", addr.ip())) {
+                            let _ = send_signal(
+                                &tx,
+                                &SignalMessage::Error {
+                                    message: "Bind rate limit exceeded".into(),
+                                },
+                            )
+                            .await;
+                            break;
+                        }
+
+                        if !security::is_valid_session_token(&token) {
+                            let _ = send_signal(
+                                &tx,
+                                &SignalMessage::Error {
+                                    message: "Invalid token format".into(),
+                                },
+                            )
+                            .await;
+                            break;
+                        }
+
+                        let username = match db::get_username_by_session_token(&pool, &token).await {
+                            Ok(Some(username)) => username,
+                            Ok(None) => {
+                                let _ = send_signal(
+                                    &tx,
+                                    &SignalMessage::Error {
+                                        message: "Invalid Token".into(),
+                                    },
+                                )
+                                .await;
+                                break;
+                            }
+                            Err(err) => {
+                                warn!("token lookup failed for {}: {}", addr, err);
+                                let _ = send_signal(
+                                    &tx,
+                                    &SignalMessage::Error {
+                                        message: "Token lookup failed".into(),
+                                    },
+                                )
+                                .await;
+                                break;
+                            }
+                        };
+
+                        let replaced = connections
+                            .write()
+                            .await
+                            .insert(username.clone(), tx.clone());
+                        if let Some(previous) = replaced {
+                            let _ = try_send_signal(
+                                &previous,
+                                &SignalMessage::Error {
+                                    message: "Session replaced by a newer connection".into(),
+                                },
+                            );
+                        }
+
+                        authenticated_username = Some(username.clone());
+                        let _ = send_signal(&tx, &SignalMessage::Bound).await;
+                        info!("bound signaling session for user {}", username);
+                    }
+                    SignalMessage::OfferRift {
+                        target_username,
+                        hello_base64,
+                    } => {
+                        let Some(src) = &authenticated_username else {
+                            let _ = send_signal(
+                                &tx,
+                                &SignalMessage::Error {
+                                    message: "Bind required before signaling".into(),
+                                },
+                            )
+                            .await;
+                            break;
+                        };
+                        if !security::is_valid_username(&target_username) || hello_base64.len() > 8192 {
+                            let _ = send_signal(
+                                &tx,
+                                &SignalMessage::Error {
+                                    message: "Invalid OFFER_RIFT payload".into(),
+                                },
+                            )
+                            .await;
+                            continue;
+                        }
+                        relay_message(
+                            &connections,
+                            &target_username,
+                            SignalMessage::OfferRift {
+                                target_username: src.clone(),
+                                hello_base64,
+                            },
+                        )
+                        .await;
+                    }
+                    SignalMessage::AnswerRift {
+                        target_username,
+                        ack_base64,
+                    } => {
+                        let Some(src) = &authenticated_username else {
+                            let _ = send_signal(
+                                &tx,
+                                &SignalMessage::Error {
+                                    message: "Bind required before signaling".into(),
+                                },
+                            )
+                            .await;
+                            break;
+                        };
+                        if !security::is_valid_username(&target_username) || ack_base64.len() > 8192 {
+                            let _ = send_signal(
+                                &tx,
+                                &SignalMessage::Error {
+                                    message: "Invalid ANSWER_RIFT payload".into(),
+                                },
+                            )
+                            .await;
+                            continue;
+                        }
+                        relay_message(
+                            &connections,
+                            &target_username,
+                            SignalMessage::AnswerRift {
+                                target_username: src.clone(),
+                                ack_base64,
+                            },
+                        )
+                        .await;
+                    }
+                    SignalMessage::Offer {
+                        target_username,
+                        sdp,
+                    } => {
+                        let Some(src) = &authenticated_username else {
+                            let _ = send_signal(
+                                &tx,
+                                &SignalMessage::Error {
+                                    message: "Bind required before signaling".into(),
+                                },
+                            )
+                            .await;
+                            break;
+                        };
+                        if !security::is_valid_username(&target_username)
+                            || sdp.len() > MAX_SIGNAL_SDP_BYTES
+                        {
+                            let _ = send_signal(
+                                &tx,
+                                &SignalMessage::Error {
+                                    message: "Invalid OFFER payload".into(),
+                                },
+                            )
+                            .await;
+                            continue;
+                        }
+                        relay_message(
+                            &connections,
+                            &target_username,
+                            SignalMessage::Offer {
+                                target_username: src.clone(),
+                                sdp,
+                            },
+                        )
+                        .await;
+                    }
+                    SignalMessage::Answer {
+                        target_username,
+                        sdp,
+                    } => {
+                        let Some(src) = &authenticated_username else {
+                            let _ = send_signal(
+                                &tx,
+                                &SignalMessage::Error {
+                                    message: "Bind required before signaling".into(),
+                                },
+                            )
+                            .await;
+                            break;
+                        };
+                        if !security::is_valid_username(&target_username)
+                            || sdp.len() > MAX_SIGNAL_SDP_BYTES
+                        {
+                            let _ = send_signal(
+                                &tx,
+                                &SignalMessage::Error {
+                                    message: "Invalid ANSWER payload".into(),
+                                },
+                            )
+                            .await;
+                            continue;
+                        }
+                        relay_message(
+                            &connections,
+                            &target_username,
+                            SignalMessage::Answer {
+                                target_username: src.clone(),
+                                sdp,
+                            },
+                        )
+                        .await;
+                    }
+                    SignalMessage::Candidate {
+                        target_username,
+                        candidate,
+                    } => {
+                        let Some(src) = &authenticated_username else {
+                            let _ = send_signal(
+                                &tx,
+                                &SignalMessage::Error {
+                                    message: "Bind required before signaling".into(),
+                                },
+                            )
+                            .await;
+                            break;
+                        };
+                        if !security::is_valid_username(&target_username)
+                            || candidate.len() > MAX_SIGNAL_CANDIDATE_BYTES
+                        {
+                            let _ = send_signal(
+                                &tx,
+                                &SignalMessage::Error {
+                                    message: "Invalid CANDIDATE payload".into(),
+                                },
+                            )
+                            .await;
+                            continue;
+                        }
+                        relay_message(
+                            &connections,
+                            &target_username,
+                            SignalMessage::Candidate {
+                                target_username: src.clone(),
+                                candidate,
+                            },
+                        )
+                        .await;
+                    }
+                    SignalMessage::RequestRelay { target_username } => {
+                        let Some(src) = &authenticated_username else {
+                            let _ = send_signal(
+                                &tx,
+                                &SignalMessage::Error {
+                                    message: "Bind required before signaling".into(),
+                                },
+                            )
+                            .await;
+                            break;
+                        };
+
+                        if !security::is_valid_username(&target_username) {
+                            let _ = send_signal(
+                                &tx,
+                                &SignalMessage::Error {
+                                    message: "Invalid target username".into(),
+                                },
+                            )
+                            .await;
+                            continue;
+                        }
+
+                        let session_id = Uuid::new_v4();
+                        let token = random_relay_token();
+                        let ttl = relay_session_ttl();
+                        let now = Instant::now();
+
+                        {
+                            let mut guard = relay_sessions.write().await;
+                            guard.retain(|_, session| now.duration_since(session.created_at) < ttl);
+                            if guard.len() >= relay_session_limit() {
+                                let _ = send_signal(
+                                    &tx,
+                                    &SignalMessage::Error {
+                                        message: "Relay session capacity reached".into(),
+                                    },
+                                )
+                                .await;
+                                continue;
+                            }
+
+                            guard.insert(
+                                token.clone(),
+                                RelaySession {
+                                    host_email: src.clone(),
+                                    client_email: target_username.clone(),
+                                    session_id,
+                                    host_addr: None,
+                                    client_addr: None,
+                                    created_at: Instant::now(),
+                                    bytes_sent: 0,
+                                    last_tick: Instant::now(),
+                                    host_seq: SequenceWindow::new(),
+                                    client_seq: SequenceWindow::new(),
+                                },
+                            );
+                        }
+
+                        let resp = SignalMessage::RelayCredentials {
+                            token: token.clone(),
+                            addr: relay_public_addr(),
+                            session_id,
+                        };
+
+                        let _ = send_signal(&tx, &resp).await;
+                        relay_message(&connections, &target_username, resp).await;
+                    }
+                    SignalMessage::RelayCredentials { .. }
+                    | SignalMessage::Error { .. }
+                    | SignalMessage::Bound => {
+                        let _ = send_signal(
+                            &tx,
+                            &SignalMessage::Error {
+                                message: "Unsupported client message type".into(),
+                            },
+                        )
+                        .await;
+                    }
+                }
             }
         }
     }
@@ -576,6 +629,15 @@ async fn handle_socket(
         connections.write().await.remove(&user);
     }
     ACTIVE_WS_CONNECTIONS.fetch_sub(1, Ordering::Relaxed);
+    {
+        let mut counts = IP_CONNECTIONS.lock().unwrap();
+        if let Some(count) = counts.get_mut(&addr.ip()) {
+            *count = count.saturating_sub(1);
+            if *count == 0 {
+                counts.remove(&addr.ip());
+            }
+        }
+    }
 }
 
 async fn relay_message(connections: &ConnectionMap, target_username: &str, msg: SignalMessage) {

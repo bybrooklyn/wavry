@@ -47,6 +47,8 @@ typedef struct {
 } WavryStats;
 
 int wavry_get_stats(WavryStats *out);
+int wavry_copy_last_error(char *out_buffer, uint32_t out_buffer_len);
+int wavry_copy_last_cloud_status(char *out_buffer, uint32_t out_buffer_len);
 
 #ifdef __cplusplus
 }

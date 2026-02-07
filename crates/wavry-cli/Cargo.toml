@@ -12,6 +12,8 @@ serde.workspace = true
 serde_json.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
+tokio = { workspace = true, features = ["full"] }
+bytes = { workspace = true }
 
 # Crypto
 ed25519-dalek.workspace = true

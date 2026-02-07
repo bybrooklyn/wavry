@@ -11,7 +11,7 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
 
 use rand::{thread_rng, Rng};
 use totp_rs::{Algorithm, TOTP};
@@ -50,6 +50,12 @@ pub struct TotpSetupResponse {
 pub struct AuthResponse {
     pub user: User,
     pub session: Session,
+    // Compatibility fields for clients that still parse a flat auth payload.
+    pub token: String,
+    pub user_id: String,
+    pub email: String,
+    pub username: String,
+    pub totp_required: bool,
 }
 
 #[derive(Serialize)]
@@ -72,12 +78,45 @@ fn error_response(status: StatusCode, message: impl Into<String>) -> axum::respo
         .into_response()
 }
 
-fn rate_limit_key(scope: &str, addr: SocketAddr) -> String {
-    format!("{scope}:{}", addr.ip())
+fn auth_response(user: User, session: Session) -> AuthResponse {
+    AuthResponse {
+        token: session.token.clone(),
+        user_id: user.id.clone(),
+        email: user.email.clone(),
+        username: user.username.clone(),
+        totp_required: false,
+        user,
+        session,
+    }
 }
 
-fn ensure_auth_rate_limit(scope: &str, addr: SocketAddr) -> bool {
-    security::allow_auth_request(&rate_limit_key(scope, addr))
+fn get_client_ip(headers: &HeaderMap, direct_addr: SocketAddr) -> IpAddr {
+    // 1. Try X-Forwarded-For
+    if let Some(forwarded_for) = headers.get("x-forwarded-for").and_then(|v| v.to_str().ok()) {
+        if let Some(first_ip) = forwarded_for.split(',').next() {
+            if let Ok(ip) = first_ip.trim().parse::<IpAddr>() {
+                return ip;
+            }
+        }
+    }
+
+    // 2. Try X-Real-IP
+    if let Some(real_ip) = headers.get("x-real-ip").and_then(|v| v.to_str().ok()) {
+        if let Ok(ip) = real_ip.trim().parse::<IpAddr>() {
+            return ip;
+        }
+    }
+
+    // 3. Fallback to direct connection info
+    direct_addr.ip()
+}
+
+fn rate_limit_key(scope: &str, ip: IpAddr) -> String {
+    format!("{scope}:{}", ip)
+}
+
+fn ensure_auth_rate_limit(scope: &str, ip: IpAddr) -> bool {
+    security::allow_auth_request(&rate_limit_key(scope, ip))
 }
 
 fn is_reasonable_password_input(password: &str) -> bool {
@@ -125,9 +164,11 @@ fn extract_session_token(headers: &HeaderMap) -> Option<String> {
 pub async fn register(
     State(pool): State<SqlitePool>,
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
     Json(payload): Json<RegisterRequest>,
 ) -> impl IntoResponse {
-    if !ensure_auth_rate_limit("register", addr) {
+    let client_ip = get_client_ip(&headers, addr);
+    if !ensure_auth_rate_limit("register", client_ip) {
         return error_response(StatusCode::TOO_MANY_REQUESTS, "Too many requests");
     }
 
@@ -168,7 +209,7 @@ pub async fn register(
         }
     };
 
-    let session = match db::create_session(&pool, &user.id, Some(addr.ip().to_string())).await {
+    let session = match db::create_session(&pool, &user.id, Some(client_ip.to_string())).await {
         Ok(session) => session,
         Err(err) => {
             tracing::error!("failed to create session: {}", err);
@@ -176,15 +217,17 @@ pub async fn register(
         }
     };
 
-    (StatusCode::CREATED, Json(AuthResponse { user, session })).into_response()
+    (StatusCode::CREATED, Json(auth_response(user, session))).into_response()
 }
 
 pub async fn login(
     State(pool): State<SqlitePool>,
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
     Json(payload): Json<LoginRequest>,
 ) -> impl IntoResponse {
-    if !ensure_auth_rate_limit("login", addr) {
+    let client_ip = get_client_ip(&headers, addr);
+    if !ensure_auth_rate_limit("login", client_ip) {
         return error_response(StatusCode::TOO_MANY_REQUESTS, "Too many requests");
     }
 
@@ -249,7 +292,7 @@ pub async fn login(
         }
     }
 
-    let session = match db::create_session(&pool, &user.id, Some(addr.ip().to_string())).await {
+    let session = match db::create_session(&pool, &user.id, Some(client_ip.to_string())).await {
         Ok(session) => session,
         Err(err) => {
             tracing::error!("failed to create session: {}", err);
@@ -257,15 +300,17 @@ pub async fn login(
         }
     };
 
-    (StatusCode::OK, Json(AuthResponse { user, session })).into_response()
+    (StatusCode::OK, Json(auth_response(user, session))).into_response()
 }
 
 pub async fn setup_totp(
     State(pool): State<SqlitePool>,
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
     Json(payload): Json<LoginRequest>,
 ) -> impl IntoResponse {
-    if !ensure_auth_rate_limit("totp_setup", addr) {
+    let client_ip = get_client_ip(&headers, addr);
+    if !ensure_auth_rate_limit("totp_setup", client_ip) {
         return error_response(StatusCode::TOO_MANY_REQUESTS, "Too many requests");
     }
 
@@ -336,9 +381,11 @@ pub async fn setup_totp(
 pub async fn enable_totp(
     State(pool): State<SqlitePool>,
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
     Json(payload): Json<EnableTotpRequest>,
 ) -> impl IntoResponse {
-    if !ensure_auth_rate_limit("totp_enable", addr) {
+    let client_ip = get_client_ip(&headers, addr);
+    if !ensure_auth_rate_limit("totp_enable", client_ip) {
         return error_response(StatusCode::TOO_MANY_REQUESTS, "Too many requests");
     }
 
@@ -405,7 +452,7 @@ pub async fn enable_totp(
         }
     };
 
-    let session = match db::create_session(&pool, &user.id, Some(addr.ip().to_string())).await {
+    let session = match db::create_session(&pool, &user.id, Some(client_ip.to_string())).await {
         Ok(session) => session,
         Err(err) => {
             tracing::error!("failed to create session: {}", err);
@@ -413,14 +460,7 @@ pub async fn enable_totp(
         }
     };
 
-    (
-        StatusCode::OK,
-        Json(AuthResponse {
-            user: refreshed_user,
-            session,
-        }),
-    )
-        .into_response()
+    (StatusCode::OK, Json(auth_response(refreshed_user, session))).into_response()
 }
 
 pub async fn logout(
@@ -428,7 +468,8 @@ pub async fn logout(
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
     headers: HeaderMap,
 ) -> impl IntoResponse {
-    if !ensure_auth_rate_limit("logout", addr) {
+    let client_ip = get_client_ip(&headers, addr);
+    if !ensure_auth_rate_limit("logout", client_ip) {
         return error_response(StatusCode::TOO_MANY_REQUESTS, "Too many requests");
     }
 

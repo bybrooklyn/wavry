@@ -8,6 +8,7 @@ use rift_core::relay::{
     LeaseAckPayload, LeasePresentPayload, LeaseRejectPayload, LeaseRejectReason, RelayHeader,
     RelayPacketType, RELAY_HEADER_SIZE, RELAY_MAX_PACKET_SIZE,
 };
+use rift_crypto::seq_window::SequenceWindow;
 use tokio::net::UdpSocket;
 use tokio::sync::RwLock;
 use tracing::{debug, info, warn};
@@ -24,15 +25,93 @@ pub struct RelaySession {
     pub created_at: Instant,
     pub bytes_sent: usize,
     pub last_tick: Instant,
+    pub host_seq: SequenceWindow,
+    pub client_seq: SequenceWindow,
 }
 
 const BANDWIDTH_LIMIT_BPS: usize = 500 * 1024;
 const ROUTE_IDLE_TIMEOUT: Duration = Duration::from_secs(120);
 const DEFAULT_LEASE_TTL: Duration = Duration::from_secs(300);
+const MAX_STRIKES: u32 = 5;
+const BAN_DURATION: Duration = Duration::from_secs(300);
 
 pub type RelayMap = Arc<RwLock<HashMap<String, RelaySession>>>;
 
-#[derive(Clone)]
+struct IpRateLimiter {
+    counts: HashMap<std::net::IpAddr, (u64, Instant)>,
+    max_pps: u64,
+}
+
+impl IpRateLimiter {
+    fn new(max_pps: u64) -> Self {
+        Self {
+            counts: HashMap::new(),
+            max_pps,
+        }
+    }
+
+    fn check(&mut self, ip: std::net::IpAddr) -> bool {
+        let now = Instant::now();
+        let entry = self.counts.entry(ip).or_insert((0, now));
+        if now.duration_since(entry.1) >= Duration::from_secs(1) {
+            *entry = (0, now);
+        }
+        entry.0 += 1;
+        entry.0 <= self.max_pps
+    }
+
+    fn cleanup(&mut self) {
+        let now = Instant::now();
+        self.counts.retain(|_, (_, start)| now.duration_since(*start) < Duration::from_secs(2));
+    }
+}
+
+struct BannedIPs {
+    strikes: HashMap<std::net::IpAddr, (u32, Instant)>,
+}
+
+impl BannedIPs {
+    fn new() -> Self {
+        Self { strikes: HashMap::new() }
+    }
+
+    fn is_banned(&mut self, ip: std::net::IpAddr) -> bool {
+        let now = Instant::now();
+        if let Some((strikes, banned_at)) = self.strikes.get(&ip) {
+            if *strikes >= MAX_STRIKES {
+                if now.duration_since(*banned_at) < BAN_DURATION {
+                    return true;
+                } else {
+                    self.strikes.remove(&ip);
+                }
+            }
+        }
+        false
+    }
+
+    fn add_strike(&mut self, ip: std::net::IpAddr) {
+        let now = Instant::now();
+        let entry = self.strikes.entry(ip).or_insert((0, now));
+        entry.0 += 1;
+        entry.1 = now;
+        if entry.0 >= MAX_STRIKES {
+            warn!("IP {} banned from relay for {}s after {} strikes", ip, BAN_DURATION.as_secs(), MAX_STRIKES);
+        }
+    }
+
+    fn cleanup(&mut self) {
+        let now = Instant::now();
+        self.strikes.retain(|_, (strikes, banned_at)| {
+            if *strikes >= MAX_STRIKES {
+                now.duration_since(*banned_at) < BAN_DURATION
+            } else {
+                now.duration_since(*banned_at) < Duration::from_secs(3600)
+            }
+        });
+    }
+}
+
+#[derive(Clone, Debug)]
 enum RouteSide {
     Host,
     Client,
@@ -70,6 +149,9 @@ pub async fn run_relay_server(port: u16, state: RelayMap) -> Result<()> {
 
     let mut buf = [0u8; RELAY_MAX_PACKET_SIZE];
     let mut routes: HashMap<SocketAddr, RouteEntry> = HashMap::new();
+    let mut limiter = IpRateLimiter::new(2000);
+    let mut banned = BannedIPs::new();
+    let mut last_cleanup = Instant::now();
 
     loop {
         let (len, src_addr) = match socket.recv_from(&mut buf).await {
@@ -79,6 +161,15 @@ pub async fn run_relay_server(port: u16, state: RelayMap) -> Result<()> {
                 continue;
             }
         };
+
+        let ip = src_addr.ip();
+        if banned.is_banned(ip) {
+            continue;
+        }
+        if !limiter.check(ip) {
+            debug!("relay rate limit reached for {}", ip);
+            continue;
+        }
 
         if len < RELAY_HEADER_SIZE {
             continue;
@@ -96,8 +187,9 @@ pub async fn run_relay_server(port: u16, state: RelayMap) -> Result<()> {
         let payload = &packet[RELAY_HEADER_SIZE..];
         match header.packet_type {
             RelayPacketType::LeasePresent => {
-                handle_lease_present(&state, &mut routes, src_addr, &header, payload, &socket)
-                    .await;
+                if !handle_lease_present(&state, &mut routes, src_addr, &header, payload, &socket).await {
+                    banned.add_strike(ip);
+                }
             }
             RelayPacketType::Forward => {
                 handle_forward(&state, &mut routes, src_addr, &header, packet, &socket).await;
@@ -110,7 +202,12 @@ pub async fn run_relay_server(port: u16, state: RelayMap) -> Result<()> {
             }
         }
 
-        cleanup_routes(&mut routes);
+        if last_cleanup.elapsed() >= Duration::from_secs(30) {
+            cleanup_routes(&mut routes);
+            limiter.cleanup();
+            banned.cleanup();
+            last_cleanup = Instant::now();
+        }
     }
 }
 
@@ -121,7 +218,7 @@ async fn handle_lease_present(
     header: &RelayHeader,
     payload: &[u8],
     socket: &UdpSocket,
-) {
+) -> bool {
     let lease = match LeasePresentPayload::decode(payload) {
         Ok(v) => v,
         Err(_) => {
@@ -132,7 +229,7 @@ async fn handle_lease_present(
                 LeaseRejectReason::InvalidSignature,
             )
             .await;
-            return;
+            return false;
         }
     };
 
@@ -146,7 +243,7 @@ async fn handle_lease_present(
                 LeaseRejectReason::InvalidSignature,
             )
             .await;
-            return;
+            return false;
         }
     };
 
@@ -159,7 +256,7 @@ async fn handle_lease_present(
             LeaseRejectReason::InvalidSignature,
         )
         .await;
-        return;
+        return false;
     };
 
     if session.session_id != header.session_id {
@@ -170,7 +267,7 @@ async fn handle_lease_present(
             LeaseRejectReason::WrongRelay,
         )
         .await;
-        return;
+        return false;
     }
 
     let now = Instant::now();
@@ -200,7 +297,7 @@ async fn handle_lease_present(
             LeaseRejectReason::SessionFull,
         )
         .await;
-        return;
+        return false;
     }
 
     if let (Some(host), Some(client)) = (session.host_addr, session.client_addr) {
@@ -227,6 +324,7 @@ async fn handle_lease_present(
     }
 
     send_lease_ack(socket, session.session_id, src, DEFAULT_LEASE_TTL).await;
+    true
 }
 
 fn bind_host(session: &mut RelaySession, src: SocketAddr) -> bool {
@@ -294,6 +392,30 @@ async fn handle_forward(
     if session.bytes_sent + packet.len() > BANDWIDTH_LIMIT_BPS {
         return;
     }
+
+    // Replay protection
+    let payload = &packet[RELAY_HEADER_SIZE..];
+    let sequence = match extract_forward_sequence(payload) {
+        Ok(seq) => seq,
+        Err(err) => {
+            debug!("failed to extract sequence from relayed payload: {}", err);
+            return;
+        }
+    };
+
+    let seq_window = match route.side {
+        RouteSide::Host => &mut session.host_seq,
+        RouteSide::Client => &mut session.client_seq,
+    };
+
+    if !seq_window.check_and_update(sequence) {
+        debug!(
+            "dropping replayed/out-of-window packet: seq={} side={:?}",
+            sequence, route.side
+        );
+        return;
+    }
+
     session.bytes_sent += packet.len();
 
     route.last_seen = now;
@@ -301,6 +423,22 @@ async fn handle_forward(
     drop(sessions);
 
     let _ = socket.send_to(packet, dest).await;
+}
+
+fn extract_forward_sequence(payload: &[u8]) -> Result<u64, String> {
+    use rift_core::PhysicalPacket;
+    use rift_core::relay::ForwardPayloadHeader;
+    use bytes::Bytes;
+
+    if payload.starts_with(&rift_core::RIFT_MAGIC) {
+        let packet = PhysicalPacket::decode(Bytes::copy_from_slice(payload))
+            .map_err(|e| format!("RIFT decode error: {}", e))?;
+        return Ok(packet.packet_id);
+    }
+
+    let header = ForwardPayloadHeader::decode(payload)
+        .map_err(|e| format!("Forward header decode error: {}", e))?;
+    Ok(header.sequence)
 }
 
 fn cleanup_routes(routes: &mut HashMap<SocketAddr, RouteEntry>) {

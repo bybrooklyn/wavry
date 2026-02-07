@@ -202,6 +202,12 @@ impl CapabilityProbe for NullProbe {
     }
 }
 
+#[cfg(target_os = "android")]
+pub mod android;
+
+#[cfg(target_os = "android")]
+pub use android::{AndroidProbe, AndroidVideoRenderer};
+
 #[cfg(target_os = "linux")]
 mod linux;
 

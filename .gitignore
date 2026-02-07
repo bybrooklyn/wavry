@@ -34,9 +34,14 @@ coverage/
 # Editor / IDE
 .vscode
 .idea
+*.iml
 *.swp
 *.swo
 *~
+
+# Local shell/env helpers
+.envrc
+.direnv/
 
 # Swift / Xcode
 .build/
@@ -48,11 +53,20 @@ DerivedData/
 # Android / Gradle
 **/.gradle/
 **/.cxx/
+**/.externalNativeBuild/
+**/.kotlin/
 **/build/
+**/captures/
 apps/android/local.properties
 apps/android/**/local.properties
 apps/android/app/src/main/cpp/prebuilt/
 *.apk
 *.aab
+*.apks
+*.idsig
 *.jks
 *.keystore
+
+# Patch leftovers
+*.orig
+*.rej
