@@ -46,6 +46,7 @@ coverage/
 # Swift / Xcode
 .build/
 .swiftpm/
+apps/macos/.build/
 *.xcodeproj
 *.xcworkspace
 DerivedData/
