@@ -3,6 +3,7 @@ name = "wavry-media"
 version = "0.0.1-canary"
 edition.workspace = true
 license.workspace = true
+build = "build.rs"
 
 [features]
 default = []

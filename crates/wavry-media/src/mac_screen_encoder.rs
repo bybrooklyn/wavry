@@ -83,20 +83,6 @@ extern "C" {
 }
 
 #[cfg(target_os = "macos")]
-#[link(name = "CoreGraphics", kind = "framework")]
-extern "C" {
-    fn CGDisplayCopyColorSpace(display: u32) -> *const c_void;
-}
-
-#[cfg(target_os = "macos")]
-#[link(name = "CoreVideo", kind = "framework")]
-extern "C" {
-    fn CVColorSpaceGetPrimaries(color_space: *const c_void) -> *const c_void;
-    fn CVColorSpaceGetTransferFunction(color_space: *const c_void) -> *const c_void;
-    fn CVColorSpaceGetYCbCrMatrix(color_space: *const c_void) -> *const c_void;
-}
-
-#[cfg(target_os = "macos")]
 #[link(name = "CoreMedia", kind = "framework")]
 extern "C" {
     fn CMSampleBufferGetDataBuffer(sbuf: *const CMSampleBuffer) -> *mut c_void;
@@ -659,41 +645,6 @@ impl MacScreenEncoder {
         };
 
         let display_id = unsafe { display.displayID() };
-
-        // Handle color space and HDR
-        if !session_ptr.is_null() {
-            unsafe {
-                let color_space = CGDisplayCopyColorSpace(display_id);
-                if !color_space.is_null() {
-                    let primaries = CVColorSpaceGetPrimaries(color_space);
-                    let transfer = CVColorSpaceGetTransferFunction(color_space);
-                    let matrix = CVColorSpaceGetYCbCrMatrix(color_space);
-
-                    if !primaries.is_null() {
-                        VTSessionSetProperty(
-                            session_ptr,
-                            kVTCompressionPropertyKey_ColorPrimaries,
-                            primaries,
-                        );
-                    }
-                    if !transfer.is_null() {
-                        VTSessionSetProperty(
-                            session_ptr,
-                            kVTCompressionPropertyKey_TransferFunction,
-                            transfer,
-                        );
-                    }
-                    if !matrix.is_null() {
-                        VTSessionSetProperty(
-                            session_ptr,
-                            kVTCompressionPropertyKey_YCbCrMatrix,
-                            matrix,
-                        );
-                    }
-                    CFRelease(color_space);
-                }
-            }
-        }
 
         // Create content filter
         let filter = unsafe {

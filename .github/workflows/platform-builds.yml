@@ -18,6 +18,7 @@ env:
   CARGO_TERM_COLOR: always
   RELEASE_ICON_PATH: crates/wavry-desktop/src-tauri/icons/icon.png
   RELEASE_ICON_NAME: WavryLogo.png
+  MACOSX_DEPLOYMENT_TARGET: "14.0"
 
 jobs:
   pre-build:
