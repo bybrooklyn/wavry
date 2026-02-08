@@ -253,7 +253,7 @@ fn configure_low_latency_encoder(
     keyframe_interval_frames: u32,
     enable_10bit: bool,
 ) -> Result<()> {
-    fn set_if_exists<V: glib::ToValue>(encoder: &gst::Element, name: &str, value: V) {
+    fn set_if_exists<V: ToValue>(encoder: &gst::Element, name: &str, value: V) {
         if encoder.has_property(name, None) {
             encoder.set_property(name, value);
         }

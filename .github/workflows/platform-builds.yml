@@ -51,7 +51,6 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           VERSION="v${{ env.WAVRY_V }}"
-          # Only skip if we are on main branch and not a tag push
           if gh release view "$VERSION" >/dev/null 2>&1; then
             echo "Version $VERSION already exists in releases."
             if [[ "${{ github.ref_type }}" == "tag" ]]; then
@@ -87,12 +86,42 @@ jobs:
       - name: Run tests
         run: cargo test --workspace --locked
 
+  smoke-tests:
+    name: Smoke tests
+    needs: pre-build
+    if: needs.pre-build.outputs.already_released != 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Install protoc
+        uses: arduino/setup-protoc@v3
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y pkg-config protobuf-compiler libsqlite3-dev curl
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+      - name: Cache
+        uses: Swatinem/rust-cache@v2
+      - name: Provision Secrets
+        run: ./scripts/provision-infrastructure.sh ./secrets
+      - name: Gateway Auth Smoke
+        run: |
+          source ./secrets/wavry.env
+          ./scripts/gateway-auth-smoke.sh
+      - name: Master/Relay Smoke
+        run: |
+          source ./secrets/wavry.env
+          ./scripts/master-relay-smoke.sh
+
   rust-backend:
     name: Build backend (${{ matrix.os }})
     needs: pre-build
     if: needs.pre-build.outputs.already_released != 'true'
     runs-on: ${{ matrix.os }}
     strategy:
+      fail-fast: false
       matrix:
         include:
           - os: ubuntu-latest
@@ -121,15 +150,23 @@ jobs:
       - name: Stage
         shell: bash
         run: |
-          mkdir bin
+          mkdir -p ci-artifacts/backend
           bins=(wavry-master wavry-gateway wavry-relay wavry-server wavry-client wavry)
-          for b in "${bins[@]}"; do cp "target/release/${b}${{ matrix.exe }}" "bin/${b}${{ matrix.exe }}"; done
-          if [[ "${{ runner.os }}" == "Windows" ]]; then cp target/release/wavry_ffi.lib bin/; else cp target/release/libwavry_ffi.a bin/; fi
+          for b in "${bins[@]}"; do
+            if [[ -f "target/release/${b}${{ matrix.exe }}" ]]; then
+              cp "target/release/${b}${{ matrix.exe }}" "ci-artifacts/backend/${b}${{ matrix.exe }}"
+            fi
+          done
+          if [[ "${{ runner.os }}" == "Windows" ]]; then
+            cp target/release/wavry_ffi.lib ci-artifacts/backend/ 2>/dev/null || true
+          else
+            cp target/release/libwavry_ffi.a ci-artifacts/backend/ 2>/dev/null || true
+          fi
       - name: Upload
         uses: actions/upload-artifact@v4
         with:
           name: backend-${{ matrix.suffix }}-v${{ needs.pre-build.outputs.wavry_version }}
-          path: bin/
+          path: ci-artifacts/backend/
 
   desktop-tauri:
     name: Desktop build (${{ matrix.os }})
@@ -137,6 +174,7 @@ jobs:
     if: needs.pre-build.outputs.already_released != 'true'
     runs-on: ${{ matrix.os }}
     strategy:
+      fail-fast: false
       matrix:
         include:
           - os: ubuntu-latest
@@ -166,13 +204,13 @@ jobs:
       - name: Stage
         shell: bash
         run: |
-          mkdir bin
-          cp target/release/wavry-desktop* bin/ 2>/dev/null || cp target/release/wavry_desktop* bin/
+          mkdir -p ci-artifacts/desktop
+          cp target/release/wavry-desktop* ci-artifacts/desktop/ 2>/dev/null || cp target/release/wavry_desktop* ci-artifacts/desktop/ 2>/dev/null || true
       - name: Upload
         uses: actions/upload-artifact@v4
         with:
           name: desktop-${{ matrix.suffix }}-v${{ needs.pre-build.outputs.wavry_version }}
-          path: bin/
+          path: ci-artifacts/desktop/
 
   android:
     name: Android build
@@ -201,13 +239,13 @@ jobs:
         run: ./scripts/dev-android.sh --both --release --no-install --no-ndk-install
       - name: Stage
         run: |
-          mkdir bin
-          find apps/android/app/build/outputs -name "*.apk" -exec cp {} bin/ \;
+          mkdir -p ci-artifacts/android
+          find apps/android/app/build/outputs -name "*.apk" -exec cp {} ci-artifacts/android/ \;
       - name: Upload
         uses: actions/upload-artifact@v4
         with:
           name: android-v${{ needs.pre-build.outputs.wavry_version }}
-          path: bin/
+          path: ci-artifacts/android/
 
   macos-swift:
     name: macOS Swift app
@@ -231,11 +269,12 @@ jobs:
 
   release:
     name: Create Release
-    needs: [pre-build, rust-tests, rust-backend, desktop-tauri, android, macos-swift]
+    needs: [pre-build, rust-tests, smoke-tests, rust-backend, desktop-tauri, android, macos-swift]
     if: |
       always() &&
       needs.pre-build.outputs.already_released != 'true' &&
       (needs.rust-tests.result == 'success' || needs.rust-tests.result == 'skipped') &&
+      (needs.smoke-tests.result == 'success' || needs.smoke-tests.result == 'skipped') &&
       github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
     runs-on: ubuntu-latest
     permissions:
@@ -248,12 +287,18 @@ jobs:
       - name: Checksums
         run: |
           cd artifacts
-          find . -type f -exec sha256sum {} + > SHA256SUMS.txt
+          find . -type f -exec sha256sum {} + > ../SHA256SUMS.txt
       - name: GH Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: v${{ needs.pre-build.outputs.wavry_version }}
           name: Wavry v${{ needs.pre-build.outputs.wavry_version }}
           generate_release_notes: true
-          prerelease: ${{ contains(needs.pre-build.outputs.wavry_version, 'canary') || contains(needs.pre-build.outputs.wavry_version, 'beta') }}
-          files: artifacts/**/*
+          prerelease: ${{ contains(needs.pre-build.outputs.wavry_version, 'canary') || contains(needs.pre-build.outputs.wavry_version, 'beta') || contains(needs.pre-build.outputs.wavry_version, 'unstable') }}
+          body: |
+            Wavry Core: v${{ needs.pre-build.outputs.wavry_version }}
+            RIFT Protocol: v${{ needs.pre-build.outputs.rift_version }}
+            DELTA CC: v${{ needs.pre-build.outputs.delta_version }}
+          files: |
+            artifacts/**/*
+            SHA256SUMS.txt
