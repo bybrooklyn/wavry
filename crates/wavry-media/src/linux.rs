@@ -15,8 +15,8 @@ use gstreamer::prelude::*;
 use gstreamer_app as gst_app;
 use std::future::Future;
 use tokio::time::{sleep, Duration};
+use x11rb::connection::Connection;
 use x11rb::protocol::randr::ConnectionExt as RandrExt;
-use x11rb::protocol::xproto::ConnectionExt as X11ConnectionExt;
 
 use crate::{Codec, DecodeConfig, EncodeConfig, EncodedFrame, Renderer};
 
@@ -253,38 +253,38 @@ fn configure_low_latency_encoder(
     keyframe_interval_frames: u32,
     enable_10bit: bool,
 ) -> Result<()> {
-    let set_if_exists = |name: &str, value: impl glib::ToValue| {
+    fn set_if_exists<V: glib::ToValue>(encoder: &gst::Element, name: &str, value: V) {
         if encoder.has_property(name, None) {
             encoder.set_property(name, value);
         }
-    };
+    }
 
-    set_if_exists("bitrate", bitrate_kbps);
-    set_if_exists("target-bitrate", bitrate_kbps);
-    set_if_exists("keyframe-period", keyframe_interval_frames);
-    set_if_exists("key-int-max", keyframe_interval_frames as i32);
+    set_if_exists(encoder, "bitrate", bitrate_kbps);
+    set_if_exists(encoder, "target-bitrate", bitrate_kbps);
+    set_if_exists(encoder, "keyframe-period", keyframe_interval_frames);
+    set_if_exists(encoder, "key-int-max", keyframe_interval_frames as i32);
 
     if encoder_name.contains("x264") {
-        set_if_exists("tune", "zerolatency");
-        set_if_exists("speed-preset", "ultrafast");
-        set_if_exists("bframes", 0i32);
+        set_if_exists(encoder, "tune", "zerolatency");
+        set_if_exists(encoder, "speed-preset", "ultrafast");
+        set_if_exists(encoder, "bframes", 0i32);
     } else if encoder_name.contains("x265") {
-        set_if_exists("tune", "zerolatency");
-        set_if_exists("speed-preset", "ultrafast");
-        set_if_exists("bframes", 0i32);
+        set_if_exists(encoder, "tune", "zerolatency");
+        set_if_exists(encoder, "speed-preset", "ultrafast");
+        set_if_exists(encoder, "bframes", 0i32);
         if enable_10bit {
-            set_if_exists("profile", "main10");
+            set_if_exists(encoder, "profile", "main10");
         }
     } else if encoder_name.contains("svtav1") {
-        set_if_exists("preset", 8i32);
-        set_if_exists("tune", 0i32);
+        set_if_exists(encoder, "preset", 8i32);
+        set_if_exists(encoder, "tune", 0i32);
     } else if encoder_name.contains("vaapi") {
-        set_if_exists("rate-control", "cbr");
-        set_if_exists("max-bframes", 0i32);
-        set_if_exists("cabac", false);
+        set_if_exists(encoder, "rate-control", "cbr");
+        set_if_exists(encoder, "max-bframes", 0i32);
+        set_if_exists(encoder, "cabac", false);
     } else if encoder_name.contains("nvh265") {
         if enable_10bit {
-            set_if_exists("profile", "main10");
+            set_if_exists(encoder, "profile", "main10");
         }
     }
 

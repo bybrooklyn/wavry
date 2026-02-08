@@ -17,4 +17,3 @@ pub(crate) fn opus_frame_duration_us() -> u64 {
 }
 
 pub mod renderer;
-pub use renderer::CpalAudioRenderer;
