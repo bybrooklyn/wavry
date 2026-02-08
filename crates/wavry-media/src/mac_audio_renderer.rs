@@ -1,4 +1,4 @@
-use crate::audio::CpalAudioRenderer;
+use crate::audio::renderer::CpalAudioRenderer;
 use crate::Renderer;
 use anyhow::Result;
 

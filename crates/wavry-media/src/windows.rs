@@ -593,7 +593,7 @@ impl Renderer for WindowsRenderer {
 
 /// Windows audio renderer (Opus decode -> PCM -> output)
 pub struct WindowsAudioRenderer {
-    inner: crate::audio::CpalAudioRenderer,
+    inner: crate::audio::renderer::CpalAudioRenderer,
 }
 
 unsafe impl Send for WindowsAudioRenderer {}
@@ -601,7 +601,7 @@ unsafe impl Send for WindowsAudioRenderer {}
 impl WindowsAudioRenderer {
     pub fn new() -> Result<Self> {
         Ok(Self {
-            inner: crate::audio::CpalAudioRenderer::new()?,
+            inner: crate::audio::renderer::CpalAudioRenderer::new()?,
         })
     }
 
