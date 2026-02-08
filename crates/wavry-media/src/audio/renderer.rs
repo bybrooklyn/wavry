@@ -10,6 +10,8 @@ use super::{
     AUDIO_MAX_BUFFER_SAMPLES, OPUS_CHANNELS, OPUS_FRAME_SAMPLES,
     OPUS_SAMPLE_RATE,
 };
+#[cfg(feature = "opus-support")]
+use super::OPUS_MAX_FRAME_SAMPLES;
 use crate::Renderer;
 
 pub struct CpalAudioRenderer {
@@ -218,7 +220,7 @@ fn build_stream_u16(
     Ok(stream)
 }
 
-fn f32_to_i16(value: f32) -> i16 {
+pub(crate) fn f32_to_i16(value: f32) -> i16 {
     (value.clamp(-1.0, 1.0) * i16::MAX as f32) as i16
 }
 

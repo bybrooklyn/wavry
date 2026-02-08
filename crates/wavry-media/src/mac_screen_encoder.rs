@@ -42,6 +42,12 @@ const K_CMVIDEO_CODEC_TYPE_HEVC: CMVideoCodecType = 0x68766331; // 'hvc1'
 #[cfg(target_os = "macos")]
 const K_CMVIDEO_CODEC_TYPE_AV1: CMVideoCodecType = 0x61763031; // 'av01'
 
+// 10-bit and HDR Constants
+#[cfg(target_os = "macos")]
+const K_CVPIXEL_FORMAT_TYPE_420Y_PB_CR10_BI_PLANAR_VIDEO_RANGE: u32 = 0x78343230; // 'x420'
+#[cfg(target_os = "macos")]
+const K_CVPIXEL_FORMAT_TYPE_420Y_PB_CR10_BI_PLANAR_FULL_RANGE: u32 = 0x66343230; // 'f420'
+
 // Property keys for VTCompressionSession
 #[cfg(target_os = "macos")]
 #[link(name = "VideoToolbox", kind = "framework")]
@@ -55,6 +61,12 @@ extern "C" {
     static kVTCompressionPropertyKey_DataRateLimits: *const c_void;
     static kVTCompressionPropertyKey_MaximizePowerEfficiency: *const c_void;
     static kVTCompressionPropertyKey_H264EntropyMode: *const c_void;
+    static kVTCompressionPropertyKey_ColorPrimaries: *const c_void;
+    static kVTCompressionPropertyKey_TransferFunction: *const c_void;
+    static kVTCompressionPropertyKey_YCbCrMatrix: *const c_void;
+
+    // Profiles
+    static kVTProfileLevel_HEVC_Main10_AutoLevel: *const c_void;
 
     fn VTSessionSetProperty(session: *mut c_void, key: *const c_void, value: *const c_void) -> i32;
     fn VTCompressionSessionPrepareToEncodeFrames(session: *mut c_void) -> i32;
@@ -68,6 +80,20 @@ extern "C" {
         info_flags_out: *mut u32,
     ) -> i32;
     fn VTCompressionSessionInvalidate(session: *mut c_void);
+}
+
+#[cfg(target_os = "macos")]
+#[link(name = "CoreGraphics", kind = "framework")]
+extern "C" {
+    fn CGDisplayCopyColorSpace(display: u32) -> *const c_void;
+}
+
+#[cfg(target_os = "macos")]
+#[link(name = "CoreVideo", kind = "framework")]
+extern "C" {
+    fn CVColorSpaceGetPrimaries(color_space: *const c_void) -> *const c_void;
+    fn CVColorSpaceGetTransferFunction(color_space: *const c_void) -> *const c_void;
+    fn CVColorSpaceGetYCbCrMatrix(color_space: *const c_void) -> *const c_void;
 }
 
 #[cfg(target_os = "macos")]
@@ -379,6 +405,7 @@ fn create_compression_session(
     fps: u16,
     bitrate_kbps: u32,
     keyframe_interval_ms: u32,
+    enable_10bit: bool,
     tx: mpsc::Sender<EncodedFrame>,
 ) -> Result<(*mut c_void, Box<EncoderContext>)> {
     // Create context
@@ -476,6 +503,19 @@ fn create_compression_session(
                 keyframe_num,
             );
             CFRelease(keyframe_num);
+        }
+
+        // 10-bit and HDR support
+        if enable_10bit && (codec == Codec::Hevc || codec == Codec::Av1) {
+            if codec == Codec::Hevc {
+                VTSessionSetProperty(
+                    session,
+                    kVTCompressionPropertyKey_ProfileLevel,
+                    kVTProfileLevel_HEVC_Main10_AutoLevel,
+                );
+            }
+            // AV1 10-bit is often implicit in AutoLevel or requires specific profile keys
+            // which vary by macOS version.
         }
 
         // Prioritize performance over battery
@@ -600,6 +640,7 @@ impl MacScreenEncoder {
         config: EncodeConfig,
         content: Retained<SCShareableContent>,
         output_handler: &OutputHandler,
+        session_ptr: *mut c_void,
     ) -> Result<StreamSetupResult> {
         // Create dispatch queue
         let queue = dispatch2::DispatchQueue::new("com.wavry.screen-encoder", None);
@@ -625,6 +666,43 @@ impl MacScreenEncoder {
             displays.objectAtIndex(0)
         };
 
+        let display_id = unsafe { display.displayID() };
+
+        // Handle color space and HDR
+        if !session_ptr.is_null() {
+            unsafe {
+                let color_space = CGDisplayCopyColorSpace(display_id);
+                if !color_space.is_null() {
+                    let primaries = CVColorSpaceGetPrimaries(color_space);
+                    let transfer = CVColorSpaceGetTransferFunction(color_space);
+                    let matrix = CVColorSpaceGetYCbCrMatrix(color_space);
+
+                    if !primaries.is_null() {
+                        VTSessionSetProperty(
+                            session_ptr,
+                            kVTCompressionPropertyKey_ColorPrimaries,
+                            primaries,
+                        );
+                    }
+                    if !transfer.is_null() {
+                        VTSessionSetProperty(
+                            session_ptr,
+                            kVTCompressionPropertyKey_TransferFunction,
+                            transfer,
+                        );
+                    }
+                    if !matrix.is_null() {
+                        VTSessionSetProperty(
+                            session_ptr,
+                            kVTCompressionPropertyKey_YCbCrMatrix,
+                            matrix,
+                        );
+                    }
+                    CFRelease(color_space);
+                }
+            }
+        }
+
         // Create content filter
         let filter = unsafe {
             SCContentFilter::initWithDisplay_excludingWindows(
@@ -639,7 +717,14 @@ impl MacScreenEncoder {
         unsafe {
             stream_config.setWidth(width as usize);
             stream_config.setHeight(height as usize);
-            stream_config.setPixelFormat(0x42475241); // 'BGRA'
+
+            // Use 10-bit pixel format if requested
+            if config.enable_10bit {
+                stream_config.setPixelFormat(K_CVPIXEL_FORMAT_TYPE_420Y_PB_CR10_BI_PLANAR_VIDEO_RANGE);
+            } else {
+                stream_config.setPixelFormat(0x42475241); // 'BGRA'
+            }
+
             stream_config.setShowsCursor(true);
             stream_config.setMinimumFrameInterval(CMTime {
                 value: 1,
@@ -705,7 +790,6 @@ impl MacScreenEncoder {
 
         // 1. Get content (Async)
         let content = get_shareable_content().await?.0;
-        // let content: Retained<SCShareableContent> = unsafe { std::mem::transmute(0usize) };
 
         // 2. Create compression session
         let (session_ptr, encoder_context) = create_compression_session(
@@ -715,6 +799,7 @@ impl MacScreenEncoder {
             config.fps,
             config.bitrate_kbps,
             config.keyframe_interval_ms,
+            config.enable_10bit,
             tx,
         )?;
         let send_session_ptr = SendPtr(session_ptr);
@@ -722,16 +807,17 @@ impl MacScreenEncoder {
         let output_handler = OutputHandler::new(send_session_ptr.0);
         let send_output_handler = SendRetained(output_handler);
 
-        // 3. Setup Stream (Synchronous - handles all raw pointers and non-Send types)
+        // 3. Setup Stream
         let (send_stream, send_queue, rx_start) = Self::setup_stream(
             config.resolution.width as i32,
             config.resolution.height as i32,
             config,
             content,
             &send_output_handler.0,
+            send_session_ptr.0,
         )?;
 
-        // 4. Await start (SendRetained types are Send)
+        // 4. Await start
         rx_start
             .await
             .map_err(|e| anyhow!("Start capture canceled: {}", e))??;
@@ -742,12 +828,13 @@ impl MacScreenEncoder {
         let session_ptr = send_session_ptr.0;
 
         log::info!(
-            "MacScreenEncoder started: {:?}, {}x{} @ {}fps, {}kbps",
+            "MacScreenEncoder started: {:?}, {}x{} @ {}fps, {}kbps, 10bit: {}",
             config.codec,
             config.resolution.width,
             config.resolution.height,
             config.fps,
-            config.bitrate_kbps
+            config.bitrate_kbps,
+            config.enable_10bit
         );
 
         Ok(Self {

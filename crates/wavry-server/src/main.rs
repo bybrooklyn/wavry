@@ -992,8 +992,15 @@ mod host {
         match event {
             Event::Key(k) => injector.key(k.keycode, k.pressed)?,
             Event::MouseButton(m) => injector.mouse_button(m.button as u8, m.pressed)?,
-            Event::MouseMove(m) => injector.mouse_motion(m.x as i32, m.y as i32)?,
-            _ => {}
+            Event::MouseMove(m) => injector.mouse_absolute(m.x, m.y)?,
+            Event::Scroll(s) => {
+                // TODO: Add scroll to InputInjector trait
+                debug!("Scroll event received: dx={}, dy={}", s.dx, s.dy);
+            }
+            Event::Gamepad(g) => {
+                // TODO: Add gamepad to InputInjector trait
+                debug!("Gamepad event received from ID {}", g.gamepad_id);
+            }
         }
         Ok(())
     }

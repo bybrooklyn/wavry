@@ -26,9 +26,12 @@ use windows::{
     Graphics::DirectX::DirectXPixelFormat, Win32::Foundation::*, Win32::Graphics::Direct3D::*,
     Win32::Graphics::Direct3D11::*, Win32::Graphics::Dxgi::Common::*, Win32::Graphics::Dxgi::*,
     Win32::Graphics::Gdi::*, Win32::Media::Audio::*, Win32::Media::MediaFoundation::*,
-    Win32::System::WinRT::Direct3D11::IDirect3DDxgiInterfaceAccess,
+    Win32::System::Com::*, Win32::System::WinRT::Direct3D11::IDirect3DDxgiInterfaceAccess,
     Win32::System::WinRT::Graphics::Capture::IGraphicsCaptureItemInterop,
     Win32::UI::Input::KeyboardAndMouse::*, Win32::UI::WindowsAndMessaging::GetDesktopWindow,
+    Win32::UI::WindowsAndMessaging::EnumDisplayMonitors, Win32::UI::WindowsAndMessaging::GetMonitorInfoW,
+    Win32::UI::WindowsAndMessaging::MONITORINFOEXW, Graphics::SizeInt32,
+    Win32::Graphics::Dxgi::DXGI_PRESENT,
 };
 
 #[cfg(target_os = "windows")]
@@ -117,7 +120,7 @@ impl WindowsEncoder {
     pub async fn new(config: EncodeConfig) -> Result<Self> {
         unsafe {
             // Initialize Media Foundation
-            MFStartup(MF_VERSION, MFSTARTUP_FULL).ok()?;
+            MFStartup(MF_VERSION, MFSTARTUP_FULL).context("MFStartup failed")?;
 
             // Initialize D3D11 Device
             let mut device = None;
@@ -132,7 +135,7 @@ impl WindowsEncoder {
                 Some(&mut device),
                 None,
                 Some(&mut context),
-            )?;
+            ).context("D3D11CreateDevice failed")?;
             let device = device.ok_or_else(|| anyhow!("Failed to create D3D11 device"))?;
             let context = context.ok_or_else(|| anyhow!("Failed to create D3D11 context"))?;
 
@@ -177,12 +180,12 @@ impl WindowsEncoder {
 
             MFTEnumEx(
                 mft_category,
-                MFT_ENUM_FLAG_HARDWARE.0 as u32 | MFT_ENUM_FLAG_SORTANDFILTER.0 as u32,
+                MFT_ENUM_FLAG(MFT_ENUM_FLAG_HARDWARE.0 as u32 | MFT_ENUM_FLAG_SORTANDFILTER.0 as u32),
                 None,
                 Some(&output_type),
                 &mut activate_list,
                 &mut count,
-            )?;
+            ).context("MFTEnumEx failed")?;
 
             if count == 0 {
                 return Err(anyhow!("No hardware encoders found for {:?}", config.codec));
@@ -198,9 +201,9 @@ impl WindowsEncoder {
             output_media_type.SetGUID(&MF_MT_MAJOR_TYPE, &MFMediaType_Video)?;
             output_media_type.SetGUID(&MF_MT_SUBTYPE, &output_subtype)?;
             output_media_type.SetUINT32(&MF_MT_AVG_BITRATE, config.bitrate_kbps * 1000)?;
-            MFSetAttributeRatio(&output_media_type, &MF_MT_FRAME_RATE, config.fps, 1)?;
+            MFSetAttributeRatio(output_media_type.cast()?, &MF_MT_FRAME_RATE, config.fps as u32, 1)?;
             MFSetAttributeSize(
-                &output_media_type,
+                output_media_type.cast()?,
                 &MF_MT_FRAME_SIZE,
                 frame_width,
                 frame_height,
@@ -215,12 +218,12 @@ impl WindowsEncoder {
             input_media_type.SetGUID(&MF_MT_MAJOR_TYPE, &MFMediaType_Video)?;
             input_media_type.SetGUID(&MF_MT_SUBTYPE, &MF_BGR32)?; // B8G8R8A8 in MF is often BGR32
             MFSetAttributeSize(
-                &input_media_type,
+                input_media_type.cast()?,
                 &MF_MT_FRAME_SIZE,
                 item_size.Width as u32,
                 item_size.Height as u32,
             )?;
-            MFSetAttributeRatio(&input_media_type, &MF_MT_FRAME_RATE, config.fps, 1)?;
+            MFSetAttributeRatio(input_media_type.cast()?, &MF_MT_FRAME_RATE, config.fps as u32, 1)?;
 
             transform.SetInputType(0, Some(&input_media_type), 0)?;
 
@@ -242,7 +245,7 @@ impl WindowsEncoder {
                 device_manager.as_raw() as usize,
             )?;
 
-            CoTaskMemFree(Some(activate_list as _));
+            CoTaskMemFree(Some(activate_list as *const _));
 
             Ok(Self {
                 config,
@@ -274,9 +277,7 @@ impl WindowsEncoder {
                 let texture: ID3D11Texture2D = access.GetInterface()?;
 
                 // Wrap D3D11 texture in an MF Sample
-                let mut buffer = None;
-                MFCreateDXGISurfaceBuffer(&ID3D11Resource::IID, &texture, 0, false, &mut buffer)?;
-                let buffer = buffer.ok_or_else(|| anyhow!("Failed to create MF DXGI buffer"))?;
+                let buffer = MFCreateDXGISurfaceBuffer(&ID3D11Resource::IID, &texture, 0, false)?;
 
                 let sample = MFCreateSample()?;
                 sample.AddBuffer(&buffer)?;
@@ -289,9 +290,9 @@ impl WindowsEncoder {
                 // Drain Output
                 let mut output_data_buffer = MFT_OUTPUT_DATA_BUFFER {
                     dwStreamID: 0,
-                    pSample: None,
+                    pSample: ManuallyDrop::new(None),
                     dwStatus: 0,
-                    pEvents: None,
+                    pEvents: ManuallyDrop::new(None),
                 };
 
                 // For hardware encoders, we usually need to provide a sample with a buffer
@@ -299,7 +300,7 @@ impl WindowsEncoder {
                 let output_sample = MFCreateSample()?;
                 let output_buffer = MFCreateMemoryBuffer(1024 * 1024)?; // 1MB buffer
                 output_sample.AddBuffer(&output_buffer)?;
-                output_data_buffer.pSample = Some(output_sample);
+                output_data_buffer.pSample = ManuallyDrop::new(Some(output_sample));
 
                 let mut status = 0;
                 match self.transform.ProcessOutput(
@@ -308,7 +309,7 @@ impl WindowsEncoder {
                     &mut status,
                 ) {
                     Ok(_) => {
-                        let sample = output_data_buffer.pSample.as_ref().unwrap();
+                        let sample = unsafe { (*output_data_buffer.pSample).as_ref().unwrap() };
                         let total_length = sample.GetTotalLength()?;
                         let mut data = vec![0u8; total_length as usize];
 
@@ -376,8 +377,8 @@ impl WindowsEncoder {
         output_media_type.SetGUID(&MF_MT_MAJOR_TYPE, &MFMediaType_Video)?;
         output_media_type.SetGUID(&MF_MT_SUBTYPE, &mf_subtype_for_codec(self.config.codec))?;
         output_media_type.SetUINT32(&MF_MT_AVG_BITRATE, self.config.bitrate_kbps * 1000)?;
-        MFSetAttributeRatio(&output_media_type, &MF_MT_FRAME_RATE, self.config.fps, 1)?;
-        MFSetAttributeSize(&output_media_type, &MF_MT_FRAME_SIZE, width, height)?;
+        MFSetAttributeRatio(output_media_type.cast()?, &MF_MT_FRAME_RATE, self.config.fps as u32, 1)?;
+        MFSetAttributeSize(output_media_type.cast()?, &MF_MT_FRAME_SIZE, width, height)?;
         output_media_type
             .SetUINT32(&MF_MT_INTERLACE_MODE, MFVideoInterlace_Progressive.0 as u32)?;
         self.transform
@@ -386,8 +387,8 @@ impl WindowsEncoder {
         let input_media_type: IMFMediaType = MFCreateMediaType()?;
         input_media_type.SetGUID(&MF_MT_MAJOR_TYPE, &MFMediaType_Video)?;
         input_media_type.SetGUID(&MF_MT_SUBTYPE, &MF_BGR32)?;
-        MFSetAttributeSize(&input_media_type, &MF_MT_FRAME_SIZE, width, height)?;
-        MFSetAttributeRatio(&input_media_type, &MF_MT_FRAME_RATE, self.config.fps, 1)?;
+        MFSetAttributeSize(input_media_type.cast()?, &MF_MT_FRAME_SIZE, width, height)?;
+        MFSetAttributeRatio(input_media_type.cast()?, &MF_MT_FRAME_RATE, self.config.fps as u32, 1)?;
         self.transform.SetInputType(0, Some(&input_media_type), 0)?;
 
         Ok(())
@@ -471,12 +472,12 @@ impl WindowsRenderer {
 
             MFTEnumEx(
                 MFT_CATEGORY_VIDEO_DECODER,
-                MFT_ENUM_FLAG_HARDWARE.0 as u32 | MFT_ENUM_FLAG_SORTANDFILTER.0 as u32,
+                MFT_ENUM_FLAG(MFT_ENUM_FLAG_HARDWARE.0 as u32 | MFT_ENUM_FLAG_SORTANDFILTER.0 as u32),
                 Some(&input_type),
                 None,
                 &mut activate_list,
                 &mut count,
-            )?;
+            ).context("MFTEnumEx failed")?;
 
             if count == 0 {
                 return Err(anyhow!("No hardware decoders found for {:?}", codec));
@@ -486,7 +487,7 @@ impl WindowsRenderer {
                 .as_ref()
                 .unwrap();
             let decoder: IMFTransform = activate.ActivateObject()?;
-            CoTaskMemFree(Some(activate_list as _));
+            CoTaskMemFree(Some(activate_list as *const _));
 
             // Set Decoder Input Type
             let input_type: IMFMediaType = MFCreateMediaType()?;
@@ -551,9 +552,9 @@ impl Renderer for WindowsRenderer {
             // 3. Drain output
             let mut output_data_buffer = MFT_OUTPUT_DATA_BUFFER {
                 dwStreamID: 0,
-                pSample: None,
+                pSample: ManuallyDrop::new(None),
                 dwStatus: 0,
-                pEvents: None,
+                pEvents: ManuallyDrop::new(None),
             };
 
             let mut status = 0;
@@ -564,7 +565,7 @@ impl Renderer for WindowsRenderer {
             ) {
                 Ok(_) => {
                     // Decoder provided a sample (likely containing a D3D11 texture)
-                    if let Some(output_sample) = output_data_buffer.pSample {
+                    if let Some(output_sample) = unsafe { (*output_data_buffer.pSample).as_ref() } {
                         let buffer = output_sample.GetBufferByIndex(0)?;
                         let access: IDirect3DDxgiInterfaceAccess = buffer.cast()?;
                         let texture: ID3D11Texture2D = access.GetInterface()?;
@@ -636,16 +637,16 @@ pub struct WindowsAudioCapturer {
 impl WindowsAudioCapturer {
     pub async fn new() -> Result<Self> {
         unsafe {
-            CoInitializeEx(None, COINIT_MULTITHREADED).ok()?;
+            CoInitializeEx(None, COINIT_MULTITHREADED).context("CoInitializeEx failed")?;
 
             let enumerator: IMMDeviceEnumerator =
-                CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL)?;
+                CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL).context("CoCreateInstance failed")?;
 
             let device = enumerator.GetDefaultAudioEndpoint(eRender, eConsole)?;
 
             let audio_client: IAudioClient = device.Activate(CLSCTX_ALL, None)?;
 
-            let mut format = std::ptr::null_mut();
+            let mut format: *mut WAVEFORMATEX = std::ptr::null_mut();
             audio_client.GetMixFormat(&mut format)?;
 
             // Note: Loopback requires a specific initialization
@@ -844,18 +845,23 @@ enum PcmFormat {
 }
 
 fn pcm_format(format: &WAVEFORMATEX) -> Result<PcmFormat> {
-    match format.wFormatTag as u32 {
-        WAVE_FORMAT_PCM => match format.wBitsPerSample {
+    let tag = format.wFormatTag as u32;
+    if tag == WAVE_FORMAT_PCM {
+        match format.wBitsPerSample {
             16 => Ok(PcmFormat::I16),
             32 => Ok(PcmFormat::I32),
             _ => Err(anyhow!("Unsupported PCM bit depth")),
-        },
-        WAVE_FORMAT_IEEE_FLOAT => Ok(PcmFormat::F32),
-        WAVE_FORMAT_EXTENSIBLE => unsafe {
+        }
+    } else if tag == WAVE_FORMAT_IEEE_FLOAT {
+        Ok(PcmFormat::F32)
+    } else if tag == WAVE_FORMAT_EXTENSIBLE {
+        unsafe {
             let extensible = &*(format as *const _ as *const WAVEFORMATEXTENSIBLE);
-            if extensible.SubFormat == KSDATAFORMAT_SUBTYPE_IEEE_FLOAT {
+            // Use read_unaligned or copy to local to avoid misaligned reference
+            let subformat = std::ptr::read_unaligned(&extensible.SubFormat);
+            if subformat == KSDATAFORMAT_SUBTYPE_IEEE_FLOAT {
                 Ok(PcmFormat::F32)
-            } else if extensible.SubFormat == KSDATAFORMAT_SUBTYPE_PCM {
+            } else if subformat == KSDATAFORMAT_SUBTYPE_PCM {
                 match format.wBitsPerSample {
                     16 => Ok(PcmFormat::I16),
                     32 => Ok(PcmFormat::I32),
@@ -864,8 +870,9 @@ fn pcm_format(format: &WAVEFORMATEX) -> Result<PcmFormat> {
             } else {
                 Err(anyhow!("Unsupported audio subformat"))
             }
-        },
-        _ => Err(anyhow!("Unsupported audio format tag")),
+        }
+    } else {
+        Err(anyhow!("Unsupported audio format tag: {}", tag))
     }
 }
 
@@ -1262,7 +1269,7 @@ impl crate::InputInjector for WindowsInputInjector {
                         input.Anonymous.mi = MOUSEINPUT {
                             dx: 0,
                             dy: 0,
-                            mouseData: (dy * 120.0) as i32,
+                            mouseData: (dy * 120.0) as i32 as u32,
                             dwFlags: MOUSEEVENTF_WHEEL,
                             time: 0,
                             dwExtraInfo: 0,
@@ -1275,7 +1282,7 @@ impl crate::InputInjector for WindowsInputInjector {
                         input.Anonymous.mi = MOUSEINPUT {
                             dx: 0,
                             dy: 0,
-                            mouseData: (dx * 120.0) as i32,
+                            mouseData: (dx * 120.0) as i32 as u32,
                             dwFlags: MOUSEEVENTF_HWHEEL,
                             time: 0,
                             dwExtraInfo: 0,
@@ -1397,21 +1404,23 @@ fn mf_subtype_for_codec(codec: Codec) -> GUID {
 
 fn supported_mft_codecs(category: GUID) -> Result<Vec<Codec>> {
     unsafe {
-        MFStartup(MF_VERSION, MFSTARTUP_FULL).ok()?;
+        MFStartup(MF_VERSION, MFSTARTUP_FULL).context("MFStartup failed")?;
         let mut supported = Vec::new();
         for codec in [Codec::H264, Codec::Hevc, Codec::Av1] {
             let mut activate_list: *mut Option<IMFActivate> = std::ptr::null_mut();
             let mut count = 0;
-            let output_type = MFT_REGISTER_TYPE_INFO {
+            let subtype = mf_subtype_for_codec(codec);
+            let type_info = MFT_REGISTER_TYPE_INFO {
                 guidMajorType: MFMediaType_Video,
-                guidSubtype: mf_subtype_for_codec(codec),
+                guidSubtype: subtype,
             };
             let is_decoder = category == MFT_CATEGORY_VIDEO_DECODER;
-            let input_type = if is_decoder { Some(&output_type) } else { None };
-            let output_type = if is_decoder { None } else { Some(&output_type) };
+            let input_type = if is_decoder { Some(&type_info as *const _) } else { None };
+            let output_type = if is_decoder { None } else { Some(&type_info as *const _) };
+            
             let _ = MFTEnumEx(
                 category,
-                MFT_ENUM_FLAG_HARDWARE.0 as u32 | MFT_ENUM_FLAG_SORTANDFILTER.0 as u32,
+                MFT_ENUM_FLAG(MFT_ENUM_FLAG_HARDWARE.0 as u32 | MFT_ENUM_FLAG_SORTANDFILTER.0 as u32),
                 input_type,
                 output_type,
                 &mut activate_list,
@@ -1421,7 +1430,7 @@ fn supported_mft_codecs(category: GUID) -> Result<Vec<Codec>> {
                 supported.push(codec);
             }
             if !activate_list.is_null() {
-                CoTaskMemFree(Some(activate_list as _));
+                CoTaskMemFree(Some(activate_list as *const _));
             }
         }
         Ok(supported)

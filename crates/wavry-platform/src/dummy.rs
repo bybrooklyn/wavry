@@ -35,7 +35,7 @@ impl InputInjector for DummyInjector {
         Ok(())
     }
 
-    fn mouse_absolute(&mut self, x: i32, y: i32) -> Result<()> {
+    fn mouse_absolute(&mut self, x: f32, y: f32) -> Result<()> {
         info!("DummyInjector: Mouse Absolute {}, {}", x, y);
         Ok(())
     }

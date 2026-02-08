@@ -209,12 +209,16 @@ fn software_encoder_candidates(codec: Codec) -> &'static [&'static str] {
     }
 }
 
-fn encoder_input_format(encoder_name: &str) -> &'static str {
+fn encoder_input_format(encoder_name: &str, enable_10bit: bool) -> &'static str {
     if encoder_name.starts_with("vaapi")
         || encoder_name.starts_with("nv")
         || encoder_name.starts_with("v4l2")
     {
-        "NV12"
+        if enable_10bit {
+            "P010_10LE"
+        } else {
+            "NV12"
+        }
     } else {
         "I420"
     }
@@ -232,13 +236,13 @@ fn software_encoder_available(codec: Codec) -> bool {
         .any(|name| element_available(name))
 }
 
-fn select_encoder(codec: Codec) -> Result<(String, &'static str)> {
+fn select_encoder(codec: Codec, enable_10bit: bool) -> Result<(String, &'static str)> {
     let encoder = hardware_encoder_candidates(codec)
         .iter()
         .chain(software_encoder_candidates(codec).iter())
         .find(|name| element_available(name))
         .ok_or_else(|| anyhow!("missing GStreamer encoder element for {codec:?}"))?;
-    let input_format = encoder_input_format(encoder);
+    let input_format = encoder_input_format(encoder, enable_10bit);
     Ok((encoder.to_string(), input_format))
 }
 
@@ -247,6 +251,7 @@ fn configure_low_latency_encoder(
     encoder_name: &str,
     bitrate_kbps: u32,
     keyframe_interval_frames: u32,
+    enable_10bit: bool,
 ) -> Result<()> {
     let set_if_exists = |name: &str, value: impl glib::ToValue| {
         if encoder.has_property(name, None) {
@@ -267,6 +272,9 @@ fn configure_low_latency_encoder(
         set_if_exists("tune", "zerolatency");
         set_if_exists("speed-preset", "ultrafast");
         set_if_exists("bframes", 0i32);
+        if enable_10bit {
+            set_if_exists("profile", "main10");
+        }
     } else if encoder_name.contains("svtav1") {
         set_if_exists("preset", 8i32);
         set_if_exists("tune", 0i32);
@@ -274,6 +282,10 @@ fn configure_low_latency_encoder(
         set_if_exists("rate-control", "cbr");
         set_if_exists("max-bframes", 0i32);
         set_if_exists("cabac", false);
+    } else if encoder_name.contains("nvh265") {
+        if enable_10bit {
+            set_if_exists("profile", "main10");
+        }
     }
 
     Ok(())
@@ -290,7 +302,7 @@ pub struct PipewireEncoder {
 impl PipewireEncoder {
     pub async fn new(config: EncodeConfig) -> Result<Self> {
         gst::init()?;
-        let (encoder_name, input_format) = select_encoder(config.codec)?;
+        let (encoder_name, input_format) = select_encoder(config.codec, config.enable_10bit)?;
         let parser = select_parser(config.codec)?;
         require_elements(&["videoconvert", "queue", "appsink"])?;
         if !element_available(&encoder_name) {
@@ -395,9 +407,10 @@ impl PipewireEncoder {
 
         configure_low_latency_encoder(
             &encoder_element,
-            encoder_name,
+            &encoder_name,
             config.bitrate_kbps,
             keyframe_interval_frames,
+            config.enable_10bit,
         )?;
 
         pipeline.set_state(gst::State::Playing)?;

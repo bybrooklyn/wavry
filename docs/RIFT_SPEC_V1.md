@@ -1,4 +1,4 @@
-# RIFT Protocol Specification v1.0.0
+# RIFT Protocol Specification v1.2
 
 **Status:** Current stable baseline for development  
 **Last Updated:** 2026-02-07  

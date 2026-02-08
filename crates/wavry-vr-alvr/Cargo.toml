@@ -1,6 +1,6 @@
 [package]
 name = "wavry-vr-alvr"
-version = "0.1.0"
+version = "0.0.1-canary"
 edition = "2021"
 license = "AGPL-3.0-only"
 
@@ -30,7 +30,7 @@ ndk-context = "0.1"
 ash = "0.38"
 
 [target.'cfg(target_os = "windows")'.dependencies.windows]
-version = "0.58"
+version = "0.0.1-canary"
 features = [
     "Win32_Foundation",
     "Win32_Graphics_Direct3D11",

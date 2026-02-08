@@ -1,6 +1,6 @@
 [package]
 name = "wavry-client"
-version = "0.0.1"
+version = "0.0.1-canary"
 edition.workspace = true
 license.workspace = true
 

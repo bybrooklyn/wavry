@@ -46,12 +46,14 @@ use crate::audio::{
 use crate::EncodedFrame;
 
 #[cfg(target_os = "macos")]
+#[cfg(feature = "opus-support")]
 use opus::{Application, Channels, Encoder as OpusEncoder};
 
 #[cfg(target_os = "macos")]
 struct AudioContext {
     tx: mpsc::Sender<EncodedFrame>,
     start_time: Instant,
+    #[cfg(feature = "opus-support")]
     encoder: OpusEncoder,
     pcm: VecDeque<i16>,
     next_timestamp_us: Option<u64>,
@@ -81,30 +83,38 @@ impl AudioContext {
             }
         }
 
-        let frame_len = OPUS_FRAME_SAMPLES * self.channels;
-        while self.pcm.len() >= frame_len {
-            let frame: Vec<i16> = self.pcm.drain(..frame_len).collect();
-            let mut out = vec![0u8; OPUS_MAX_PACKET_BYTES];
-            let encoded = match self.encoder.encode(&frame, &mut out) {
-                Ok(size) => size,
-                Err(err) => {
-                    log::warn!("Opus encode error: {}", err);
-                    break;
-                }
-            };
-            out.truncate(encoded);
+        #[cfg(feature = "opus-support")]
+        {
+            let frame_len = OPUS_FRAME_SAMPLES * self.channels;
+            while self.pcm.len() >= frame_len {
+                let frame: Vec<i16> = self.pcm.drain(..frame_len).collect();
+                let mut out = vec![0u8; OPUS_MAX_PACKET_BYTES];
+                let encoded = match self.encoder.encode(&frame, &mut out) {
+                    Ok(size) => size,
+                    Err(err) => {
+                        log::warn!("Opus encode error: {}", err);
+                        break;
+                    }
+                };
+                out.truncate(encoded);
 
-            let timestamp_us = self
-                .next_timestamp_us
-                .unwrap_or_else(|| self.start_time.elapsed().as_micros() as u64);
-            self.next_timestamp_us = Some(timestamp_us.saturating_add(self.frame_duration_us));
+                let timestamp_us = self
+                    .next_timestamp_us
+                    .unwrap_or_else(|| self.start_time.elapsed().as_micros() as u64);
+                self.next_timestamp_us = Some(timestamp_us.saturating_add(self.frame_duration_us));
 
-            let packet = EncodedFrame {
-                timestamp_us,
-                keyframe: true,
-                data: out,
-            };
-            let _ = self.tx.try_send(packet);
+                let packet = EncodedFrame {
+                    timestamp_us,
+                    keyframe: true,
+                    data: out,
+                };
+                let _ = self.tx.try_send(packet);
+            }
+        }
+        #[cfg(not(feature = "opus-support"))]
+        {
+            // Just clear the buffer if no encoder is available
+            self.pcm.clear();
         }
     }
 }
@@ -116,6 +126,7 @@ struct PcmChunk {
 }
 
 #[cfg(target_os = "macos")]
+#[cfg(feature = "opus-support")]
 fn create_opus_encoder() -> Result<OpusEncoder> {
     let mut encoder = OpusEncoder::new(OPUS_SAMPLE_RATE, Channels::Stereo, Application::Audio)
         .map_err(|e| anyhow!("Opus encoder init failed: {}", e))?;
@@ -163,11 +174,26 @@ define_class!(
 
 #[cfg(target_os = "macos")]
 impl AudioHandler {
+    #[cfg(feature = "opus-support")]
     fn new(tx: mpsc::Sender<EncodedFrame>, encoder: OpusEncoder) -> Retained<Self> {
         let ivars = std::sync::Mutex::new(AudioContext {
             tx,
             start_time: Instant::now(),
             encoder,
+            pcm: VecDeque::with_capacity(AUDIO_MAX_BUFFER_SAMPLES),
+            next_timestamp_us: None,
+            frame_duration_us: opus_frame_duration_us(),
+            channels: OPUS_CHANNELS,
+        });
+        let this = Self::alloc().set_ivars(ivars);
+        unsafe { msg_send![super(this), init] }
+    }
+
+    #[cfg(not(feature = "opus-support"))]
+    fn new(tx: mpsc::Sender<EncodedFrame>) -> Retained<Self> {
+        let ivars = std::sync::Mutex::new(AudioContext {
+            tx,
+            start_time: Instant::now(),
             pcm: VecDeque::with_capacity(AUDIO_MAX_BUFFER_SAMPLES),
             next_timestamp_us: None,
             frame_duration_us: opus_frame_duration_us(),
@@ -503,8 +529,15 @@ impl MacAudioCapturer {
     pub async fn new() -> Result<Self> {
         let (tx, rx) = mpsc::channel(32);
         let content = get_shareable_content().await?.0;
-        let encoder = create_opus_encoder()?;
-        let output_handler = AudioHandler::new(tx, encoder);
+        
+        #[cfg(feature = "opus-support")]
+        let output_handler = {
+            let encoder = create_opus_encoder()?;
+            AudioHandler::new(tx, encoder)
+        };
+        #[cfg(not(feature = "opus-support"))]
+        let output_handler = AudioHandler::new(tx);
+
         let (stream, queue, rx_start) = setup_stream(content, &output_handler)?;
 
         rx_start

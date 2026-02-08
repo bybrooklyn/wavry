@@ -6,6 +6,7 @@
 - [x] **Generate TLS certificates for WebTransport**: Created `scripts/gen-wt-cert.sh` using ECDSA.
 - [x] **Integrate WebRTC bridge into wavry-server**: Frame pushing and signaling wired.
 - [x] **WebRTC DataChannel Fallback**: Implemented "input" channel handling in `webrtc_bridge.rs` and `wavry-server`.
+- [x] **Web Client Input Hardening**: Fixed `InputInjector` trait to use normalized `f32` coordinates for `mouse_absolute` across all platforms.
 - [x] **Apply database migrations**: Applied security hardening and relay reputation schemas.
 - [x] **Integrate login lockouts**: Implemented email-based and IP-based lockout logic in `auth.rs`.
 - [x] **WebTransport Stability**: Fixed `wtransport 0.6` compilation and integrated certificate loading.
@@ -13,6 +14,7 @@
 ### Phase 7: Mobile & Android Implementation
 - [x] **Quest/OpenXR Integration**: Implemented controller action binding and pose polling in `wavry-vr-alvr`.
 - [x] **Android Build Stabilization**: Fixed NDK/ash/openxr compilation errors and made Opus optional to remove `make`/`ninja` dependency.
+- [x] **Android Full Build Validation**: Verified `./scripts/dev-android.sh` succeeds and links against FFI.
 - [x] **VR-Safe Layouts**: Added specific padding for Quest in the Android UI.
 
 ### Phase 9: Infrastructure & Global Service
@@ -29,22 +31,18 @@
 
 ## 🔥 IMMEDIATE NEXT STEPS
 
-### Priority 1: Hardening & Testing
-1. **Android Full Build Validation** (Est: 1 hour)
-   - Run `./scripts/dev-android.sh` to ensure Kotlin side builds and links correctly.
-   - Test on Quest headset to verify controller tracking.
-
-2. **Web Client End-to-End Hardening** (Est: 2 hours)
-   - Verify input injection from browser via WebRTC DataChannel.
-   - Hardcode some "Admin" users in the DB to test the new dashboard buttons.
-
-### Priority 2: Media Enhancements
-1. **HDR & 10-bit Implementation** (Est: 3-4 hours)
-   - Implement `MTLStorageMode` and color space conversion for macOS HDR.
-   - Update VA-API/NVENC logic for HEVC Main10.
+### Priority 1: Media Enhancements
+1. **HDR & 10-bit Implementation**
+   - [x] macOS: Implemented `kCVPixelFormatType_420YpCbCr10BiPlanarVideoRange` capture and VT Main10 profile.
+   - [x] Linux: Implemented `P010_10LE` input format and VAAPI/NVENC Main10 profiles.
+   - [x] Windows: Cleaned up MF/D3D11 implementation and fixed compilation errors. (Pending native capture integration for HDR).
 
 2. **AV1 Performance Hardening** (Est: 2 hours)
    - Validate hardware acceleration on M3 and Intel ARC.
+
+### Priority 2: Testing & Hardening
+1. **Admin Dashboard Validation** (Est: 1 hour)
+   - Hardcode some "Admin" users in the DB to test the new dashboard buttons.
 
 ---
 

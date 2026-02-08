@@ -89,14 +89,16 @@ impl InputInjector for WindowsInjector {
         Ok(())
     }
 
-    fn mouse_absolute(&mut self, x: i32, y: i32) -> Result<()> {
+    fn mouse_absolute(&mut self, x: f32, y: f32) -> Result<()> {
         // SendInput absolute coordinates are in the range 0..65535
+        let ax = (x.clamp(0.0, 1.0) * 65535.0) as i32;
+        let ay = (y.clamp(0.0, 1.0) * 65535.0) as i32;
         let input = INPUT {
             r#type: INPUT_MOUSE,
             Anonymous: INPUT_0 {
                 mi: MOUSEINPUT {
-                    dx: x,
-                    dy: y,
+                    dx: ax,
+                    dy: ay,
                     mouseData: 0,
                     dwFlags: MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK,
                     time: 0,

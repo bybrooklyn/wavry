@@ -1,6 +1,6 @@
 [package]
 name = "wavry-vr"
-version = "0.1.0"
+version = "0.0.1-canary"
 edition.workspace = true
 license.workspace = true
 

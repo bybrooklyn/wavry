@@ -11,15 +11,12 @@ mkdir -p "$OUT_DIR"
 echo "--- Wavry Provisioning Pipeline ---"
 echo "Target directory: $OUT_DIR"
 
-# 1. Generate Master Signing Key (Ed25519)
+# 1. Generate Master Signing Key (Ed25519 Seed)
 if [ ! -f "$OUT_DIR/master.key" ]; then
-    echo "[1/3] Generating Master Signing Key..."
-    # We use openssl to generate a raw Ed25519 key, then extract the seed
-    openssl genpkey -algorithm ed25519 -out "$OUT_DIR/master_openssl.pem"
-    # Convert to hex for Master consumption
-    openssl pkey -in "$OUT_DIR/master_openssl.pem" -noout -text | grep priv: -A 3 | grep -v priv: | tr -d ' 
-:' > "$OUT_DIR/master.key"
-    rm "$OUT_DIR/master_openssl.pem"
+    echo "[1/3] Generating Master Signing Key (Seed)..."
+    # Ed25519 seeds are just 32 random bytes. 
+    # We generate them as hex for easy consumption by Master.
+    openssl rand -hex 32 > "$OUT_DIR/master.key"
     echo "      Master key saved to $OUT_DIR/master.key"
 else
     echo "[1/3] Master Signing Key already exists. Skipping."
@@ -28,9 +25,25 @@ fi
 # 2. Generate Gateway TLS (ECDSA) for WebTransport
 echo "[2/3] Generating Gateway TLS (localhost)..."
 openssl ecparam -name prime256v1 -genkey -noout -out "$OUT_DIR/gateway-key.pem"
-openssl req -new -x509 -key "$OUT_DIR/gateway-key.pem" -out "$OUT_DIR/gateway-cert.pem" -days 13 
-    -subj "/CN=localhost" 
-    -addext "subjectAltName=DNS:localhost,IP:127.0.0.1"
+
+# Create a temporary config to ensure non-interactive run
+cat <<EOF > "$OUT_DIR/openssl.cnf"
+[req]
+distinguished_name = req_distinguished_name
+x509_extensions = v3_req
+prompt = no
+
+[req_distinguished_name]
+CN = localhost
+
+[v3_req]
+subjectAltName = DNS:localhost,IP:127.0.0.1
+EOF
+
+openssl req -new -x509 -key "$OUT_DIR/gateway-key.pem" -out "$OUT_DIR/gateway-cert.pem" \
+    -days 13 -config "$OUT_DIR/openssl.cnf"
+
+rm "$OUT_DIR/openssl.cnf"
 
 FINGERPRINT=$(openssl x509 -in "$OUT_DIR/gateway-cert.pem" -outform DER | openssl dgst -sha256 -binary | xxd -p -c 256)
 echo "$FINGERPRINT" > "$OUT_DIR/gateway-cert.sha256"

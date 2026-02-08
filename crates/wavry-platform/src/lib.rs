@@ -11,7 +11,7 @@ pub trait InputInjector: Send {
     fn key(&mut self, keycode: u32, pressed: bool) -> Result<()>;
     fn mouse_button(&mut self, button: u8, pressed: bool) -> Result<()>;
     fn mouse_motion(&mut self, dx: i32, dy: i32) -> Result<()>;
-    fn mouse_absolute(&mut self, x: i32, y: i32) -> Result<()>;
+    fn mouse_absolute(&mut self, x: f32, y: f32) -> Result<()>;
 }
 
 pub struct UnsupportedCapturer;

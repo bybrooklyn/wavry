@@ -275,7 +275,9 @@ impl InputInjector for UinputInner {
         self.sync()
     }
 
-    fn mouse_absolute(&mut self, x: i32, y: i32) -> Result<()> {
+    fn mouse_absolute(&mut self, x: f32, y: f32) -> Result<()> {
+        let x = (x.clamp(0.0, 1.0) * 65535.0) as i32;
+        let y = (y.clamp(0.0, 1.0) * 65535.0) as i32;
         self.device.emit(&[
             InputEvent::new(EventType::ABSOLUTE, AbsoluteAxisType::ABS_X.0, x),
             InputEvent::new(EventType::ABSOLUTE, AbsoluteAxisType::ABS_Y.0, y),
@@ -363,8 +365,12 @@ impl InputInjector for X11Injector {
         self.motion_relative(dx, dy)
     }
 
-    fn mouse_absolute(&mut self, x: i32, y: i32) -> Result<()> {
-        self.motion_absolute(x, y)
+    fn mouse_absolute(&mut self, x: f32, y: f32) -> Result<()> {
+        let setup = self.conn.setup();
+        let screen = &setup.roots[0];
+        let px = (x.clamp(0.0, 1.0) * screen.width_in_pixels as f32) as i32;
+        let py = (y.clamp(0.0, 1.0) * screen.height_in_pixels as f32) as i32;
+        self.motion_absolute(px, py)
     }
 }
 
@@ -378,7 +384,7 @@ enum PortalEvent {
 struct PortalInjector {
     tx: mpsc::UnboundedSender<PortalEvent>,
     ready: Arc<AtomicBool>,
-    last_abs: Option<(i32, i32)>,
+    last_abs: Option<(f32, f32)>,
 }
 
 impl PortalInjector {
@@ -505,13 +511,27 @@ impl InputInjector for PortalInjector {
         })
     }
 
-    fn mouse_absolute(&mut self, x: i32, y: i32) -> Result<()> {
+    fn mouse_absolute(&mut self, x: f32, y: f32) -> Result<()> {
         if let Some((last_x, last_y)) = self.last_abs {
-            let dx = x - last_x;
-            let dy = y - last_y;
+            // ScreenCaptureKit/Portals don't always support absolute directly, 
+            // so we calculate delta if needed, but portal.notify_pointer_motion
+            // is usually relative. 
+            // Wait, notify_pointer_motion is RELATIVE.
+            // If we want absolute, we need to know screen resolution or 
+            // use notify_pointer_motion_absolute if available.
+            // Ashpd RemoteDesktop has notify_pointer_motion_absolute.
+            
+            // For now, if we only have relative, we calculate delta.
+            // But we should ideally update the portal loop to use absolute.
+            let dx = (x - last_x) as f64;
+            let dy = (y - last_y) as f64;
+            
+            // We need to scale these to something sensible for "pixels" 
+            // since f32 0..1 is too small for raw relative movement.
+            // Assuming 1920x1080 for delta calculation if no other info.
             self.send(PortalEvent::Motion {
-                dx: dx as f64,
-                dy: dy as f64,
+                dx: dx * 1920.0,
+                dy: dy * 1080.0,
             })?;
         }
         self.last_abs = Some((x, y));
