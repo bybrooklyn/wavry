@@ -530,18 +530,24 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Build macOS app package
-        working-directory: apps/macos
-        run: swift build -c release
+      - name: Install protoc
+        uses: arduino/setup-protoc@v3
 
-      - name: Ad-hoc Sign FFI and App
-        run: |
-          codesign --force --deep --sign - target/release/libwavry_ffi.a
-          codesign --force --deep --sign - apps/macos/.build/release/WavryMacOS
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Restore Rust cache
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build macOS application
+        run: ./scripts/build-macos.sh release
 
       - name: Stage macOS app artifacts
         run: |
           mkdir -p ci-artifacts/macos-app
+          # Copy the full .app bundle
+          cp -R dist/Wavry.app ci-artifacts/macos-app/
+          # Also keep the raw binary and lib for convenience (matching previous behavior)
           cp apps/macos/.build/release/WavryMacOS ci-artifacts/macos-app/
           cp target/release/libwavry_ffi.a ci-artifacts/macos-app/
 

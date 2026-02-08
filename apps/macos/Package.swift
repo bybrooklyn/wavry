@@ -30,6 +30,7 @@ let package = Package(
                 .linkedFramework("CoreFoundation"),
                 .unsafeFlags([
                     "-L../../target/debug",
+                    "-L../../target/release",
                     "-lwavry_ffi"
                 ])
             ]
