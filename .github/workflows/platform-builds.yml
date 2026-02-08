@@ -20,8 +20,31 @@ env:
   RELEASE_ICON_NAME: WavryLogo.png
 
 jobs:
+  pre-build:
+    name: Extract version
+    runs-on: ubuntu-latest
+    outputs:
+      wavry_version: ${{ steps.version.outputs.wavry_version }}
+      rift_version: ${{ steps.version.outputs.rift_version }}
+      delta_version: ${{ steps.version.outputs.delta_version }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Parse VERSION file
+        id: version
+        run: |
+          WAVRY_V=$(grep "WAVRY" VERSION | awk '{print $2}' | sed 's/^v//')
+          RIFT_V=$(grep "RIFT" VERSION | awk '{print $2}' | sed 's/^v//')
+          DELTA_V=$(grep "DELTA" VERSION | awk '{print $2}' | sed 's/^v//')
+          echo "wavry_version=$WAVRY_V" >> $GITHUB_OUTPUT
+          echo "rift_version=$RIFT_V" >> $GITHUB_OUTPUT
+          echo "delta_version=$DELTA_V" >> $GITHUB_OUTPUT
+          echo "Extracted Wavry Version: $WAVRY_V"
+
   rust-tests:
     name: Rust smoke tests
+    needs: pre-build
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -55,6 +78,7 @@ jobs:
 
   code-coverage:
     name: Code Coverage
+    needs: pre-build
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -92,6 +116,7 @@ jobs:
 
   gateway-auth-smoke:
     name: Gateway auth smoke
+    needs: pre-build
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -128,6 +153,7 @@ jobs:
 
   master-relay-smoke:
     name: Master/relay smoke
+    needs: pre-build
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -163,6 +189,7 @@ jobs:
 
   rust-backend:
     name: Rust backend (${{ matrix.os }})
+    needs: pre-build
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -268,12 +295,13 @@ jobs:
       - name: Upload backend artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: backend-${{ matrix.artifact_suffix }}
+          name: backend-${{ matrix.artifact_suffix }}-v${{ needs.pre-build.outputs.wavry_version }}
           path: ci-artifacts/backend/
           if-no-files-found: error
 
   desktop-ui:
     name: Desktop UI typecheck
+    needs: pre-build
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -295,6 +323,7 @@ jobs:
 
   desktop-tauri:
     name: Desktop Tauri build (${{ matrix.os }})
+    needs: pre-build
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -391,12 +420,13 @@ jobs:
       - name: Upload desktop artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: desktop-tauri-${{ matrix.artifact_suffix }}
+          name: desktop-tauri-${{ matrix.artifact_suffix }}-v${{ needs.pre-build.outputs.wavry_version }}
           path: ci-artifacts/desktop/
           if-no-files-found: error
 
   android:
     name: Android (mobile + quest)
+    needs: pre-build
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -485,12 +515,13 @@ jobs:
       - name: Upload Android artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: android-release-apks
+          name: android-release-apks-v${{ needs.pre-build.outputs.wavry_version }}
           path: ci-artifacts/android/
           if-no-files-found: error
 
   macos-app:
     name: macOS Swift app build
+    needs: pre-build
     runs-on: macos-14
     defaults:
       run:
@@ -528,7 +559,7 @@ jobs:
       - name: Upload macOS app artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: macos-app
+          name: macos-app-v${{ needs.pre-build.outputs.wavry_version }}
           path: ci-artifacts/macos-app/
           if-no-files-found: error
 
@@ -536,6 +567,7 @@ jobs:
     name: Publish GitHub release
     runs-on: ubuntu-latest
     needs:
+      - pre-build
       - rust-tests
       - gateway-auth-smoke
       - master-relay-smoke
@@ -577,7 +609,12 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.ref_name }}
+          name: Wavry v${{ needs.pre-build.outputs.wavry_version }}
           generate_release_notes: true
+          body: |
+            Wavry Core: v${{ needs.pre-build.outputs.wavry_version }}
+            RIFT Protocol: v${{ needs.pre-build.outputs.rift_version }}
+            DELTA CC: v${{ needs.pre-build.outputs.delta_version }}
           files: |
             release-artifacts/**/*
           fail_on_unmatched_files: true
