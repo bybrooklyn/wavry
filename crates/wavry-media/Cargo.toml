@@ -46,7 +46,7 @@ objc2-video-toolbox = "0.3.2"
 libloading = "0.8"
 
 [target.'cfg(target_os = "windows")'.dependencies.windows]
-version = "0.0.1-canary"
+version = "0.58"
 features = [
     "Win32_Graphics_Gdi",
     "Win32_Graphics_Direct3D11",

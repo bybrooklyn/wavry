@@ -48,6 +48,7 @@ fn main() -> anyhow::Result<()> {
         no_encrypt: args.no_encrypt,
         identity_key: None,
         relay_info: None,
+        master_url: None,
         max_resolution: None,
         gamepad_enabled: true,
         gamepad_deadzone: 0.1,
@@ -58,5 +59,5 @@ fn main() -> anyhow::Result<()> {
     tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()?
-        .block_on(run_client(config, None))
+        .block_on(run_client(config, None, None))
 }

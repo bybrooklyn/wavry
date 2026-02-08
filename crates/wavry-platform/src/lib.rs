@@ -37,7 +37,7 @@ impl InputInjector for UnsupportedInjector {
         bail!("input injection is not implemented for this platform")
     }
 
-    fn mouse_absolute(&mut self, _x: i32, _y: i32) -> Result<()> {
+    fn mouse_absolute(&mut self, _x: f32, _y: f32) -> Result<()> {
         bail!("input injection is not implemented for this platform")
     }
 }

@@ -44,7 +44,9 @@ use wavry_media::InputEvent;
 use wavry_media::{InputInjector, MacInputInjector};
 
 mod session;
-use session::{run_client, run_host, HostRuntimeConfig, SessionHandle, SessionStats};
+use session::{
+    run_client, run_host, ClientSessionParams, HostRuntimeConfig, SessionHandle, SessionStats,
+};
 
 mod identity;
 mod signaling_ffi;
@@ -322,16 +324,16 @@ fn start_client_internal(
     let renderer = VIDEO_RENDERER.clone(); // Shared Reference
 
     RUNTIME.spawn(async move {
-        if let Err(e) = run_client(
+        if let Err(e) = run_client(ClientSessionParams {
             direct_target,
             relay_info,
             client_name,
-            renderer,
-            stats_clone,
-            rx,
+            renderer_handle: renderer,
+            stats: stats_clone,
+            stop_rx: rx,
             init_tx,
             monitor_rx,
-        )
+        })
         .await
         {
             set_last_error(&format!("Client runtime error: {}", e));

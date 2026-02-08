@@ -193,7 +193,7 @@ impl InputInjector for UinputInjector {
         }
     }
 
-    fn mouse_absolute(&mut self, x: i32, y: i32) -> Result<()> {
+    fn mouse_absolute(&mut self, x: f32, y: f32) -> Result<()> {
         match self {
             UinputInjector::Uinput(inner) => inner.mouse_absolute(x, y),
             UinputInjector::Portal(portal) => portal.mouse_absolute(x, y),

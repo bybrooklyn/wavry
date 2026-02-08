@@ -969,7 +969,7 @@ mod host {
                     rift_core::control_message::Content::SelectMonitor(select) => {
                         info!("Client selected monitor: {}", select.monitor_id);
                         base_config.display_id = Some(select.monitor_id);
-                        return Ok(Some(selected_codec.unwrap_or(Codec::H264)));
+                        return Ok(Some(base_config.codec));
                     }
                     _ => {}
                 }

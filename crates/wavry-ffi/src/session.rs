@@ -753,16 +753,28 @@ impl Renderer for SharedRenderer {
     }
 }
 
-pub async fn run_client(
-    direct_target: Option<(String, u16)>,
-    relay_info: Option<RelayInfo>,
-    client_name: String,
-    renderer_handle: Arc<std::sync::Mutex<Option<Box<PlatformVideoRenderer>>>>,
-    stats: Arc<SessionStats>,
-    mut stop_rx: oneshot::Receiver<()>,
-    init_tx: oneshot::Sender<Result<()>>,
-    monitor_rx: mpsc::UnboundedReceiver<u32>,
-) -> Result<()> {
+pub struct ClientSessionParams {
+    pub direct_target: Option<(String, u16)>,
+    pub relay_info: Option<RelayInfo>,
+    pub client_name: String,
+    pub renderer_handle: Arc<std::sync::Mutex<Option<Box<PlatformVideoRenderer>>>>,
+    pub stats: Arc<SessionStats>,
+    pub stop_rx: oneshot::Receiver<()>,
+    pub init_tx: oneshot::Sender<Result<()>>,
+    pub monitor_rx: mpsc::UnboundedReceiver<u32>,
+}
+
+pub async fn run_client(params: ClientSessionParams) -> Result<()> {
+    let ClientSessionParams {
+        direct_target,
+        relay_info,
+        client_name,
+        renderer_handle,
+        stats,
+        mut stop_rx,
+        init_tx,
+        monitor_rx,
+    } = params;
     let mut init_tx = Some(init_tx);
     let connect_addr = match direct_target.as_ref() {
         Some((host_ip, port)) => match format!("{}:{}", host_ip, port).parse::<SocketAddr>() {
@@ -821,10 +833,6 @@ pub async fn run_client(
     let mut started = false;
     let startup_deadline = Instant::now() + Duration::from_secs(12);
     let mut stats_tick = time::interval(Duration::from_millis(250));
-    
-    let (monitor_tx, monitor_rx) = tokio::sync::mpsc::unbounded_channel::<u32>();
-    // Note: SessionHandle needs to be created by the caller or we need a way to return the tx.
-    // For now, I'll just pass None or fix the caller.
     
     let client_fut = run_rift_client(config, Some(factory), Some(monitor_rx));
     tokio::pin!(client_fut);

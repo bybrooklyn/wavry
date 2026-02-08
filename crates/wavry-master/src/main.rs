@@ -14,7 +14,6 @@ use axum::{
     Json, Router,
 };
 use clap::Parser;
-use rand::Rng;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use tower_http::cors::{AllowOrigin, CorsLayer};

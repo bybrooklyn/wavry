@@ -203,21 +203,6 @@ pub fn hash_token(token: &str) -> String {
     hex::encode(hasher.finalize())
 }
 
-pub fn constant_time_eq(a: &str, b: &str) -> bool {
-    let a_bytes = a.as_bytes();
-    let b_bytes = b.as_bytes();
-
-    if a_bytes.len() != b_bytes.len() {
-        return false;
-    }
-
-    let mut diff = 0u8;
-    for (lhs, rhs) in a_bytes.iter().zip(b_bytes.iter()) {
-        diff |= lhs ^ rhs;
-    }
-    diff == 0
-}
-
 pub fn is_valid_email(email: &str) -> bool {
     if email.len() > 254 || email.contains(char::is_whitespace) {
         return false;

@@ -15,7 +15,7 @@ env_logger = "0.10"
 
 # Internal dependencies
 wavry-common = { path = "../wavry-common" }
-wavry-media = { version = "0.0.1", path = "../wavry-media", default-features = false }
+wavry-media = { path = "../wavry-media", default-features = false }
 rift-core = { path = "../rift-core" }
 rift-crypto = { path = "../rift-crypto" }
 tokio = { workspace = true, features = ["full"] }

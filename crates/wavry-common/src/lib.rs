@@ -6,6 +6,7 @@
 
 pub mod error;
 pub mod protocol;
+pub mod helpers;
 
 pub use error::{Error, Result};
 pub use protocol::*;

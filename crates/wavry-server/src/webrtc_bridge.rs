@@ -1,9 +1,10 @@
 use anyhow::Result;
+use prost::Message;
 use webrtc::ice_transport::ice_server;
 use futures_util::{SinkExt, StreamExt};
 use std::sync::Arc;
 use tokio::sync::{mpsc, Mutex};
-use tokio_tungstenite::{connect_async, tungstenite::protocol::Message};
+use tokio_tungstenite::{connect_async, tungstenite::protocol::Message as WsMessage};
 use tracing::{debug, error, info, warn};
 use webrtc::api::media_engine::{MediaEngine, MIME_TYPE_H264};
 use webrtc::api::APIBuilder;
@@ -61,7 +62,7 @@ impl WebRtcBridge {
             token: self.session_token.clone(),
         };
         ws_stream
-            .send(Message::Text(serde_json::to_string(&bind_msg)?))
+            .send(WsMessage::Text(serde_json::to_string(&bind_msg)?))
             .await?;
 
         let (mut write, mut read) = ws_stream.split();
@@ -71,7 +72,7 @@ impl WebRtcBridge {
         tokio::spawn(async move {
             while let Some(signal) = signal_rx.recv().await {
                 if let Ok(text) = serde_json::to_string(&signal) {
-                    if let Err(e) = write.send(Message::Text(text)).await {
+                    if let Err(e) = write.send(WsMessage::Text(text)).await {
                         error!("Failed to send signaling message: {}", e);
                         break;
                     }
@@ -81,7 +82,7 @@ impl WebRtcBridge {
 
         while let Some(msg) = read.next().await {
             match msg {
-                Ok(Message::Text(text)) => {
+                Ok(WsMessage::Text(text)) => {
                     let signal: SignalMessage = match serde_json::from_str(&text) {
                         Ok(s) => s,
                         Err(e) => {
@@ -91,7 +92,7 @@ impl WebRtcBridge {
                     };
                     self.handle_signal(signal, signal_tx.clone()).await?;
                 }
-                Ok(Message::Close(_)) => break,
+                Ok(WsMessage::Close(_)) => break,
                 Err(e) => {
                     error!("Signaling WebSocket error: {}", e);
                     break;
@@ -173,7 +174,6 @@ impl WebRtcBridge {
                     d.on_message(Box::new(move |msg| {
                         let input_tx = input_tx.clone();
                         Box::pin(async move {
-                            use prost::Message;
                             if let Ok(input_msg) = rift_core::InputMessage::decode(msg.data) {
                                 if let Some(event) = input_msg.event {
                                     let _ = input_tx.send(event);

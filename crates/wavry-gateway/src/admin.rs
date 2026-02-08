@@ -95,7 +95,7 @@ fn assert_admin(headers: &HeaderMap) -> Result<(), AdminAuthError> {
         return Err(AdminAuthError::Invalid);
     };
 
-    if !security::constant_time_eq(&got, &expected) {
+    if !wavry_common::helpers::constant_time_eq(&got, &expected) {
         return Err(AdminAuthError::Invalid);
     }
 

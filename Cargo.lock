@@ -5698,7 +5698,7 @@ dependencies = [
 
 [[package]]
 name = "rift-core"
-version = "0.1.0"
+version = "0.0.1-canary"
 dependencies = [
  "anyhow",
  "bitflags 2.10.0",
@@ -5715,7 +5715,7 @@ dependencies = [
 
 [[package]]
 name = "rift-crypto"
-version = "0.1.0"
+version = "0.0.1-canary"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -8374,7 +8374,7 @@ dependencies = [
 
 [[package]]
 name = "wavry-cli"
-version = "0.1.0"
+version = "0.0.1-canary"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -8394,7 +8394,7 @@ dependencies = [
 
 [[package]]
 name = "wavry-client"
-version = "0.0.1"
+version = "0.0.1-canary"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -8426,7 +8426,7 @@ dependencies = [
 
 [[package]]
 name = "wavry-common"
-version = "0.1.0"
+version = "0.0.1-canary"
 dependencies = [
  "anyhow",
  "serde",
@@ -8439,7 +8439,7 @@ dependencies = [
 
 [[package]]
 name = "wavry-desktop"
-version = "0.1.0"
+version = "0.0.1-canary"
 dependencies = [
  "anyhow",
  "bytes",
@@ -8464,7 +8464,7 @@ dependencies = [
 
 [[package]]
 name = "wavry-ffi"
-version = "0.1.0"
+version = "0.0.1-canary"
 dependencies = [
  "anyhow",
  "bytes",
@@ -8488,7 +8488,7 @@ dependencies = [
 
 [[package]]
 name = "wavry-gateway"
-version = "0.1.0"
+version = "0.0.1-canary"
 dependencies = [
  "anyhow",
  "argon2",
@@ -8522,7 +8522,7 @@ dependencies = [
 
 [[package]]
 name = "wavry-master"
-version = "0.1.0"
+version = "0.0.1-canary"
 dependencies = [
  "anyhow",
  "axum",
@@ -8545,7 +8545,7 @@ dependencies = [
 
 [[package]]
 name = "wavry-media"
-version = "0.0.1"
+version = "0.0.1-canary"
 dependencies = [
  "anyhow",
  "ashpd",
@@ -8575,13 +8575,13 @@ dependencies = [
  "serde",
  "tokio",
  "tracing",
- "windows 0.54.0",
+ "windows 0.58.0",
  "x11rb",
 ]
 
 [[package]]
 name = "wavry-platform"
-version = "0.0.1"
+version = "0.0.1-canary"
 dependencies = [
  "anyhow",
  "ashpd",
@@ -8598,7 +8598,7 @@ dependencies = [
 
 [[package]]
 name = "wavry-relay"
-version = "0.0.1"
+version = "0.0.1-canary"
 dependencies = [
  "anyhow",
  "bytes",
@@ -8622,7 +8622,7 @@ dependencies = [
 
 [[package]]
 name = "wavry-server"
-version = "0.0.1"
+version = "0.0.1-canary"
 dependencies = [
  "anyhow",
  "bytes",
@@ -8630,6 +8630,7 @@ dependencies = [
  "futures-util",
  "hex",
  "mdns-sd",
+ "prost",
  "rand 0.8.5",
  "rift-core",
  "rift-crypto",
@@ -8648,7 +8649,7 @@ dependencies = [
 
 [[package]]
 name = "wavry-vr"
-version = "0.1.0"
+version = "0.0.1-canary"
 dependencies = [
  "bytes",
  "thiserror 1.0.69",
@@ -8656,7 +8657,7 @@ dependencies = [
 
 [[package]]
 name = "wavry-vr-alvr"
-version = "0.1.0"
+version = "0.0.1-canary"
 dependencies = [
  "ash",
  "glam",
@@ -8677,7 +8678,7 @@ dependencies = [
 
 [[package]]
 name = "wavry-web"
-version = "0.1.0"
+version = "0.0.1-canary"
 dependencies = [
  "anyhow",
  "bytes",

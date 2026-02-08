@@ -19,7 +19,7 @@ tokio = { workspace = true, features = ["rt", "sync"] }
 x11rb = { version = "0.13", features = ["xtest"] }
 
 [target.'cfg(target_os = "windows")'.dependencies.windows]
-version = "0.0.1-canary"
+version = "0.58"
 features = [
     "Win32_UI_Input_KeyboardAndMouse",
     "Win32_Foundation",

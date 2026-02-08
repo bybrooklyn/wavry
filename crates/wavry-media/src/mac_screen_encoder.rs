@@ -399,13 +399,7 @@ fn hardware_encode_supported(codec: Codec) -> bool {
 
 #[cfg(target_os = "macos")]
 fn create_compression_session(
-    codec: Codec,
-    width: i32,
-    height: i32,
-    fps: u16,
-    bitrate_kbps: u32,
-    keyframe_interval_ms: u32,
-    enable_10bit: bool,
+    config: EncodeConfig,
     tx: mpsc::Sender<EncodedFrame>,
 ) -> Result<(*mut c_void, Box<EncoderContext>)> {
     // Create context
@@ -422,9 +416,9 @@ fn create_compression_session(
     let status = unsafe {
         VTCompressionSession::create(
             None, // allocator
-            width,
-            height,
-            cm_codec_type(codec),
+            config.resolution.width as i32,
+            config.resolution.height as i32,
+            cm_codec_type(config.codec),
             None, // encoderSpecification
             None, // sourceImageBufferAttributes
             None, // compressedDataAllocator
@@ -458,7 +452,7 @@ fn create_compression_session(
         );
 
         // Set bitrate (in bits per second)
-        let bitrate = (bitrate_kbps * 1000) as i32;
+        let bitrate = (config.bitrate_kbps * 1000) as i32;
         let bitrate_num = CFNumberCreate(
             std::ptr::null(),
             K_CFNUMBER_INT32_TYPE,
@@ -474,7 +468,7 @@ fn create_compression_session(
         }
 
         // Set expected frame rate
-        let fps_f64 = fps as f64;
+        let fps_f64 = config.fps as f64;
         let fps_num = CFNumberCreate(
             std::ptr::null(),
             K_CFNUMBER_FLOAT64_TYPE,
@@ -490,7 +484,7 @@ fn create_compression_session(
         }
 
         // Set keyframe interval (in frames)
-        let keyframe_frames = ((keyframe_interval_ms as f64 / 1000.0) * fps as f64) as i32;
+        let keyframe_frames = ((config.keyframe_interval_ms as f64 / 1000.0) * config.fps as f64) as i32;
         let keyframe_num = CFNumberCreate(
             std::ptr::null(),
             K_CFNUMBER_INT32_TYPE,
@@ -506,14 +500,12 @@ fn create_compression_session(
         }
 
         // 10-bit and HDR support
-        if enable_10bit && (codec == Codec::Hevc || codec == Codec::Av1) {
-            if codec == Codec::Hevc {
-                VTSessionSetProperty(
-                    session,
-                    kVTCompressionPropertyKey_ProfileLevel,
-                    kVTProfileLevel_HEVC_Main10_AutoLevel,
-                );
-            }
+        if config.enable_10bit && config.codec == Codec::Hevc {
+            VTSessionSetProperty(
+                session,
+                kVTCompressionPropertyKey_ProfileLevel,
+                kVTProfileLevel_HEVC_Main10_AutoLevel,
+            );
             // AV1 10-bit is often implicit in AutoLevel or requires specific profile keys
             // which vary by macOS version.
         }
@@ -526,7 +518,7 @@ fn create_compression_session(
         );
 
         // H.264-only entropy setting for better quality/efficiency at the same bitrate.
-        if codec == Codec::H264 {
+        if config.codec == Codec::H264 {
             let cabac = b"CABAC\0";
             let cabac_str = CFStringCreateWithCString(std::ptr::null(), cabac.as_ptr(), 0x08000100); // kCFStringEncodingUTF8
             if !cabac_str.is_null() {
@@ -792,16 +784,7 @@ impl MacScreenEncoder {
         let content = get_shareable_content().await?.0;
 
         // 2. Create compression session
-        let (session_ptr, encoder_context) = create_compression_session(
-            config.codec,
-            config.resolution.width as i32,
-            config.resolution.height as i32,
-            config.fps,
-            config.bitrate_kbps,
-            config.keyframe_interval_ms,
-            config.enable_10bit,
-            tx,
-        )?;
+        let (session_ptr, encoder_context) = create_compression_session(config, tx)?;
         let send_session_ptr = SendPtr(session_ptr);
 
         let output_handler = OutputHandler::new(send_session_ptr.0);
