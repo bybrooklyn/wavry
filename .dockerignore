@@ -1,9 +1,61 @@
+# Source control
 .git
 .github
+.gitignore
+.gitattributes
+
+# Build artifacts
 target
 dist
-**/.DS_Store
+build
+.svelte-kit
+.gradle
+
+# Dependencies
+node_modules
 **/node_modules
-apps/android/.gradle
-apps/android/local.properties
-apps/macos/.build
+third_party
+
+# IDE and Editor files
+.idea
+.vscode
+.gemini
+.claude
+.codex
+*.swp
+*.swo
+.DS_Store
+**/.DS_Store
+
+# Mobile and Desktop UI apps (not needed for backend docker images)
+apps/android
+apps/macos
+apps/web-reference
+crates/wavry-desktop/src
+crates/wavry-desktop/build
+crates/wavry-desktop/node_modules
+
+# Documentation and Design
+docs
+design
+AGENTS.md
+CLAUDE.md
+GEMINI.md
+TODO.md
+README.md
+
+# Sensitive files
+certs
+secrets
+*.pem
+*.key
+*.env
+
+# Others
+LICENSE
+VERSION
+scripts
+target-android
+target-macos
+target-x86_64-pc-windows-gnu
+target-x86_64-unknown-linux-musl
