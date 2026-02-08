@@ -57,7 +57,7 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ${{ env.REGISTRY }}/${{ github.repository }}/wavry-${{ matrix.component }}
+          images: ${{ env.REGISTRY }}/${{ github.repository }}/${{ matrix.component }}
           tags: |
             type=ref,event=branch
             type=ref,event=pr

@@ -220,7 +220,7 @@ fn build_stream_u16(
     Ok(stream)
 }
 
-pub(crate) fn f32_to_i16(value: f32) -> i16 {
+pub fn f32_to_i16(value: f32) -> i16 {
     (value.clamp(-1.0, 1.0) * i16::MAX as f32) as i16
 }
 

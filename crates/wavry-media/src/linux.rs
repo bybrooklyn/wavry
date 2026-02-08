@@ -9,7 +9,6 @@ use ashpd::desktop::{
     screencast::{CursorMode, Screencast, SourceType, Stream},
     PersistMode,
 };
-use gst::glib;
 use gstreamer as gst;
 use gstreamer::prelude::*;
 use gstreamer_app as gst_app;
@@ -67,8 +66,8 @@ fn x11_monitor_crop(display_id: u32) -> Result<Option<(u32, u32, u32, u32)>> {
     let y = y.max(0) as u32;
     let width = width.max(1) as u32;
     let height = height.max(1) as u32;
-    let screen_w = screen.width_in_pixels;
-    let screen_h = screen.height_in_pixels;
+    let screen_w = screen.width_in_pixels as u32;
+    let screen_h = screen.height_in_pixels as u32;
 
     let right = screen_w.saturating_sub(x.saturating_add(width));
     let bottom = screen_h.saturating_sub(y.saturating_add(height));
@@ -255,7 +254,7 @@ fn configure_low_latency_encoder(
 ) -> Result<()> {
     fn set_if_exists<V: ToValue>(encoder: &gst::Element, name: &str, value: V) {
         if encoder.has_property(name, None) {
-            encoder.set_property(name, value);
+            encoder.set_property(name, &value);
         }
     }
 

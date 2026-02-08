@@ -22,7 +22,7 @@ android {
         minSdk = 28
         targetSdk = 35
         versionCode = 1
-        versionName = "0.0.1-canary"
+        versionName = "0.0.1-unstable"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 

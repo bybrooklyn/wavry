@@ -2,36 +2,31 @@
 // Using Windows.Graphics.Capture (WGC) for high-performance screen capture.
 
 use crate::{
-    Codec, DecodeConfig, EncodeConfig, EncodedFrame, FrameData, FrameFormat, RawFrame, Renderer,
+    Codec, EncodeConfig, EncodedFrame, Renderer,
 };
-use anyhow::{anyhow, Result};
-use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-use cpal::{BufferSize, SampleFormat, SampleRate, Stream, StreamConfig, SupportedBufferSize};
-use libloading::{Library, Symbol};
-use opus::{Application, Channels, Decoder as OpusDecoder, Encoder as OpusEncoder};
+use anyhow::{anyhow, Context, Result};
+use libloading::Library;
+use opus::{Application, Channels, Encoder as OpusEncoder};
 use std::collections::VecDeque;
 use std::ffi::c_void;
-use std::sync::Arc;
-use std::sync::Mutex;
 use std::time::Instant;
 
 use crate::audio::{
     opus_frame_duration_us, AUDIO_MAX_BUFFER_SAMPLES, OPUS_BITRATE_BPS, OPUS_CHANNELS,
-    OPUS_FRAME_SAMPLES, OPUS_MAX_FRAME_SAMPLES, OPUS_MAX_PACKET_BYTES, OPUS_SAMPLE_RATE,
+    OPUS_FRAME_SAMPLES, OPUS_MAX_PACKET_BYTES, OPUS_SAMPLE_RATE,
 };
+use crate::audio::renderer::f32_to_i16;
 
 #[cfg(target_os = "windows")]
 use windows::{
-    core::*, Foundation::*, Graphics::Capture::*, Graphics::DirectX::Direct3D11::IDirect3DDevice,
+    core::*, Graphics::Capture::*, Graphics::DirectX::Direct3D11::IDirect3DDevice,
     Graphics::DirectX::DirectXPixelFormat, Win32::Foundation::*, Win32::Graphics::Direct3D::*,
     Win32::Graphics::Direct3D11::*, Win32::Graphics::Dxgi::Common::*, Win32::Graphics::Dxgi::*,
     Win32::Graphics::Gdi::*, Win32::Media::Audio::*, Win32::Media::MediaFoundation::*,
     Win32::System::Com::*, Win32::System::WinRT::Direct3D11::IDirect3DDxgiInterfaceAccess,
     Win32::System::WinRT::Graphics::Capture::IGraphicsCaptureItemInterop,
     Win32::UI::Input::KeyboardAndMouse::*, Win32::UI::WindowsAndMessaging::GetDesktopWindow,
-    Win32::UI::WindowsAndMessaging::EnumDisplayMonitors, Win32::UI::WindowsAndMessaging::GetMonitorInfoW,
-    Win32::UI::WindowsAndMessaging::MONITORINFOEXW, Graphics::SizeInt32,
-    Win32::Graphics::Dxgi::DXGI_PRESENT,
+    Graphics::SizeInt32,
 };
 
 #[cfg(target_os = "windows")]
@@ -44,6 +39,11 @@ const KSDATAFORMAT_SUBTYPE_IEEE_FLOAT: GUID =
     GUID::from_u128(0x00000003_0000_0010_8000_00aa00389b71);
 #[cfg(target_os = "windows")]
 const KSDATAFORMAT_SUBTYPE_PCM: GUID = GUID::from_u128(0x00000001_0000_0010_8000_00aa00389b71);
+
+#[cfg(target_os = "windows")]
+const WAVE_FORMAT_IEEE_FLOAT: u32 = 0x0003;
+#[cfg(target_os = "windows")]
+const WAVE_FORMAT_EXTENSIBLE: u32 = 0xFFFE;
 
 #[cfg(target_os = "windows")]
 fn pack_u64(hi: u32, lo: u32) -> u64 {
@@ -94,9 +94,6 @@ fn create_direct3d_device(device: &ID3D11Device) -> Result<IDirect3DDevice> {
         Ok(device)
     }
 }
-
-#[cfg(target_os = "windows")]
-use windows::Win32::Media::MediaFoundation::*;
 
 /// Windows screen encoder using Media Foundation
 pub struct WindowsEncoder {
@@ -180,7 +177,7 @@ impl WindowsEncoder {
 
             MFTEnumEx(
                 mft_category,
-                MFT_ENUM_FLAG(MFT_ENUM_FLAG_HARDWARE.0 as u32 | MFT_ENUM_FLAG_SORTANDFILTER.0 as u32),
+                MFT_ENUM_FLAG(MFT_ENUM_FLAG_HARDWARE.0 as i32 | MFT_ENUM_FLAG_SORTANDFILTER.0 as i32),
                 None,
                 Some(&output_type),
                 &mut activate_list,
@@ -309,7 +306,7 @@ impl WindowsEncoder {
                     &mut status,
                 ) {
                     Ok(_) => {
-                        let sample = unsafe { (*output_data_buffer.pSample).as_ref().unwrap() };
+                        let sample = (*output_data_buffer.pSample).as_ref().unwrap();
                         let total_length = sample.GetTotalLength()?;
                         let mut data = vec![0u8; total_length as usize];
 
@@ -361,35 +358,37 @@ impl WindowsEncoder {
             Width: width as i32,
             Height: height as i32,
         };
-        self.frame_pool.Recreate(
-            &winrt_device,
-            DirectXPixelFormat::B8G8R8A8UIntNormalized,
-            2,
-            new_size,
-        )?;
+        unsafe {
+            self.frame_pool.Recreate(
+                &winrt_device,
+                DirectXPixelFormat::B8G8R8A8UIntNormalized,
+                2,
+                new_size,
+            )?;
 
-        self.config.resolution.width = width as u16;
-        self.config.resolution.height = height as u16;
-        self.frame_width = width;
-        self.frame_height = height;
+            self.config.resolution.width = width as u16;
+            self.config.resolution.height = height as u16;
+            self.frame_width = width;
+            self.frame_height = height;
 
-        let output_media_type: IMFMediaType = MFCreateMediaType()?;
-        output_media_type.SetGUID(&MF_MT_MAJOR_TYPE, &MFMediaType_Video)?;
-        output_media_type.SetGUID(&MF_MT_SUBTYPE, &mf_subtype_for_codec(self.config.codec))?;
-        output_media_type.SetUINT32(&MF_MT_AVG_BITRATE, self.config.bitrate_kbps * 1000)?;
-        MFSetAttributeRatio(output_media_type.cast()?, &MF_MT_FRAME_RATE, self.config.fps as u32, 1)?;
-        MFSetAttributeSize(output_media_type.cast()?, &MF_MT_FRAME_SIZE, width, height)?;
-        output_media_type
-            .SetUINT32(&MF_MT_INTERLACE_MODE, MFVideoInterlace_Progressive.0 as u32)?;
-        self.transform
-            .SetOutputType(0, Some(&output_media_type), 0)?;
+            let output_media_type: IMFMediaType = MFCreateMediaType()?;
+            output_media_type.SetGUID(&MF_MT_MAJOR_TYPE, &MFMediaType_Video)?;
+            output_media_type.SetGUID(&MF_MT_SUBTYPE, &mf_subtype_for_codec(self.config.codec))?;
+            output_media_type.SetUINT32(&MF_MT_AVG_BITRATE, self.config.bitrate_kbps * 1000)?;
+            MFSetAttributeRatio(output_media_type.cast()?, &MF_MT_FRAME_RATE, self.config.fps as u32, 1)?;
+            MFSetAttributeSize(output_media_type.cast()?, &MF_MT_FRAME_SIZE, width, height)?;
+            output_media_type
+                .SetUINT32(&MF_MT_INTERLACE_MODE, MFVideoInterlace_Progressive.0 as u32)?;
+            self.transform
+                .SetOutputType(0, Some(&output_media_type), 0)?;
 
-        let input_media_type: IMFMediaType = MFCreateMediaType()?;
-        input_media_type.SetGUID(&MF_MT_MAJOR_TYPE, &MFMediaType_Video)?;
-        input_media_type.SetGUID(&MF_MT_SUBTYPE, &MF_BGR32)?;
-        MFSetAttributeSize(input_media_type.cast()?, &MF_MT_FRAME_SIZE, width, height)?;
-        MFSetAttributeRatio(input_media_type.cast()?, &MF_MT_FRAME_RATE, self.config.fps as u32, 1)?;
-        self.transform.SetInputType(0, Some(&input_media_type), 0)?;
+            let input_media_type: IMFMediaType = MFCreateMediaType()?;
+            input_media_type.SetGUID(&MF_MT_MAJOR_TYPE, &MFMediaType_Video)?;
+            input_media_type.SetGUID(&MF_MT_SUBTYPE, &MF_BGR32)?;
+            MFSetAttributeSize(input_media_type.cast()?, &MF_MT_FRAME_SIZE, width, height)?;
+            MFSetAttributeRatio(input_media_type.cast()?, &MF_MT_FRAME_RATE, self.config.fps as u32, 1)?;
+            self.transform.SetInputType(0, Some(&input_media_type), 0)?;
+        }
 
         Ok(())
     }
@@ -472,7 +471,7 @@ impl WindowsRenderer {
 
             MFTEnumEx(
                 MFT_CATEGORY_VIDEO_DECODER,
-                MFT_ENUM_FLAG(MFT_ENUM_FLAG_HARDWARE.0 as u32 | MFT_ENUM_FLAG_SORTANDFILTER.0 as u32),
+                MFT_ENUM_FLAG(MFT_ENUM_FLAG_HARDWARE.0 as i32 | MFT_ENUM_FLAG_SORTANDFILTER.0 as i32),
                 Some(&input_type),
                 None,
                 &mut activate_list,
@@ -565,7 +564,7 @@ impl Renderer for WindowsRenderer {
             ) {
                 Ok(_) => {
                     // Decoder provided a sample (likely containing a D3D11 texture)
-                    if let Some(output_sample) = unsafe { (*output_data_buffer.pSample).as_ref() } {
+                    if let Some(output_sample) = (*output_data_buffer.pSample).as_ref() {
                         let buffer = output_sample.GetBufferByIndex(0)?;
                         let access: IDirect3DDxgiInterfaceAccess = buffer.cast()?;
                         let texture: ID3D11Texture2D = access.GetInterface()?;
@@ -637,7 +636,11 @@ pub struct WindowsAudioCapturer {
 impl WindowsAudioCapturer {
     pub async fn new() -> Result<Self> {
         unsafe {
-            CoInitializeEx(None, COINIT_MULTITHREADED).context("CoInitializeEx failed")?;
+            if let Err(e) = CoInitializeEx(None, COINIT_MULTITHREADED) {
+                if e.code() != RPC_E_CHANGED_MODE {
+                    return Err(anyhow!("CoInitializeEx failed: {:?}", e));
+                }
+            }
 
             let enumerator: IMMDeviceEnumerator =
                 CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL).context("CoCreateInstance failed")?;
@@ -1420,7 +1423,7 @@ fn supported_mft_codecs(category: GUID) -> Result<Vec<Codec>> {
             
             let _ = MFTEnumEx(
                 category,
-                MFT_ENUM_FLAG(MFT_ENUM_FLAG_HARDWARE.0 as u32 | MFT_ENUM_FLAG_SORTANDFILTER.0 as u32),
+                MFT_ENUM_FLAG((MFT_ENUM_FLAG_HARDWARE.0 as u32 | MFT_ENUM_FLAG_SORTANDFILTER.0 as u32) as i32),
                 input_type,
                 output_type,
                 &mut activate_list,
