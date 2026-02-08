@@ -16,14 +16,18 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
+  RELEASE_ICON_PATH: crates/wavry-desktop/src-tauri/icons/icon.png
+  RELEASE_ICON_NAME: WavryLogo.png
 
 jobs:
   rust-tests:
     name: Rust smoke tests
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        shell: bash
+    # ... (existing rust-tests steps)
+
+  code-coverage:
+    name: Code Coverage
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -37,19 +41,26 @@ jobs:
           sudo apt-get install -y --no-install-recommends \
             pkg-config \
             protobuf-compiler \
-            libsqlite3-dev
+            libsqlite3-dev \
+            libgstreamer1.0-dev \
+            libgstreamer-plugins-base1.0-dev \
+            libasound2-dev
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Restore Rust cache
-        uses: Swatinem/rust-cache@v2
+      - name: Install cargo-tarpaulin
+        run: cargo install cargo-tarpaulin
 
-      - name: Run targeted smoke tests
-        run: |
-          cargo test --locked -p wavry-common
-          cargo test --locked -p wavry-relay
-          cargo test --locked -p wavry-gateway
+      - name: Generate coverage report
+        run: cargo tarpaulin --workspace --timeout 120 --out Xml
+
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v4
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          file: ./tarpaulin-report.xml
+          fail_ci_if_error: false
 
   gateway-auth-smoke:
     name: Gateway auth smoke
@@ -79,8 +90,13 @@ jobs:
       - name: Restore Rust cache
         uses: Swatinem/rust-cache@v2
 
+      - name: Provision infrastructure secrets
+        run: ./scripts/provision-infrastructure.sh ./secrets
+
       - name: Run gateway auth smoke script
-        run: ./scripts/gateway-auth-smoke.sh
+        run: |
+          source ./secrets/wavry.env
+          ./scripts/gateway-auth-smoke.sh
 
   master-relay-smoke:
     name: Master/relay smoke
@@ -109,8 +125,13 @@ jobs:
       - name: Restore Rust cache
         uses: Swatinem/rust-cache@v2
 
+      - name: Provision infrastructure secrets
+        run: ./scripts/provision-infrastructure.sh ./secrets
+
       - name: Run master/relay smoke script
-        run: ./scripts/master-relay-smoke.sh
+        run: |
+          source ./secrets/wavry.env
+          ./scripts/master-relay-smoke.sh
 
   rust-backend:
     name: Rust backend (${{ matrix.os }})
@@ -147,6 +168,7 @@ jobs:
             protobuf-compiler \
             libgstreamer1.0-dev \
             libgstreamer-plugins-base1.0-dev \
+            libasound2-dev \
             libx11-dev \
             libxtst-dev \
             libxrandr-dev \
@@ -175,6 +197,20 @@ jobs:
             -p wavry-cli \
             -p wavry-ffi
 
+      - name: Sign Windows Binaries
+        if: runner.os == 'Windows' && env.WINDOWS_PFX != '' && github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
+        env:
+          WINDOWS_PFX: ${{ secrets.WINDOWS_CERTIFICATE_P12 }}
+        run: |
+          $certPath = "release.pfx"
+          [System.Convert]::FromBase64String("${{ secrets.WINDOWS_CERTIFICATE_P12 }}") | Set-Content $certPath -Encoding Byte
+          $bins = Get-ChildItem -Path target/release/*.exe, target/release/*.lib
+          foreach ($bin in $bins) {
+            & "C:\Program Files (x86)\Windows Kits\10\bin\10.0.22621.0\x64\signtool.exe" sign /f $certPath /p "${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}" /t http://timestamp.digicert.com /v $bin.FullName
+          }
+          Remove-Item $certPath
+
       - name: Stage backend artifacts
         run: |
           mkdir -p ci-artifacts/backend
@@ -189,6 +225,17 @@ jobs:
           else
             cp target/release/libwavry_ffi.a ci-artifacts/backend/
           fi
+
+          if [[ ! -f "${RELEASE_ICON_PATH}" ]]; then
+            echo "Release icon not found: ${RELEASE_ICON_PATH}" >&2
+            exit 1
+          fi
+          cp "${RELEASE_ICON_PATH}" "ci-artifacts/backend/${RELEASE_ICON_NAME}"
+          for artifact in ci-artifacts/backend/*; do
+            if [[ -f "${artifact}" && "${artifact}" != *.png ]]; then
+              cp "${RELEASE_ICON_PATH}" "${artifact}.logo.png"
+            fi
+          done
 
       - name: Upload backend artifacts
         uses: actions/upload-artifact@v4
@@ -253,6 +300,7 @@ jobs:
             protobuf-compiler \
             libgstreamer1.0-dev \
             libgstreamer-plugins-base1.0-dev \
+            libasound2-dev \
             libx11-dev \
             libxtst-dev \
             libxrandr-dev \
@@ -264,10 +312,13 @@ jobs:
             librsvg2-dev \
             patchelf
 
-          if dpkg -s libwebkit2gtk-4.1-dev >/dev/null 2>&1; then
+          if apt-cache show libwebkit2gtk-4.1-dev >/dev/null 2>&1; then
             sudo apt-get install -y --no-install-recommends libwebkit2gtk-4.1-dev
-          else
+          elif apt-cache show libwebkit2gtk-4.0-dev >/dev/null 2>&1; then
             sudo apt-get install -y --no-install-recommends libwebkit2gtk-4.0-dev
+          else
+            echo "Neither libwebkit2gtk-4.1-dev nor libwebkit2gtk-4.0-dev is available on this runner image." >&2
+            exit 1
           fi
 
       - name: Install Rust toolchain
@@ -298,6 +349,17 @@ jobs:
             exit 1
           fi
 
+          if [[ ! -f "${RELEASE_ICON_PATH}" ]]; then
+            echo "Release icon not found: ${RELEASE_ICON_PATH}" >&2
+            exit 1
+          fi
+          cp "${RELEASE_ICON_PATH}" "ci-artifacts/desktop/${RELEASE_ICON_NAME}"
+          for artifact in ci-artifacts/desktop/*; do
+            if [[ -f "${artifact}" && "${artifact}" != *.png ]]; then
+              cp "${RELEASE_ICON_PATH}" "${artifact}.logo.png"
+            fi
+          done
+
       - name: Upload desktop artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -311,9 +373,18 @@ jobs:
     defaults:
       run:
         shell: bash
+    env:
+      WAVRY_ANDROID_RELEASE_STORE_FILE: ${{ github.workspace }}/release.jks
+      WAVRY_ANDROID_RELEASE_STORE_PASSWORD: ${{ secrets.WAVRY_ANDROID_RELEASE_STORE_PASSWORD }}
+      WAVRY_ANDROID_RELEASE_KEY_ALIAS: ${{ secrets.WAVRY_ANDROID_RELEASE_KEY_ALIAS }}
+      WAVRY_ANDROID_RELEASE_KEY_PASSWORD: ${{ secrets.WAVRY_ANDROID_RELEASE_KEY_PASSWORD }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Decode Keystore
+        if: env.WAVRY_ANDROID_RELEASE_STORE_PASSWORD != ''
+        run: echo "${{ secrets.WAVRY_ANDROID_RELEASE_KEYSTORE_B64 }}" | base64 -d > release.jks
 
       - name: Install protoc
         uses: arduino/setup-protoc@v3
@@ -348,14 +419,46 @@ jobs:
       - name: Build Android mobile + quest debug APKs
         run: ./scripts/dev-android.sh --both --release --no-install --no-ndk-install
 
+      - name: Stage Android artifacts
+        run: |
+          mkdir -p ci-artifacts/android
+
+          if [[ ! -f "${RELEASE_ICON_PATH}" ]]; then
+            echo "Release icon not found: ${RELEASE_ICON_PATH}" >&2
+            exit 1
+          fi
+          cp "${RELEASE_ICON_PATH}" "ci-artifacts/android/${RELEASE_ICON_NAME}"
+
+          copied=0
+          while IFS= read -r -d '' file; do
+            base="$(basename "${file}")"
+            cp "${file}" "ci-artifacts/android/${base}"
+            cp "${RELEASE_ICON_PATH}" "ci-artifacts/android/${base}.logo.png"
+            copied=1
+          done < <(
+            find apps/android/app/build/outputs -type f \
+              \( -path "*/release/*.apk" -o -path "*/release/*.aab" \) -print0
+          )
+
+          while IFS= read -r -d '' file; do
+            base="$(basename "${file}")"
+            cp "${file}" "ci-artifacts/android/${base}"
+            cp "${RELEASE_ICON_PATH}" "ci-artifacts/android/${base}.logo.png"
+            copied=1
+          done < <(
+            find apps/android/app/src/main/cpp/prebuilt -type f -name "libwavry_ffi.a" -print0
+          )
+
+          if [[ "${copied}" -ne 1 ]]; then
+            echo "No Android release artifacts were staged." >&2
+            exit 1
+          fi
+
       - name: Upload Android artifacts
         uses: actions/upload-artifact@v4
         with:
           name: android-release-apks
-          path: |
-            apps/android/app/build/outputs/apk/**/release/*.apk
-            apps/android/app/build/outputs/bundle/**/release/*.aab
-            apps/android/app/src/main/cpp/prebuilt/**/libwavry_ffi.a
+          path: ci-artifacts/android/
           if-no-files-found: error
 
   macos-app:
@@ -368,21 +471,14 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install protoc
-        uses: arduino/setup-protoc@v3
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Restore Rust cache
-        uses: Swatinem/rust-cache@v2
-
-      - name: Build wavry-ffi static library
-        run: cargo build --locked --release -p wavry-ffi
-
       - name: Build macOS app package
         working-directory: apps/macos
         run: swift build -c release
+
+      - name: Ad-hoc Sign FFI and App
+        run: |
+          codesign --force --deep --sign - target/release/libwavry_ffi.a
+          codesign --force --deep --sign - apps/macos/.build/release/WavryMacOS
 
       - name: Stage macOS app artifacts
         run: |
@@ -390,9 +486,70 @@ jobs:
           cp apps/macos/.build/release/WavryMacOS ci-artifacts/macos-app/
           cp target/release/libwavry_ffi.a ci-artifacts/macos-app/
 
+          if [[ ! -f "${RELEASE_ICON_PATH}" ]]; then
+            echo "Release icon not found: ${RELEASE_ICON_PATH}" >&2
+            exit 1
+          fi
+          cp "${RELEASE_ICON_PATH}" "ci-artifacts/macos-app/${RELEASE_ICON_NAME}"
+          for artifact in ci-artifacts/macos-app/*; do
+            if [[ -f "${artifact}" && "${artifact}" != *.png ]]; then
+              cp "${RELEASE_ICON_PATH}" "${artifact}.logo.png"
+            fi
+          done
+
       - name: Upload macOS app artifacts
         uses: actions/upload-artifact@v4
         with:
           name: macos-app
           path: ci-artifacts/macos-app/
           if-no-files-found: error
+
+  github-release:
+    name: Publish GitHub release
+    runs-on: ubuntu-latest
+    needs:
+      - rust-tests
+      - gateway-auth-smoke
+      - master-relay-smoke
+      - rust-backend
+      - desktop-ui
+      - desktop-tauri
+      - android
+      - macos-app
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    permissions:
+      contents: write
+    steps:
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-artifacts
+
+      - name: Generate checksums
+        run: |
+          cd release-artifacts
+          find . -type f -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS.txt
+
+      - name: Sign checksums with GPG
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+        uses: crazy-max/ghaction-import-gpg@v6
+        with:
+          gpg_private_key: ${{ secrets.GPG_PRIVATE_KEY }}
+          passphrase: ${{ secrets.GPG_PASSPHRASE }}
+          git_user_signingkey: true
+          git_commit_gpgsign: true
+
+      - name: Create detached GPG signature
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+        run: |
+          cd release-artifacts
+          gpg --batch --yes --armor --detach-sign SHA256SUMS.txt
+
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          generate_release_notes: true
+          files: |
+            release-artifacts/**/*
+          fail_on_unmatched_files: true

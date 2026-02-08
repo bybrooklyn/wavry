@@ -1,8 +1,26 @@
-# Wavry Security & Operations — Design Specification v0.1
+# Wavry Security & Operations — Design Specification v1.0
 
-**Status:** Draft — Pending Review
+**Status:** Current  
+**Last Updated:** 2026-02-07
 
 This document defines the threat model, security mitigations, operational procedures, and privacy posture for Wavry's public volunteer relay network.
+
+---
+
+## Table of Contents
+
+1. [Threat Model](#1-threat-model)
+2. [Threat Mitigations](#2-threat-mitigations)
+3. [End-to-End Encryption](#3-end-to-end-encryption)
+4. [Lease Security](#4-lease-security)
+5. [Rate Limiting](#5-rate-limiting)
+6. [Audit & Observability](#6-audit--observability)
+7. [Kill Switches](#7-kill-switches)
+8. [Key Management](#8-key-management)
+9. [Operational Procedures](#9-operational-procedures)
+10. [Privacy Posture](#10-privacy-posture)
+11. [Recommended Defaults](#11-recommended-defaults)
+12. [Minimum Viable Safe Launch Checklist](#12-minimum-viable-safe-launch-checklist)
 
 ---
 
@@ -11,7 +29,7 @@ This document defines the threat model, security mitigations, operational proced
 ### 1.1 Threat Actors
 
 | Actor | Capability | Motivation |
-|-------|------------|------------|
+|:------|:-----------|:-----------|
 | **Script kiddie** | Basic tools, limited resources | Disruption, vandalism |
 | **Abusive user** | Valid credentials, moderate skill | Free relay abuse, harassment |
 | **Malicious relay operator** | Controls relay, network access | Surveillance, disruption, reputation attacks |
@@ -20,8 +38,8 @@ This document defines the threat model, security mitigations, operational proced
 
 ### 1.2 Threat Matrix
 
-| # | Threat | Actor | Impact | Likelihood | Severity |
-|---|--------|-------|--------|------------|----------|
+| ID | Threat | Actor | Impact | Likelihood | Severity |
+|:---|:-------|:------|:-------|:-----------|:---------|
 | T1 | DDoS amplification via relay | Script kiddie | Relays used to amplify attacks | Medium | High |
 | T2 | Packet dropping by malicious relay | Malicious operator | Session quality degradation | Medium | Medium |
 | T3 | Jitter/latency injection | Malicious operator | Poor user experience, reputation damage | Medium | Medium |
@@ -42,19 +60,19 @@ This document defines the threat model, security mitigations, operational proced
 ### 2.1 Mitigation Matrix
 
 | Threat | Mitigation | Implementation |
-|--------|------------|----------------|
-| **T1: DDoS amplification** | Lease-gated forwarding + rate limits | Relay validates lease before any forwarding; per-session hard caps |
-| **T2: Packet dropping** | Session success metrics + client feedback | Score drops trigger DEGRADED state; persistent dropping triggers QUARANTINE |
-| **T3: Jitter injection** | Probe RTT + client reports | Detect via probe vs. session latency delta |
-| **T4: Fingerprinting** | E2EE (Noise/snow protocol) | Relay sees only opaque encrypted packets |
-| **T5: Token theft/replay** | Short-lived tokens + sequence windows | 5-minute leases; 128-packet replay window |
-| **T6: Token reuse** | Session binding + unique JTI | Lease bound to session_id; relay tracks JTIs |
-| **T7: Lease forgery** | PASETO v4.public signatures | Ed25519 signature verified against Master pubkey |
-| **T8: Relay spam** | Sybil detection + probation | IP/ASN clustering detection; 7-day probation |
-| **T9: P2P bypass abuse** | Per-user lease caps | Max 10 leases/minute; prefer P2P in selection |
-| **T10: Master compromise** | Key hierarchy + HSM + detection | Separate signing keys; canary tokens; incident response |
-| **T11: Correlation** | Minimal logging + padding | No payload logging; optional traffic padding |
-| **T12: Metadata logging** | Audit requirements + reputation | Published privacy policy; negative feedback affects score |
+|:-------|:-----------|:---------------|
+| T1: DDoS amplification | Lease-gated forwarding + rate limits | Relay validates lease before any forwarding; per-session hard caps |
+| T2: Packet dropping | Session success metrics + client feedback | Score drops trigger DEGRADED state; persistent dropping triggers QUARANTINE |
+| T3: Jitter injection | Probe RTT + client reports | Detect via probe vs. session latency delta |
+| T4: Fingerprinting | E2EE (Noise/snow protocol) | Relay sees only opaque encrypted packets |
+| T5: Token theft/replay | Short-lived tokens + sequence windows | 5-minute leases; 128-packet replay window |
+| T6: Token reuse | Session binding + unique JTI | Lease bound to session_id; relay tracks JTIs |
+| T7: Lease forgery | PASETO v4.public signatures | Ed25519 signature verified against Master pubkey |
+| T8: Relay spam | Sybil detection + probation | IP/ASN clustering detection; 7-day probation |
+| T9: P2P bypass abuse | Per-user lease caps | Max 10 leases/minute; prefer P2P in selection |
+| T10: Master compromise | Key hierarchy + HSM + detection | Separate signing keys; canary tokens; incident response |
+| T11: Correlation | Minimal logging + padding | No payload logging; optional traffic padding |
+| T12: Metadata logging | Audit requirements + reputation | Published privacy policy; negative feedback affects score |
 
 ### 2.2 Defense in Depth Layers
 
@@ -141,7 +159,7 @@ The Noise XX handshake (Msg1-3) has been verified end-to-end between `wavry-serv
 ### 3.4 Relay Blindness Guarantee
 
 | Layer | What Relay Sees | What Relay Cannot See |
-|-------|-----------------|----------------------|
+|:------|:----------------|:----------------------|
 | IP Layer | Source/dest IP:port | — |
 | UDP Layer | Datagram size, timing | — |
 | Relay Protocol | Session ID, sequence number | — |
@@ -155,7 +173,7 @@ The Noise XX handshake (Msg1-3) has been verified end-to-end between `wavry-serv
 ### 4.1 Lease Properties
 
 | Property | Value | Rationale |
-|----------|-------|-----------|
+|:---------|:------|:----------|
 | **Signature algorithm** | Ed25519 (PASETO v4.public) | No algorithm confusion |
 | **Default TTL** | 5 minutes | Minimize exposure window |
 | **Max TTL** | 15 minutes | Allow for clock skew |
@@ -195,12 +213,12 @@ For production, recommend push-based with periodic pull as backup.
 
 ---
 
-## 5. Rate Limiting Details
+## 5. Rate Limiting
 
 ### 5.1 Master-Side Limits
 
 | Resource | Limit | Window | Response |
-|----------|-------|--------|----------|
+|:---------|:------|:-------|:---------|
 | Auth challenges | 10 | 1 minute | 429 + backoff |
 | Lease requests | 10 | 1 minute | 429 |
 | API calls (authenticated) | 100 | 1 minute | 429 |
@@ -210,7 +228,7 @@ For production, recommend push-based with periodic pull as backup.
 ### 5.2 Relay-Side Limits
 
 | Resource | Limit | Scope | Response |
-|----------|-------|-------|----------|
+|:---------|:------|:------|:---------|
 | Packets/sec (pre-session) | 1000 | Per source IP | Silent drop |
 | Bytes/sec (pre-session) | 10 MB | Per source IP | Silent drop |
 | Lease presentations | 10 | Per source IP per minute | LEASE_REJECT |
@@ -238,7 +256,7 @@ struct RateLimitConfig {
 ### 6.1 What We Log (Master)
 
 | Event | Fields Logged | Retention |
-|-------|---------------|-----------|
+|:------|:--------------|:----------|
 | Auth attempt | wavry_id, IP, success/fail, timestamp | 30 days |
 | Lease issued | session_id, relay_id, peer_ids (hashed), timestamp | 90 days |
 | Session created | session_id, client_id (hashed), server_id (hashed) | 90 days |
@@ -248,7 +266,7 @@ struct RateLimitConfig {
 ### 6.2 What We Log (Relay - Privacy-Preserving)
 
 | Event | Fields Logged | NOT Logged |
-|-------|---------------|------------|
+|:------|:--------------|:-----------|
 | Session start | session_id (truncated), timestamp | Peer IPs, Wavry IDs |
 | Session end | session_id (truncated), duration, bytes | Peer IPs |
 | Rate limit hit | source IP (hashed), count | Actual IP |
@@ -288,7 +306,7 @@ wavry_relay_lease_validations_total{result="valid|invalid"}
 ### 7.1 Available Kill Switches
 
 | Switch | Scope | Effect | Recovery |
-|--------|-------|--------|----------|
+|:-------|:------|:-------|:---------|
 | Ban user | Single user | Revoke tokens, reject all requests | Admin unban |
 | Ban relay | Single relay | Remove from pool, reject heartbeats | Admin unban |
 | Quarantine relay | Single relay | Remove from selection, continue heartbeats | Auto (7 days) or admin |
@@ -362,7 +380,7 @@ POST /v1/admin/lockdown
 ### 8.2 Key Rotation Schedule
 
 | Key | Rotation | Overlap | Recovery |
-|-----|----------|---------|----------|
+|:----|:---------|:--------|:---------|
 | Root key | Never (or 5 years) | — | Multi-party recovery from HSM backups |
 | Signing key | Quarterly | 2 weeks | Generate new, publish, old continues |
 | Encryption key | Quarterly | 1 hour | Generate new, old tokens expire naturally |
@@ -401,7 +419,7 @@ Master's signing public key must be verifiable:
 ### 8.4 Compromise Response
 
 | Compromise | Impact | Response |
-|------------|--------|----------|
+|:-----------|:-------|:---------|
 | Signing key leaked | Attacker can forge leases | Immediate rotation, revoke old kid, notify relays |
 | Encryption key leaked | Attacker can forge session tokens | Immediate rotation, mass token revocation |
 | Root key leaked | Total compromise | New root key ceremony, rotate all keys, audit |
@@ -485,7 +503,7 @@ Update flow:
 ### 9.3 Monitoring Alerts
 
 | Alert | Condition | Severity | Response |
-|-------|-----------|----------|----------|
+|:------|:----------|:---------|:---------|
 | High auth failures | > 1000/min | Warning | Check for brute force |
 | Relay mass offline | > 20% offline | Critical | Network issue or attack |
 | Lease issuance spike | > 10x normal | Warning | Potential abuse |
@@ -499,7 +517,7 @@ Update flow:
 ### 10.1 Data Minimization
 
 | Data | Collected | Stored | Retention |
-|------|-----------|--------|-----------|
+|:-----|:----------|:-------|:----------|
 | User IP (at Master) | Yes (for rate limit) | Hashed only | 24 hours |
 | User IP (at relay) | Yes (for forwarding) | Never | — |
 | Session content | Never | Never | — |
@@ -509,7 +527,7 @@ Update flow:
 ### 10.2 User Rights
 
 | Right | Implementation |
-|-------|----------------|
+|:------|:---------------|
 | Access | Export session history via API |
 | Deletion | Delete account + hash all associated data |
 | Portability | Export account data in JSON |
@@ -532,7 +550,7 @@ Violation = permanent ban + public disclosure.
 ### 11.1 Security Defaults
 
 | Setting | Default | Min | Max |
-|---------|---------|-----|-----|
+|:--------|:--------|:----|:----|
 | Lease TTL | 5 min | 1 min | 15 min |
 | Session token TTL | 1 hour | 15 min | 24 hours |
 | Relay token TTL | 24 hours | 1 hour | 7 days |
@@ -543,7 +561,7 @@ Violation = permanent ban + public disclosure.
 ### 11.2 Rate Limit Defaults
 
 | Limit | Default | Rationale |
-|-------|---------|-----------|
+|:------|:--------|:----------|
 | Per-user leases/min | 10 | Prevents lease flooding |
 | Per-IP auth/min | 10 | Prevents brute force |
 | Per-session bandwidth | 100 Mbps hard | Reasonable 4K streaming |
@@ -553,7 +571,7 @@ Violation = permanent ban + public disclosure.
 ### 11.3 Operational Defaults
 
 | Setting | Default | Rationale |
-|---------|---------|-----------|
+|:--------|:--------|:----------|
 | Heartbeat interval | 30 sec | Balance responsiveness/overhead |
 | Probe interval | 60 sec | Sufficient for health detection |
 | Probation period | 7 days | Time for behavior observation |
@@ -685,3 +703,13 @@ Violation = permanent ban + public disclosure.
 2. Relay verifies relay_id matches own identity
 3. Sequence numbers prevent packet replay
 4. Short TTL limits replay window
+
+---
+
+## Related Documents
+
+- [WAVRY_ARCHITECTURE.md](WAVRY_ARCHITECTURE.md) - System architecture overview
+- [RIFT_SPEC_V1.md](RIFT_SPEC_V1.md) - Protocol specification
+- [WAVRY_MASTER.md](WAVRY_MASTER.md) - Master service API
+- [WAVRY_RELAY.md](WAVRY_RELAY.md) - Relay node specification
+- [WAVRY_RELAY_SELECTION.md](WAVRY_RELAY_SELECTION.md) - Relay selection algorithm

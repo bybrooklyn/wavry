@@ -22,7 +22,7 @@ pub struct SignalingState {
 pub static SIGNALING: Lazy<SignalingState> = Lazy::new(|| SignalingState {
     is_connected: AtomicBool::new(false),
     is_hosting: AtomicBool::new(false),
-    host_port: Mutex::new(4444),
+    host_port: Mutex::new(0), // Default to 0 for random port
     pending_target: Mutex::new(None),
     outgoing_tx: Mutex::new(None),
 });
@@ -102,6 +102,7 @@ fn request_relay_for_target(target_username: &str) -> Result<(), &'static str> {
 
     let msg = SignalMessage::REQUEST_RELAY {
         target_username: target_username.to_string(),
+        region: None,
     };
     tx.send(msg).map_err(|_| "failed to send relay request")
 }
@@ -336,6 +337,7 @@ async fn handle_signal_message(msg: SignalMessage) {
             auto_start_client_from_answer(target_username, sdp, peer_addr);
         }
         SignalMessage::RELAY_CREDENTIALS {
+            relay_id,
             token,
             addr,
             session_id,
@@ -350,8 +352,8 @@ async fn handle_signal_message(msg: SignalMessage) {
             }
             let target = target.unwrap_or_default();
             info!(
-                "Received RELAY credentials for pending target {} via {}",
-                target, addr
+                "Received RELAY credentials for pending target {} via {} (relay_id={})",
+                target, addr, relay_id
             );
 
             let relay_addr = match SocketAddr::from_str(&addr) {
@@ -366,6 +368,7 @@ async fn handle_signal_message(msg: SignalMessage) {
 
             *SIGNALING.pending_target.lock().unwrap() = None;
             let relay_info = wavry_client::RelayInfo {
+                relay_id,
                 addr: relay_addr,
                 token,
                 session_id,

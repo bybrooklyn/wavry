@@ -41,10 +41,15 @@ pub enum SignalMessage {
     },
 
     /// Request a fallback blind relay for the target session.
-    REQUEST_RELAY { target_username: String },
+    REQUEST_RELAY {
+        target_username: String,
+        #[serde(default)]
+        region: Option<String>,
+    },
 
     /// Received credentials for a blind relay session.
     RELAY_CREDENTIALS {
+        relay_id: String,
         token: String,
         addr: String,
         session_id: uuid::Uuid,
@@ -59,12 +64,23 @@ pub enum SignalMessage {
 pub struct RelayRegisterRequest {
     pub relay_id: String,
     pub endpoints: Vec<String>,
+    #[serde(default)]
+    pub region: Option<String>,
+    #[serde(default)]
+    pub asn: Option<u32>,
+    #[serde(default)]
+    pub max_sessions: Option<u32>,
+    #[serde(default)]
+    pub max_bitrate_kbps: Option<u32>,
+    #[serde(default)]
+    pub features: Vec<String>,
 }
 
 /// Response from the Master server upon successful relay registration.
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct RelayRegisterResponse {
     pub heartbeat_interval_ms: u64,
+    pub master_public_key: Vec<u8>,
 }
 
 /// Periodic heartbeat from a relay to the Master server.
@@ -86,4 +102,14 @@ pub struct RegisterRequest {
 pub struct VerifyRequest {
     pub wavry_id: String,
     pub signature_hex: String,
+}
+
+/// Signed quality report for a relay session.
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct RelayFeedbackRequest {
+    pub session_id: uuid::Uuid,
+    pub relay_id: String,
+    pub quality_score: u8, // 0-100
+    pub issues: Vec<String>,
+    pub signature: String,
 }

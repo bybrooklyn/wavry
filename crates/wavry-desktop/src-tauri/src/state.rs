@@ -11,6 +11,7 @@ pub struct SessionState {
 
 pub struct ClientSessionState {
     pub stop_tx: Option<oneshot::Sender<()>>,
+    pub monitor_tx: Option<mpsc::UnboundedSender<u32>>,
 }
 
 pub struct AuthState {

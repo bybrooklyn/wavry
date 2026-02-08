@@ -33,7 +33,7 @@ jobs:
       fail-fast: false
       matrix:
         component:
-          - server
+          - gateway
           - relay
     steps:
       - name: Checkout

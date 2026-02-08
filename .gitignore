@@ -71,3 +71,23 @@ apps/android/app/src/main/cpp/prebuilt/
 # Patch leftovers
 *.orig
 *.rej
+
+# AI Context
+.gemini/
+
+# Local Certificates
+certs/
+secrets/
+*.jks
+*.pfx
+*.keystore
+*.key
+*.pem
+
+# Databases & Logs
+*.db
+*.db-journal
+*.db-shm
+*.db-wal
+*.log
+wavry.env

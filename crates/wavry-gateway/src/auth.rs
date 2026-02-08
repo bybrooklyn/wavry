@@ -15,6 +15,7 @@ use sqlx::SqlitePool;
 use std::net::{IpAddr, SocketAddr};
 use std::sync::atomic::{AtomicU64, Ordering};
 
+use chrono::Utc;
 use rand::{thread_rng, Rng};
 use totp_rs::{Algorithm, TOTP};
 
@@ -348,6 +349,9 @@ pub async fn register(
     (StatusCode::CREATED, Json(auth_response(user, session))).into_response()
 }
 
+const MAX_LOGIN_ATTEMPTS: i64 = 5;
+const LOCKOUT_DURATION_MINUTES: i64 = 15;
+
 pub async fn login(
     State(pool): State<SqlitePool>,
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
@@ -362,6 +366,45 @@ pub async fn login(
     }
 
     let email = normalize_email(&payload.email);
+    let failure_key = format!("email:{}", email);
+    let ip_failure_key = format!("ip:{}", client_ip);
+
+    // 1. Check Account Lockout
+    if let Ok(Some((count, last_failure))) = db::get_login_failures(&pool, &failure_key).await {
+        if count >= MAX_LOGIN_ATTEMPTS {
+            let lockout_until = last_failure + chrono::Duration::minutes(LOCKOUT_DURATION_MINUTES);
+            if Utc::now() < lockout_until {
+                AUTH_METRICS.rate_limited.fetch_add(1, Ordering::Relaxed);
+                tracing::warn!(
+                    client_ip = %client_ip,
+                    email = %email,
+                    "login rejected: account locked"
+                );
+                return error_response(
+                    StatusCode::TOO_MANY_REQUESTS,
+                    "Account locked due to too many failed attempts. Try again later.",
+                );
+            }
+        }
+    }
+
+    // 2. Check IP Lockout
+    if let Ok(Some((count, last_failure))) = db::get_login_failures(&pool, &ip_failure_key).await {
+        if count >= MAX_LOGIN_ATTEMPTS {
+            let lockout_until = last_failure + chrono::Duration::minutes(LOCKOUT_DURATION_MINUTES);
+            if Utc::now() < lockout_until {
+                AUTH_METRICS.rate_limited.fetch_add(1, Ordering::Relaxed);
+                tracing::warn!(
+                    client_ip = %client_ip,
+                    "login rejected: ip locked"
+                );
+                return error_response(
+                    StatusCode::TOO_MANY_REQUESTS,
+                    "Too many failed attempts from this IP. Try again later.",
+                );
+            }
+        }
+    }
 
     if !security::is_valid_email(&email) || !is_reasonable_password_input(&payload.password) {
         AUTH_METRICS
@@ -374,6 +417,12 @@ pub async fn login(
         Ok(Some(user)) => user,
         Ok(None) => {
             AUTH_METRICS.auth_failures.fetch_add(1, Ordering::Relaxed);
+            db::record_login_failure(&pool, &ip_failure_key).await.ok();
+            tracing::warn!(
+                client_ip = %client_ip,
+                email = %email,
+                "login failed: user not found"
+            );
             return error_response(StatusCode::UNAUTHORIZED, "Invalid credentials");
         }
         Err(err) => {
@@ -382,6 +431,19 @@ pub async fn login(
             return error_response(StatusCode::INTERNAL_SERVER_ERROR, "Database error");
         }
     };
+
+    // 2. Check User Ban
+    if let Ok(Some(reason)) = db::check_ban_status(&pool, &user.id).await {
+        tracing::warn!(
+            client_ip = %client_ip,
+            user_id = %user.id,
+            "login rejected: user banned"
+        );
+        return error_response(
+            StatusCode::FORBIDDEN,
+            format!("Account suspended: {}", reason),
+        );
+    }
 
     let parsed_hash = match PasswordHash::new(&user.password_hash) {
         Ok(hash) => hash,
@@ -393,12 +455,24 @@ pub async fn login(
         .is_err()
     {
         AUTH_METRICS.auth_failures.fetch_add(1, Ordering::Relaxed);
+        db::record_login_failure(&pool, &failure_key).await.ok();
+        db::record_login_failure(&pool, &ip_failure_key).await.ok();
+        tracing::warn!(
+            client_ip = %client_ip,
+            user_id = %user.id,
+            "login failed: invalid password"
+        );
         return error_response(StatusCode::UNAUTHORIZED, "Invalid credentials");
     }
 
     if let Some(stored_secret) = &user.totp_secret {
         let Some(code) = payload.totp_code.as_deref() else {
             AUTH_METRICS.auth_failures.fetch_add(1, Ordering::Relaxed);
+            tracing::warn!(
+                client_ip = %client_ip,
+                user_id = %user.id,
+                "login failed: 2FA required but missing"
+            );
             return error_response(StatusCode::UNAUTHORIZED, "2FA required");
         };
 
@@ -406,6 +480,7 @@ pub async fn login(
             AUTH_METRICS
                 .validation_errors
                 .fetch_add(1, Ordering::Relaxed);
+            db::record_login_failure(&pool, &failure_key).await.ok();
             return error_response(StatusCode::UNAUTHORIZED, "Invalid 2FA code");
         }
 
@@ -433,9 +508,20 @@ pub async fn login(
 
         if !totp.check_current(code).unwrap_or(false) {
             AUTH_METRICS.auth_failures.fetch_add(1, Ordering::Relaxed);
+            db::record_login_failure(&pool, &failure_key).await.ok();
+            db::record_login_failure(&pool, &ip_failure_key).await.ok();
+            tracing::warn!(
+                client_ip = %client_ip,
+                user_id = %user.id,
+                "login failed: invalid 2FA code"
+            );
             return error_response(StatusCode::UNAUTHORIZED, "Invalid 2FA code");
         }
     }
+
+    // Success - reset failures
+    db::reset_login_failure(&pool, &failure_key).await.ok();
+    db::reset_login_failure(&pool, &ip_failure_key).await.ok();
 
     let session = match db::create_session(&pool, &user.id, Some(client_ip.to_string())).await {
         Ok(session) => session,

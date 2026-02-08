@@ -6,7 +6,7 @@ license.workspace = true
 
 [features]
 default = []
-webtransport-runtime = ["dep:tokio", "dep:tracing"]
+webtransport-runtime = ["dep:tokio", "dep:tracing", "dep:wtransport", "dep:x509-parser"]
 
 [dependencies]
 anyhow.workspace = true
@@ -15,3 +15,5 @@ serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 tokio = { workspace = true, optional = true }
 tracing = { workspace = true, optional = true }
+wtransport = { version = "0.6", optional = true }
+x509-parser = { version = "0.16", optional = true }

@@ -85,6 +85,12 @@ pub struct FecCache {
     packets: HashMap<u64, Vec<u8>>,
 }
 
+impl Default for FecCache {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl FecCache {
     pub fn new() -> Self {
         Self {
@@ -143,6 +149,12 @@ pub struct ArrivalJitter {
     jitter_us: f64,
 }
 
+impl Default for ArrivalJitter {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ArrivalJitter {
     pub fn new() -> Self {
         Self {
@@ -177,6 +189,12 @@ impl ArrivalJitter {
 
 pub struct RttTracker {
     smooth_us: f64,
+}
+
+impl Default for RttTracker {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl RttTracker {
@@ -250,6 +268,12 @@ impl NackWindow {
 pub struct JitterBuffer {
     target_delay_us: u64,
     queue: VecDeque<BufferedFrame>,
+}
+
+impl Default for JitterBuffer {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 pub struct BufferedFrame {

@@ -1,12 +1,11 @@
 [package]
 name = "wavry-vr-alvr"
 version = "0.1.0"
-edition.workspace = true
-license.workspace = true
+edition = "2021"
+license = "AGPL-3.0-only"
 
 [features]
 # Enables building against the vendored ALVR source.
-# Off by default to keep Wavry core deterministic and transport-only.
 alvr = []
 
 [dependencies]
@@ -15,12 +14,19 @@ thiserror.workspace = true
 glam = { version = "0.27", features = ["serde"] }
 serde = { workspace = true }
 openxr = "0.17"
+log = "0.4"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 gstreamer = "0.22"
 gstreamer-app = "0.22"
 glow = "0.13"
 x11 = "2.21"
+ash = "0.38"
+
+[target.'cfg(target_os = "android")'.dependencies]
+ndk = { version = "0.8", features = ["media"] }
+ndk-sys = "0.5"
+ndk-context = "0.1"
 ash = "0.38"
 
 [target.'cfg(target_os = "windows")'.dependencies.windows]

@@ -22,13 +22,56 @@ use crate::audio::{
 
 #[cfg(target_os = "windows")]
 use windows::{
-    core::*, Foundation::TypedEventHandler, Graphics::Capture::*,
-    Graphics::DirectX::Direct3D11::IDirect3DDevice, Graphics::DirectX::DirectXPixelFormat,
-    Win32::Graphics::Direct3D11::*, Win32::Graphics::Dxgi::*, Win32::Graphics::Gdi::*,
+    core::*, Foundation::*, Graphics::Capture::*, Graphics::DirectX::Direct3D11::IDirect3DDevice,
+    Graphics::DirectX::DirectXPixelFormat, Win32::Foundation::*, Win32::Graphics::Direct3D::*,
+    Win32::Graphics::Direct3D11::*, Win32::Graphics::Dxgi::Common::*, Win32::Graphics::Dxgi::*,
+    Win32::Graphics::Gdi::*, Win32::Media::Audio::*, Win32::Media::MediaFoundation::*,
     Win32::System::WinRT::Direct3D11::IDirect3DDxgiInterfaceAccess,
     Win32::System::WinRT::Graphics::Capture::IGraphicsCaptureItemInterop,
-    Win32::UI::WindowsAndMessaging::GetDesktopWindow,
+    Win32::UI::Input::KeyboardAndMouse::*, Win32::UI::WindowsAndMessaging::GetDesktopWindow,
 };
+
+#[cfg(target_os = "windows")]
+use std::mem::ManuallyDrop;
+
+#[cfg(target_os = "windows")]
+const MF_BGR32: GUID = GUID::from_u128(0x00000016_0000_0010_8000_00aa00389b71); // MFVideoFormat_RGB32
+#[cfg(target_os = "windows")]
+const KSDATAFORMAT_SUBTYPE_IEEE_FLOAT: GUID =
+    GUID::from_u128(0x00000003_0000_0010_8000_00aa00389b71);
+#[cfg(target_os = "windows")]
+const KSDATAFORMAT_SUBTYPE_PCM: GUID = GUID::from_u128(0x00000001_0000_0010_8000_00aa00389b71);
+
+#[cfg(target_os = "windows")]
+fn pack_u64(hi: u32, lo: u32) -> u64 {
+    ((hi as u64) << 32) | (lo as u64)
+}
+
+#[cfg(target_os = "windows")]
+unsafe fn MFSetAttributeSize(
+    attributes: &IMFAttributes,
+    guid: &GUID,
+    width: u32,
+    height: u32,
+) -> Result<()> {
+    attributes
+        .SetUINT64(guid, pack_u64(width, height))
+        .map_err(|e| anyhow!(e))?;
+    Ok(())
+}
+
+#[cfg(target_os = "windows")]
+unsafe fn MFSetAttributeRatio(
+    attributes: &IMFAttributes,
+    guid: &GUID,
+    numerator: u32,
+    denominator: u32,
+) -> Result<()> {
+    attributes
+        .SetUINT64(guid, pack_u64(numerator, denominator))
+        .map_err(|e| anyhow!(e))?;
+    Ok(())
+}
 
 #[cfg(target_os = "windows")]
 extern "system" {
@@ -64,6 +107,11 @@ pub struct WindowsEncoder {
     frame_width: u32,
     frame_height: u32,
 }
+
+#[cfg(target_os = "windows")]
+unsafe impl Send for WindowsEncoder {}
+#[cfg(target_os = "windows")]
+unsafe impl Sync for WindowsEncoder {}
 
 impl WindowsEncoder {
     pub async fn new(config: EncodeConfig) -> Result<Self> {
@@ -129,7 +177,7 @@ impl WindowsEncoder {
 
             MFTEnumEx(
                 mft_category,
-                MFT_ENUM_FLAG_HARDWARE | MFT_ENUM_FLAG_SORTANDFILTER,
+                MFT_ENUM_FLAG_HARDWARE.0 as u32 | MFT_ENUM_FLAG_SORTANDFILTER.0 as u32,
                 None,
                 Some(&output_type),
                 &mut activate_list,
@@ -220,14 +268,14 @@ impl WindowsEncoder {
                     self.reconfigure_frame_pool(new_width, new_height)?;
                     return Err(anyhow!("Capture size changed, reconfigured"));
                 }
-                let timestamp = frame.SystemRelativeTime().Duration as u64 / 10;
+                let timestamp = frame.SystemRelativeTime()?.Duration as u64 / 10;
                 let surface = frame.Surface()?;
                 let access: IDirect3DDxgiInterfaceAccess = surface.cast()?;
                 let texture: ID3D11Texture2D = access.GetInterface()?;
 
                 // Wrap D3D11 texture in an MF Sample
                 let mut buffer = None;
-                MFCreateDXGISurfaceBuffer(&ID3D11Resource::from(&texture), 0, false, &mut buffer)?;
+                MFCreateDXGISurfaceBuffer(&ID3D11Resource::IID, &texture, 0, false, &mut buffer)?;
                 let buffer = buffer.ok_or_else(|| anyhow!("Failed to create MF DXGI buffer"))?;
 
                 let sample = MFCreateSample()?;
@@ -254,10 +302,11 @@ impl WindowsEncoder {
                 output_data_buffer.pSample = Some(output_sample);
 
                 let mut status = 0;
-                match self
-                    .transform
-                    .ProcessOutput(0, 1, &mut output_data_buffer, &mut status)
-                {
+                match self.transform.ProcessOutput(
+                    0,
+                    std::slice::from_mut(&mut output_data_buffer),
+                    &mut status,
+                ) {
                     Ok(_) => {
                         let sample = output_data_buffer.pSample.as_ref().unwrap();
                         let total_length = sample.GetTotalLength()?;
@@ -307,7 +356,7 @@ impl WindowsEncoder {
 
     fn reconfigure_frame_pool(&mut self, width: u32, height: u32) -> Result<()> {
         let winrt_device = create_direct3d_device(&self.device)?;
-        let new_size = windows::Foundation::SizeInt32 {
+        let new_size = SizeInt32 {
             Width: width as i32,
             Height: height as i32,
         };
@@ -354,6 +403,11 @@ pub struct WindowsRenderer {
     codec: Codec,
 }
 
+#[cfg(target_os = "windows")]
+unsafe impl Send for WindowsRenderer {}
+#[cfg(target_os = "windows")]
+unsafe impl Sync for WindowsRenderer {}
+
 impl WindowsRenderer {
     pub fn new(hwnd: HWND) -> Result<Self> {
         Self::new_with_codec(hwnd, Codec::H264)
@@ -385,7 +439,7 @@ impl WindowsRenderer {
                 OutputWindow: hwnd,
                 Windowed: true.into(),
                 SwapEffect: DXGI_SWAP_EFFECT_FLIP_DISCARD,
-                ..Default::default()
+                Flags: 0,
             };
 
             D3D11CreateDeviceAndSwapChain(
@@ -417,7 +471,7 @@ impl WindowsRenderer {
 
             MFTEnumEx(
                 MFT_CATEGORY_VIDEO_DECODER,
-                MFT_ENUM_FLAG_HARDWARE | MFT_ENUM_FLAG_SORTANDFILTER,
+                MFT_ENUM_FLAG_HARDWARE.0 as u32 | MFT_ENUM_FLAG_SORTANDFILTER.0 as u32,
                 Some(&input_type),
                 None,
                 &mut activate_list,
@@ -503,10 +557,11 @@ impl Renderer for WindowsRenderer {
             };
 
             let mut status = 0;
-            match self
-                .decoder
-                .ProcessOutput(0, 1, &mut output_data_buffer, &mut status)
-            {
+            match self.decoder.ProcessOutput(
+                0,
+                std::slice::from_mut(&mut output_data_buffer),
+                &mut status,
+            ) {
                 Ok(_) => {
                     // Decoder provided a sample (likely containing a D3D11 texture)
                     if let Some(output_sample) = output_data_buffer.pSample {
@@ -521,7 +576,7 @@ impl Renderer for WindowsRenderer {
                         self.context.CopyResource(&back_buffer, &texture);
 
                         // Present
-                        self.swap_chain.Present(1, 0).ok()?;
+                        self.swap_chain.Present(1, DXGI_PRESENT(0)).ok()?;
                     }
                 }
                 Err(e) if e.code() == MF_E_TRANSFORM_NEED_MORE_INPUT => {
@@ -537,94 +592,28 @@ impl Renderer for WindowsRenderer {
 
 /// Windows audio renderer (Opus decode -> PCM -> output)
 pub struct WindowsAudioRenderer {
-    _stream: Stream,
-    buffer: Arc<Mutex<VecDeque<f32>>>,
-    decoder: OpusDecoder,
-    channels: usize,
-    decode_buf: Vec<i16>,
+    inner: crate::audio::CpalAudioRenderer,
 }
 
 unsafe impl Send for WindowsAudioRenderer {}
 
 impl WindowsAudioRenderer {
     pub fn new() -> Result<Self> {
-        let host = cpal::default_host();
-        let device = host
-            .default_output_device()
-            .ok_or_else(|| anyhow!("No audio output device available"))?;
-
-        let (config, sample_format) = select_output_config(&device)?;
-        let channels = config.channels as usize;
-
-        let buffer = Arc::new(Mutex::new(VecDeque::with_capacity(
-            AUDIO_MAX_BUFFER_SAMPLES,
-        )));
-        let buffer_clone = buffer.clone();
-
-        let err_fn = |err| {
-            log::error!("windows audio stream error: {}", err);
-        };
-
-        let stream = match sample_format {
-            SampleFormat::F32 => build_stream_f32(&device, &config, buffer_clone, err_fn)?,
-            SampleFormat::I16 => build_stream_i16(&device, &config, buffer_clone, err_fn)?,
-            SampleFormat::U16 => build_stream_u16(&device, &config, buffer_clone, err_fn)?,
-            _ => return Err(anyhow!("Unsupported audio sample format")),
-        };
-
-        stream.play()?;
-
-        let decoder = OpusDecoder::new(OPUS_SAMPLE_RATE, Channels::Stereo)
-            .map_err(|e| anyhow!("Opus decoder init failed: {}", e))?;
-
         Ok(Self {
-            _stream: stream,
-            buffer,
-            decoder,
-            channels,
-            decode_buf: vec![0i16; OPUS_MAX_FRAME_SAMPLES * channels],
+            inner: crate::audio::CpalAudioRenderer::new()?,
         })
     }
 
     pub fn push(&mut self, payload: &[u8]) -> Result<()> {
-        let decoded = self
-            .decoder
-            .decode(payload, &mut self.decode_buf, false)
-            .map_err(|e| anyhow!("Opus decode failed: {}", e))?;
-        let decoded_samples = decoded * self.channels;
-
-        let mut guard = match self.buffer.lock() {
-            Ok(guard) => guard,
-            Err(poisoned) => poisoned.into_inner(),
-        };
-
-        for sample in self.decode_buf.iter().take(decoded_samples) {
-            let sample = *sample as f32 / i16::MAX as f32;
-            guard.push_back(sample);
-        }
-
-        while guard.len() > AUDIO_MAX_BUFFER_SAMPLES {
-            guard.pop_front();
-        }
-
-        Ok(())
+        self.inner.push(payload)
     }
 }
 
 impl Renderer for WindowsAudioRenderer {
-    fn render(&mut self, payload: &[u8], _timestamp_us: u64) -> Result<()> {
-        self.push(payload)
+    fn render(&mut self, payload: &[u8], timestamp_us: u64) -> Result<()> {
+        self.inner.render(payload, timestamp_us)
     }
 }
-
-#[cfg(target_os = "windows")]
-use windows::Win32::Media::Audio::*;
-#[cfg(target_os = "windows")]
-use windows::Win32::Media::KernelStreaming::{
-    KSDATAFORMAT_SUBTYPE_IEEE_FLOAT, KSDATAFORMAT_SUBTYPE_PCM,
-};
-#[cfg(target_os = "windows")]
-use windows::Win32::System::Com::*;
 
 /// Windows audio capturer
 pub struct WindowsAudioCapturer {
@@ -798,7 +787,7 @@ impl WindowsAudioCapturer {
                     }
 
                     let total_samples = frames_available as usize * self.input_channels;
-                    if flags & AUDCLNT_BUFFERFLAGS_SILENT.0 != 0 {
+                    if flags & AUDCLNT_BUFFERFLAGS_SILENT.0 as u32 != 0 {
                         let zeros = vec![0i16; total_samples];
                         self.push_resampled_samples(&zeros)?;
                     } else {
@@ -855,23 +844,23 @@ enum PcmFormat {
 }
 
 fn pcm_format(format: &WAVEFORMATEX) -> Result<PcmFormat> {
-    match format.wFormatTag {
-        WAVE_FORMAT_PCM => Ok(match format.wBitsPerSample {
-            16 => PcmFormat::I16,
-            32 => PcmFormat::I32,
-            _ => return Err(anyhow!("Unsupported PCM bit depth")),
-        }),
+    match format.wFormatTag as u32 {
+        WAVE_FORMAT_PCM => match format.wBitsPerSample {
+            16 => Ok(PcmFormat::I16),
+            32 => Ok(PcmFormat::I32),
+            _ => Err(anyhow!("Unsupported PCM bit depth")),
+        },
         WAVE_FORMAT_IEEE_FLOAT => Ok(PcmFormat::F32),
         WAVE_FORMAT_EXTENSIBLE => unsafe {
             let extensible = &*(format as *const _ as *const WAVEFORMATEXTENSIBLE);
             if extensible.SubFormat == KSDATAFORMAT_SUBTYPE_IEEE_FLOAT {
                 Ok(PcmFormat::F32)
             } else if extensible.SubFormat == KSDATAFORMAT_SUBTYPE_PCM {
-                Ok(match format.wBitsPerSample {
-                    16 => PcmFormat::I16,
-                    32 => PcmFormat::I32,
+                match format.wBitsPerSample {
+                    16 => Ok(PcmFormat::I16),
+                    32 => Ok(PcmFormat::I32),
                     _ => Err(anyhow!("Unsupported PCM bit depth")),
-                }?)
+                }
             } else {
                 Err(anyhow!("Unsupported audio subformat"))
             }
@@ -916,138 +905,8 @@ fn decode_pcm_samples(
     Ok(out)
 }
 
-fn interleaved_to_stereo(samples: &[i16], channels: usize) -> Vec<[f32; 2]> {
-    if channels == 0 {
-        return Vec::new();
-    }
-    let frames = samples.len() / channels;
-    let mut out = Vec::with_capacity(frames);
-    let mut idx = 0;
-    for _ in 0..frames {
-        let left = samples[idx] as f32 / i16::MAX as f32;
-        let right = if channels > 1 {
-            samples[idx + 1] as f32 / i16::MAX as f32
-        } else {
-            left
-        };
-        out.push([left, right]);
-        idx += channels;
-    }
-    out
-}
-
-fn select_output_config(device: &cpal::Device) -> Result<(StreamConfig, SampleFormat)> {
-    let mut chosen: Option<(StreamConfig, SampleFormat)> = None;
-    let configs = device
-        .supported_output_configs()
-        .map_err(|e| anyhow!("Audio configs error: {}", e))?;
-
-    for cfg in configs {
-        if cfg.channels() != OPUS_CHANNELS as u16 {
-            continue;
-        }
-        let min = cfg.min_sample_rate().0;
-        let max = cfg.max_sample_rate().0;
-        if min <= OPUS_SAMPLE_RATE && max >= OPUS_SAMPLE_RATE {
-            let mut config = cfg.with_sample_rate(SampleRate(OPUS_SAMPLE_RATE)).config();
-            if let SupportedBufferSize::Range { min, max } = cfg.buffer_size() {
-                let desired = OPUS_FRAME_SAMPLES as u32;
-                let buffer = desired.clamp(*min, *max);
-                config.buffer_size = BufferSize::Fixed(buffer);
-            }
-            chosen = Some((config, cfg.sample_format()));
-            break;
-        }
-    }
-
-    if let Some(cfg) = chosen {
-        return Ok(cfg);
-    }
-
-    let fallback = device
-        .default_output_config()
-        .map_err(|e| anyhow!("Default audio config error: {}", e))?;
-    Ok((fallback.config(), fallback.sample_format()))
-}
-
-fn build_stream_f32(
-    device: &cpal::Device,
-    config: &StreamConfig,
-    buffer: Arc<Mutex<VecDeque<f32>>>,
-    err_fn: impl FnMut(cpal::StreamError) + Send + 'static,
-) -> Result<Stream> {
-    let stream = device.build_output_stream(
-        config,
-        move |data: &mut [f32], _| {
-            let mut guard = match buffer.lock() {
-                Ok(guard) => guard,
-                Err(poisoned) => poisoned.into_inner(),
-            };
-            for sample in data.iter_mut() {
-                *sample = guard.pop_front().unwrap_or(0.0);
-            }
-        },
-        err_fn,
-        None,
-    )?;
-    Ok(stream)
-}
-
-fn build_stream_i16(
-    device: &cpal::Device,
-    config: &StreamConfig,
-    buffer: Arc<Mutex<VecDeque<f32>>>,
-    err_fn: impl FnMut(cpal::StreamError) + Send + 'static,
-) -> Result<Stream> {
-    let stream = device.build_output_stream(
-        config,
-        move |data: &mut [i16], _| {
-            let mut guard = match buffer.lock() {
-                Ok(guard) => guard,
-                Err(poisoned) => poisoned.into_inner(),
-            };
-            for sample in data.iter_mut() {
-                let value = guard.pop_front().unwrap_or(0.0);
-                *sample = f32_to_i16(value);
-            }
-        },
-        err_fn,
-        None,
-    )?;
-    Ok(stream)
-}
-
-fn build_stream_u16(
-    device: &cpal::Device,
-    config: &StreamConfig,
-    buffer: Arc<Mutex<VecDeque<f32>>>,
-    err_fn: impl FnMut(cpal::StreamError) + Send + 'static,
-) -> Result<Stream> {
-    let stream = device.build_output_stream(
-        config,
-        move |data: &mut [u16], _| {
-            let mut guard = match buffer.lock() {
-                Ok(guard) => guard,
-                Err(poisoned) => poisoned.into_inner(),
-            };
-            for sample in data.iter_mut() {
-                let value = guard.pop_front().unwrap_or(0.0);
-                *sample = f32_to_u16(value);
-            }
-        },
-        err_fn,
-        None,
-    )?;
-    Ok(stream)
-}
-
-fn f32_to_i16(value: f32) -> i16 {
-    (value.clamp(-1.0, 1.0) * i16::MAX as f32) as i16
-}
-
-fn f32_to_u16(value: f32) -> u16 {
-    let scaled = value.clamp(-1.0, 1.0) * 0.5 + 0.5;
-    (scaled * u16::MAX as f32) as u16
+fn trigger_to_u8(value: f32) -> u8 {
+    (value.clamp(0.0, 1.0) * u8::MAX as f32) as u8
 }
 
 const XUSB_GAMEPAD_LEFT_SHOULDER: u16 = 0x0100;
@@ -1089,6 +948,11 @@ struct VigemGamepad {
     target_remove: VigemTargetRemove,
     x360_update: VigemTargetX360Update,
 }
+
+#[cfg(target_os = "windows")]
+unsafe impl Send for VigemGamepad {}
+#[cfg(target_os = "windows")]
+unsafe impl Sync for VigemGamepad {}
 
 impl VigemGamepad {
     fn new() -> Result<Self> {
@@ -1242,8 +1106,24 @@ fn axis_to_i16(value: f32) -> i16 {
     (value.clamp(-1.0, 1.0) * i16::MAX as f32) as i16
 }
 
-fn trigger_to_u8(value: f32) -> u8 {
-    (value.clamp(0.0, 1.0) * u8::MAX as f32) as u8
+fn interleaved_to_stereo(samples: &[i16], channels: usize) -> Vec<[f32; 2]> {
+    if channels == 0 {
+        return Vec::new();
+    }
+    let frames = samples.len() / channels;
+    let mut out = Vec::with_capacity(frames);
+    let mut idx = 0;
+    for _ in 0..frames {
+        let left = samples[idx] as f32 / i16::MAX as f32;
+        let right = if channels > 1 {
+            samples[idx + 1] as f32 / i16::MAX as f32
+        } else {
+            left
+        };
+        out.push([left, right]);
+        idx += channels;
+    }
+    out
 }
 
 fn normalize_gamepad_deadzone(deadzone: f32) -> f32 {
@@ -1268,6 +1148,11 @@ pub struct WindowsInputInjector {
     gamepad_failed: bool,
     gamepad_deadzone: f32,
 }
+
+#[cfg(target_os = "windows")]
+unsafe impl Send for WindowsInputInjector {}
+#[cfg(target_os = "windows")]
+unsafe impl Sync for WindowsInputInjector {}
 
 impl Default for WindowsInputInjector {
     fn default() -> Self {
@@ -1493,7 +1378,7 @@ impl crate::CapabilityProbe for WindowsProbe {
                 None,
                 None,
                 Some(enum_monitor_callback),
-                LPARAM(&mut displays as *mut _ as i64),
+                LPARAM(&mut displays as *mut _ as isize),
             )
             .ok()?;
 
@@ -1526,7 +1411,7 @@ fn supported_mft_codecs(category: GUID) -> Result<Vec<Codec>> {
             let output_type = if is_decoder { None } else { Some(&output_type) };
             let _ = MFTEnumEx(
                 category,
-                MFT_ENUM_FLAG_HARDWARE | MFT_ENUM_FLAG_SORTANDFILTER,
+                MFT_ENUM_FLAG_HARDWARE.0 as u32 | MFT_ENUM_FLAG_SORTANDFILTER.0 as u32,
                 input_type,
                 output_type,
                 &mut activate_list,

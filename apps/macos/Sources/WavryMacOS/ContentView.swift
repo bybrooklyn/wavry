@@ -29,11 +29,12 @@ struct ContentView: View {
                 }
                 .padding(.vertical, .themeSpacing.xl)
                 .frame(width: 60)
-                .background(Color.bgSidebar)
+                .background(VisualEffectView(material: .sidebar, blendingMode: .behindWindow))
                 
                 // 2. Main Content Area
                 ZStack {
-                    Color.bgBase.ignoresSafeArea()
+                    VisualEffectView(material: .underWindowBackground, blendingMode: .behindWindow)
+                        .ignoresSafeArea()
                     
                     VStack(alignment: .leading, spacing: 0) {
                         // Top Bar (User Identity)
@@ -112,7 +113,7 @@ struct SessionsView: View {
                     }
                 }
                 .padding()
-                .background(Color.bgElevation1)
+                .background(.ultraThinMaterial)
                 .cornerRadius(10)
                 .padding(.horizontal, .themeSpacing.xxl)
             }
@@ -143,14 +144,14 @@ struct SessionsView: View {
                                     .cornerRadius(12)
                                     .overlay(
                                         RoundedRectangle(cornerRadius: 12)
-                                            .stroke(Color.accentSuccess, lineWidth: 2)
+                                            .stroke(Color.accentSuccess.opacity(0.5), lineWidth: 1)
                                     )
                                     
                                 Button(action: { appState.stopSession() }) {
                                     Text("Disconnect")
                                         .frame(maxWidth: .infinity)
                                         .padding()
-                                        .background(Color.accentDanger)
+                                        .background(Color.accentDanger.opacity(0.8))
                                         .foregroundColor(.white)
                                         .cornerRadius(8)
                                 }
@@ -167,15 +168,19 @@ struct SessionsView: View {
                                 if appState.connectivityMode != .direct {
                                     HStack {
                                         TextField("Username or ID", text: $remoteUsername)
-                                            .textFieldStyle(RoundedBorderTextFieldStyle())
+                                            .textFieldStyle(PlainTextFieldStyle())
+                                            .padding(10)
+                                            .background(Color.white.opacity(0.05))
+                                            .cornerRadius(8)
                                         
                                         Button(action: {
                                             appState.clearMessages()
                                             appState.connectViaId(username: remoteUsername)
                                         }) {
-                                            Text("Connect via ID")
+                                            Text("Connect")
+                                                .fontWeight(.bold)
                                                 .padding(.horizontal, 20)
-                                                .padding(.vertical, 8)
+                                                .padding(.vertical, 10)
                                                 .background(Color.accentPrimary)
                                                 .foregroundColor(.white)
                                                 .cornerRadius(8)
@@ -184,7 +189,7 @@ struct SessionsView: View {
                                         .disabled(appState.isConnectingClient || remoteUsername.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || appState.isHost)
                                     }
                                     .padding()
-                                    .background(Color.bgElevation1)
+                                    .background(.ultraThinMaterial)
                                     .cornerRadius(12)
                                     
                                     Text("OR").font(.caption).foregroundColor(.textSecondary)
@@ -193,15 +198,19 @@ struct SessionsView: View {
                                 // Direct IP Connection (LAN Mode & Fallback)
                                 HStack {
                                     TextField("Host IP", text: $remoteIP)
-                                        .textFieldStyle(RoundedBorderTextFieldStyle())
+                                        .textFieldStyle(PlainTextFieldStyle())
+                                        .padding(10)
+                                        .background(Color.white.opacity(0.05))
+                                        .cornerRadius(8)
                                     
                                     Button(action: {
                                         appState.clearMessages()
                                         appState.connectToHost(ip: remoteIP)
                                     }) {
                                         Text(appState.isConnectingClient ? "Connecting..." : "Connect Directly")
+                                            .fontWeight(.bold)
                                             .padding(.horizontal, 20)
-                                            .padding(.vertical, 8)
+                                            .padding(.vertical, 10)
                                             .background(Color.accentPrimary.opacity(appState.connectivityMode == .direct ? 1.0 : 0.6))
                                             .foregroundColor(.white)
                                             .cornerRadius(8)
@@ -210,7 +219,7 @@ struct SessionsView: View {
                                     .disabled(appState.isConnectingClient || remoteIP.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || appState.isHost)
                                 }
                                 .padding()
-                                .background(Color.bgElevation1)
+                                .background(.ultraThinMaterial)
                                 .cornerRadius(12)
                             }
                         }
@@ -230,7 +239,7 @@ struct HostCard: View {
         VStack(spacing: 0) {
             // Preview / Thumbnail
             ZStack {
-                Color.bgElevation2
+                Color.black.opacity(0.2)
                 if appState.isHost {
                     // Live indicator
                     VStack {
@@ -246,14 +255,17 @@ struct HostCard: View {
                                     .foregroundColor(.accentSuccess)
                             }
                             .padding(8)
+                            .background(.ultraThinMaterial)
+                            .cornerRadius(6)
                             Spacer()
                         }
+                        .padding(12)
                     }
                 } else {
-                    WavryIcon(name: .hostDefault, size: 60, color: .textSecondary.opacity(0.5))
+                    WavryIcon(name: .hostDefault, size: 60, color: .textSecondary.opacity(0.3))
                 }
             }
-            .frame(height: 200)
+            .frame(height: 180)
             
             // Info Row
             HStack {
@@ -268,8 +280,13 @@ struct HostCard: View {
                 Spacer()
                 
                 if appState.isConnected && !appState.isHost {
-                    Text("Client Active")
+                    Text("Connected as Client")
+                        .font(.caption)
                         .foregroundColor(.textSecondary)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 6)
+                        .background(Color.white.opacity(0.05))
+                        .cornerRadius(6)
                 } else {
                     Button(action: {
                         appState.clearMessages()
@@ -282,8 +299,8 @@ struct HostCard: View {
                         Text(appState.isHost ? "Stop Hosting" : (appState.isStartingHost ? "Starting..." : "Start Hosting"))
                             .fontWeight(.bold)
                             .padding(.horizontal, .themeSpacing.xl)
-                            .padding(.vertical, 8)
-                            .background(appState.isHost ? Color.accentDanger : Color.accentPrimary)
+                            .padding(.vertical, 10)
+                            .background(appState.isHost ? Color.accentDanger.opacity(0.8) : Color.accentPrimary)
                             .foregroundColor(.white)
                             .cornerRadius(.themeRadius.sm)
                     }
@@ -293,11 +310,11 @@ struct HostCard: View {
             }
             .padding(.themeSpacing.lg)
         }
-        .background(Color.bgElevation1)
+        .background(.ultraThinMaterial)
         .cornerRadius(.themeRadius.md)
         .overlay(
             RoundedRectangle(cornerRadius: .themeRadius.md)
-                .stroke(Color.black.opacity(0.5), lineWidth: 1)
+                .stroke(Color.white.opacity(0.1), lineWidth: 1)
         )
     }
 }
@@ -333,5 +350,23 @@ struct VideoPlayerView: NSViewRepresentable {
         if nsView.layer != layer {
             nsView.layer = layer
         }
+    }
+}
+
+struct VisualEffectView: NSViewRepresentable {
+    var material: NSVisualEffectView.Material
+    var blendingMode: NSVisualEffectView.BlendingMode
+    
+    func makeNSView(context: Context) -> NSVisualEffectView {
+        let view = NSVisualEffectView()
+        view.material = material
+        view.blendingMode = blendingMode
+        view.state = .active
+        return view
+    }
+    
+    func updateNSView(_ nsView: NSVisualEffectView, context: Context) {
+        nsView.material = material
+        nsView.blendingMode = blendingMode
     }
 }

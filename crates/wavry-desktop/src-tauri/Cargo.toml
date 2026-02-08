@@ -23,14 +23,14 @@ tauri-plugin-opener = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 wavry-client = { path = "../../wavry-client" }
-wavry-media = { path = "../../wavry-media" }
+wavry-media = { path = "../../wavry-media", features = ["opus-support"] }
 rift-core = { path = "../../rift-core" }
 rift-crypto = { path = "../../rift-crypto" }
 tokio = { version = "1", features = ["full"] }
 log = "0.4"
 hex = "0.4"
 anyhow = { workspace = true }
-reqwest = { version = "0.12", features = ["json"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 jsonwebtoken = "9"
 keyring = "2"
 uuid = { version = "1", features = ["v4"] }

@@ -58,7 +58,7 @@ struct LoginResponse: Decodable {
         throw DecodingError.dataCorruptedError(
             forKey: .token,
             in: container,
-            debugDescription: "Unsupported auth response payload.",
+            debugDescription: "Unsupported auth response payload."
         )
     }
 }

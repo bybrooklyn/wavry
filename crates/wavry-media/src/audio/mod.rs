@@ -15,3 +15,6 @@ pub(crate) const AUDIO_MAX_BUFFER_SAMPLES: usize =
 pub(crate) fn opus_frame_duration_us() -> u64 {
     (OPUS_FRAME_SAMPLES as u64) * 1_000_000 / (OPUS_SAMPLE_RATE as u64)
 }
+
+pub mod renderer;
+pub use renderer::CpalAudioRenderer;

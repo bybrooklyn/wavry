@@ -265,7 +265,7 @@ for abi in "${ABIS[@]}"; do
   target_triple="$(abi_to_target_triple "$abi")"
   echo "-> Building ABI ${abi} (${target_triple})"
 
-  CARGO_ARGS=(ndk -t "$abi" build -p wavry-ffi)
+  CARGO_ARGS=(ndk -t "$abi" build -p wavry-ffi --no-default-features)
   if [[ "$PROFILE" == "release" ]]; then
     CARGO_ARGS+=(--release)
   fi

@@ -529,4 +529,11 @@ impl MacAudioCapturer {
             .blocking_recv()
             .ok_or_else(|| anyhow!("audio capture stream ended"))
     }
+
+    pub async fn next_packet_async(&mut self) -> Result<EncodedFrame> {
+        self.rx
+            .recv()
+            .await
+            .ok_or_else(|| anyhow!("audio capture stream ended"))
+    }
 }

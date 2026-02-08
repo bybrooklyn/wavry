@@ -17,6 +17,7 @@ pub struct ClientConfig {
     pub no_encrypt: bool,
     pub identity_key: Option<[u8; 32]>,
     pub relay_info: Option<RelayInfo>,
+    pub master_url: Option<String>,
     pub max_resolution: Option<MediaResolution>,
     pub gamepad_enabled: bool,
     pub gamepad_deadzone: f32,
@@ -26,6 +27,7 @@ pub struct ClientConfig {
 
 #[derive(Debug, Clone)]
 pub struct RelayInfo {
+    pub relay_id: String,
     pub addr: SocketAddr,
     pub token: String,
     pub session_id: Uuid,
@@ -35,6 +37,7 @@ pub struct RelayInfo {
 pub struct ClientRuntimeStats {
     pub connected: AtomicBool,
     pub frames_decoded: AtomicU64,
+    pub monitors: Mutex<Vec<rift_core::MonitorInfo>>,
 }
 
 pub type RendererFactory = Box<dyn Fn(DecodeConfig) -> Result<Box<dyn Renderer + Send>> + Send>;

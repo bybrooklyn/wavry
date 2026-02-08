@@ -24,6 +24,9 @@ use crate::relay::{RelayMap, RelaySession};
 use crate::security;
 use rift_crypto::seq_window::SequenceWindow;
 
+#[cfg(feature = "webtransport-runtime")]
+use wavry_web as web_transport;
+
 const WS_OUTBOX_CAPACITY: usize = 128;
 const WS_MAX_TEXT_BYTES: usize = 64 * 1024;
 const WS_MAX_MESSAGES_PER_MINUTE: u32 = 600;
@@ -38,7 +41,73 @@ static IP_CONNECTIONS: Lazy<Mutex<HashMap<std::net::IpAddr, usize>>> =
 use once_cell::sync::Lazy;
 use std::sync::Mutex;
 
-pub type ConnectionMap = Arc<RwLock<HashMap<String, mpsc::Sender<Message>>>>;
+#[derive(Clone)]
+pub enum Signaler {
+    WebSocket(mpsc::Sender<Message>),
+    #[cfg(feature = "webtransport-runtime")]
+    WebTransport(mpsc::Sender<web_transport::ControlStreamFrame>),
+}
+
+impl Signaler {
+    pub fn try_send(&self, signal: SignalMessage) -> bool {
+        match self {
+            Signaler::WebSocket(tx) => {
+                if let Ok(json) = serde_json::to_string(&signal) {
+                    return tx.try_send(Message::Text(json)).is_ok();
+                }
+                false
+            }
+            #[cfg(feature = "webtransport-runtime")]
+            Signaler::WebTransport(tx) => {
+                let msg = match signal {
+                    SignalMessage::Offer {
+                        target_username,
+                        sdp,
+                        ..
+                    } => Some(web_transport::ControlMessage::WebRtcOffer {
+                        target_username,
+                        sdp,
+                    }),
+                    SignalMessage::Answer {
+                        target_username,
+                        sdp,
+                        ..
+                    } => Some(web_transport::ControlMessage::WebRtcAnswer {
+                        target_username,
+                        sdp,
+                    }),
+                    SignalMessage::Candidate {
+                        target_username,
+                        candidate,
+                    } => Some(web_transport::ControlMessage::WebRtcCandidate {
+                        target_username,
+                        candidate,
+                    }),
+                    _ => None,
+                };
+                if let Some(msg) = msg {
+                    return tx
+                        .try_send(web_transport::ControlStreamFrame::Control(msg))
+                        .is_ok();
+                }
+                false
+            }
+        }
+    }
+
+    pub fn try_send_binary(&self, data: Vec<u8>) -> bool {
+        match self {
+            Signaler::WebSocket(tx) => tx.try_send(Message::Binary(data)).is_ok(),
+            #[cfg(feature = "webtransport-runtime")]
+            Signaler::WebTransport(_) => false, // WebTransport uses datagrams, handled separately?
+                                                // Actually, if we are forwarding TO a WebTransport client, we would use datagrams.
+                                                // But Signaler only has ControlStreamFrame sender.
+                                                // To support datagrams here, we'd need the datagram sender in Signaler.
+        }
+    }
+}
+
+pub type ConnectionMap = Arc<RwLock<HashMap<String, Signaler>>>;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(tag = "type", content = "payload")]
@@ -97,13 +166,6 @@ async fn send_signal(tx: &mpsc::Sender<Message>, signal: &SignalMessage) -> bool
         return false;
     };
     tx.send(message).await.is_ok()
-}
-
-fn try_send_signal(tx: &mpsc::Sender<Message>, signal: &SignalMessage) -> bool {
-    let Some(message) = to_ws_message(signal) else {
-        return false;
-    };
-    tx.try_send(message).is_ok()
 }
 
 fn relay_session_limit() -> usize {
@@ -200,7 +262,7 @@ async fn handle_socket(
 
     tokio::spawn(async move {
         while let Some(msg) = rx.recv().await {
-            if let Err(_) = sender.send(msg).await {
+            if sender.send(msg).await.is_err() {
                 break;
             }
         }
@@ -350,14 +412,11 @@ async fn handle_socket(
                         let replaced = connections
                             .write()
                             .await
-                            .insert(username.clone(), tx.clone());
+                            .insert(username.clone(), Signaler::WebSocket(tx.clone()));
                         if let Some(previous) = replaced {
-                            let _ = try_send_signal(
-                                &previous,
-                                &SignalMessage::Error {
-                                    message: "Session replaced by a newer connection".into(),
-                                },
-                            );
+                            let _ = previous.try_send(SignalMessage::Error {
+                                message: "Session replaced by a newer connection".into(),
+                            });
                         }
 
                         authenticated_username = Some(username.clone());
@@ -647,7 +706,7 @@ async fn relay_message(connections: &ConnectionMap, target_username: &str, msg: 
     };
 
     if let Some(tx) = tx {
-        if !try_send_signal(&tx, &msg) {
+        if !tx.try_send(msg) {
             warn!("failed to queue signaling message for {}", target_username);
         }
     } else {

@@ -49,11 +49,11 @@ graph TD
 |:---|:---|:---|
 | **`rift-core`** | **Protocol** | Implementation of the RIFT wire format, DELTA congestion control, and FEC. |
 | **`rift-crypto`** | **Security** | Noise_XX handshake, ChaCha20-Poly1305 AEAD, and identity management. |
-| **`wavry-media`** | **Hardware** | Hardware-accelerated capture and encoding (WGC, Media Foundation, Metal). |
-| **`wavry-client`** | **Session** | Client-side session management, signaling, and RTT tracking. |
+| **`wavry-media`** | **Hardware** | Hardware-accelerated capture and encoding (WGC, Media Foundation, Metal). Supports Multi-Monitor capture. |
+| **`wavry-client`** | **Session** | Client-side session management, signaling, and RTT tracking. Includes dynamic monitor discovery. |
 | **`wavry-desktop`** | **Integration** | Tauri-based host and client application for Windows and Linux. |
-| **`wavry-gateway`** | **Signaling** | Real-time signaling gateway for peer coordination and SDP exchange. |
-| **`wavry-relay`** | **Transport** | Blind UDP forwarder for encrypted traffic. |
+| **`wavry-gateway`** | **Signaling** | Real-time signaling gateway for peer coordination and SDP exchange. Includes admin dashboard. |
+| **`wavry-relay`** | **Transport** | Blind UDP forwarder for encrypted traffic. Supports custom bitrate limits (min 10Mbps). |
 | **`wavry-web`** | **Web** | WebTransport/WebRTC hybrid control plane types and integration skeleton. |
 
 ---
@@ -101,12 +101,34 @@ cargo build --release --workspace
 ### Running Infrastructure (Local)
 1.  **Gateway**
     ```bash
-    cargo run --bin wavry-gateway
+    # Generate development certificates for WebTransport
+    ./scripts/gen-wt-cert.sh
+    
+    # Run with WebTransport runtime enabled
+    WAVRY_ENABLE_INSECURE_WEBTRANSPORT_RUNTIME=1 \
+    WAVRY_WT_CERT=certs/wt-cert.pem \
+    WAVRY_WT_KEY=certs/wt-key.pem \
+    cargo run --bin wavry-gateway --features webtransport-runtime
     ```
 2.  **Relay**
     ```bash
     cargo run --bin wavry-relay -- --master-url http://localhost:8080
     ```
+3.  **Server (Host)**
+    ```bash
+    # Run with WebRTC support for browser clients
+    WAVRY_ENABLE_WEBRTC=true \
+    WAVRY_GATEWAY_URL=ws://127.0.0.1:3000/ws \
+    cargo run --bin wavry-server
+    ```
+
+### Web Reference App (SvelteKit)
+```bash
+cd apps/web-reference
+bun install
+bun run dev
+```
+Open `http://localhost:5173` in a WebTransport-compatible browser (Chrome/Edge 97+).
 
 ### Linux Capture Smoke Test
 ```bash

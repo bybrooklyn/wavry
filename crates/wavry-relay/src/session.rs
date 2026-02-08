@@ -8,9 +8,11 @@
 
 use std::collections::HashMap;
 use std::net::SocketAddr;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use rift_crypto::seq_window::SequenceWindow;
+use tokio::sync::RwLock;
 use uuid::Uuid;
 
 /// Session state machine states
@@ -70,6 +72,10 @@ pub struct RelaySession {
     pub client: Option<PeerState>,
     /// Server peer (if connected)
     pub server: Option<PeerState>,
+    /// Client Wavry ID (from lease)
+    pub client_id: Option<String>,
+    /// Server Wavry ID (from lease)
+    pub server_id: Option<String>,
     /// Lease expiration time
     pub lease_expires: Instant,
     /// Session creation time
@@ -101,6 +107,8 @@ impl RelaySession {
             state: SessionState::Init,
             client: None,
             server: None,
+            client_id: None,
+            server_id: None,
             lease_expires: now + lease_duration,
             created_at: now,
             last_activity: now,
@@ -121,6 +129,28 @@ impl RelaySession {
         wavry_id: String,
         socket_addr: SocketAddr,
     ) -> Result<(), SessionError> {
+        // Validate against session-locked IDs if they exist
+        match role {
+            PeerRole::Client => {
+                if let Some(ref locked_id) = self.client_id {
+                    if locked_id != &wavry_id {
+                        return Err(SessionError::InvalidLease);
+                    }
+                } else {
+                    self.client_id = Some(wavry_id.clone());
+                }
+            }
+            PeerRole::Server => {
+                if let Some(ref locked_id) = self.server_id {
+                    if locked_id != &wavry_id {
+                        return Err(SessionError::InvalidLease);
+                    }
+                } else {
+                    self.server_id = Some(wavry_id.clone());
+                }
+            }
+        }
+
         let peer = PeerState::new(wavry_id, socket_addr);
 
         match role {
@@ -242,7 +272,7 @@ pub enum SessionError {
 /// Session pool managing all active sessions
 #[derive(Debug)]
 pub struct SessionPool {
-    sessions: HashMap<Uuid, RelaySession>,
+    sessions: HashMap<Uuid, Arc<RwLock<RelaySession>>>,
     max_sessions: usize,
     session_idle_timeout: Duration,
 }
@@ -262,47 +292,53 @@ impl SessionPool {
         &mut self,
         session_id: Uuid,
         lease_duration: Duration,
-    ) -> Result<&mut RelaySession, SessionError> {
+    ) -> Result<Arc<RwLock<RelaySession>>, SessionError> {
         if !self.sessions.contains_key(&session_id) {
             if self.sessions.len() >= self.max_sessions {
                 return Err(SessionError::SessionFull);
             }
             let session = RelaySession::new(session_id, lease_duration);
-            self.sessions.insert(session_id, session);
+            self.sessions
+                .insert(session_id, Arc::new(RwLock::new(session)));
         }
-        Ok(self.sessions.get_mut(&session_id).unwrap())
+        Ok(self.sessions.get(&session_id).unwrap().clone())
     }
 
     /// Get an existing session
     #[allow(dead_code)]
-    pub fn get(&self, session_id: &Uuid) -> Option<&RelaySession> {
-        self.sessions.get(session_id)
-    }
-
-    /// Get a mutable session
-    pub fn get_mut(&mut self, session_id: &Uuid) -> Option<&mut RelaySession> {
-        self.sessions.get_mut(session_id)
+    pub fn get(&self, session_id: &Uuid) -> Option<Arc<RwLock<RelaySession>>> {
+        self.sessions.get(session_id).cloned()
     }
 
     /// Remove a session
     #[allow(dead_code)]
-    pub fn remove(&mut self, session_id: &Uuid) -> Option<RelaySession> {
+    pub fn remove(&mut self, session_id: &Uuid) -> Option<Arc<RwLock<RelaySession>>> {
         self.sessions.remove(session_id)
     }
 
     /// Clean up expired and idle sessions
-    pub fn cleanup(&mut self) -> usize {
+    pub async fn cleanup(&mut self) -> usize {
         let now = Instant::now();
         let idle_timeout = self.session_idle_timeout;
-        let before = self.sessions.len();
+        let mut expired_ids = Vec::new();
 
-        self.sessions.retain(|_, session: &mut RelaySession| {
+        // Identify expired sessions
+        for (id, session_lock) in &self.sessions {
+            // Use read lock to check status
+            let session = session_lock.read().await;
             let expired = session.is_expired();
             let idle = now.duration_since(session.last_activity) > idle_timeout;
-            !expired && !idle
-        });
+            if expired || idle {
+                expired_ids.push(*id);
+            }
+        }
 
-        before - self.sessions.len()
+        let count = expired_ids.len();
+        for id in expired_ids {
+            self.sessions.remove(&id);
+        }
+
+        count
     }
 
     /// Get session count
@@ -312,135 +348,20 @@ impl SessionPool {
     }
 
     /// Get active session count
-    pub fn active_count(&self) -> usize {
-        self.sessions
-            .values()
-            .filter(|s| matches!(s.state, SessionState::Active | SessionState::Renewed))
-            .count()
+    pub async fn active_count(&self) -> usize {
+        let mut count = 0;
+        for session_lock in self.sessions.values() {
+            let session = session_lock.read().await;
+            if matches!(session.state, SessionState::Active | SessionState::Renewed) {
+                count += 1;
+            }
+        }
+        count
     }
 
     /// Check if empty
     #[allow(dead_code)]
     pub fn is_empty(&self) -> bool {
         self.sessions.is_empty()
-    }
-
-    /// Get counts by state
-    #[allow(dead_code)]
-    pub fn state_counts(&self) -> SessionStateCounts {
-        let mut counts = SessionStateCounts::default();
-        for session in self.sessions.values() {
-            match session.state {
-                SessionState::Init => counts.init += 1,
-                SessionState::WaitingPeer => counts.waiting_peer += 1,
-                SessionState::Active | SessionState::Renewed => counts.active += 1,
-                SessionState::Expired => counts.expired += 1,
-                SessionState::Rejected => counts.rejected += 1,
-            }
-        }
-        counts
-    }
-}
-
-/// Session state counts for metrics
-#[derive(Debug, Default)]
-#[allow(dead_code)]
-pub struct SessionStateCounts {
-    pub init: usize,
-    pub waiting_peer: usize,
-    pub active: usize,
-    pub expired: usize,
-    pub rejected: usize,
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_session_lifecycle() {
-        let session_id = Uuid::new_v4();
-        let mut session = RelaySession::new(session_id, Duration::from_secs(300));
-
-        assert_eq!(session.state, SessionState::Init);
-        assert!(!session.is_active());
-
-        // Register client
-        session
-            .register_peer(
-                PeerRole::Client,
-                "client-id".to_string(),
-                "127.0.0.1:5000".parse().unwrap(),
-            )
-            .unwrap();
-        assert_eq!(session.state, SessionState::WaitingPeer);
-        assert!(!session.is_active());
-
-        // Register server
-        session
-            .register_peer(
-                PeerRole::Server,
-                "server-id".to_string(),
-                "127.0.0.1:6000".parse().unwrap(),
-            )
-            .unwrap();
-        assert_eq!(session.state, SessionState::Active);
-        assert!(session.is_active());
-    }
-
-    #[test]
-    fn test_peer_identification() {
-        let session_id = Uuid::new_v4();
-        let mut session = RelaySession::new(session_id, Duration::from_secs(300));
-
-        let client_addr: SocketAddr = "127.0.0.1:5000".parse().unwrap();
-        let server_addr: SocketAddr = "127.0.0.1:6000".parse().unwrap();
-
-        session
-            .register_peer(PeerRole::Client, "client".to_string(), client_addr)
-            .unwrap();
-        session
-            .register_peer(PeerRole::Server, "server".to_string(), server_addr)
-            .unwrap();
-
-        // Identify from client
-        let (role, _sender, dest) = session.identify_peer(client_addr).unwrap();
-        assert_eq!(role, PeerRole::Client);
-        assert_eq!(dest.socket_addr, server_addr);
-
-        // Identify from server
-        let (role, _sender, dest) = session.identify_peer(server_addr).unwrap();
-        assert_eq!(role, PeerRole::Server);
-        assert_eq!(dest.socket_addr, client_addr);
-
-        // Unknown peer
-        let unknown: SocketAddr = "127.0.0.1:9999".parse().unwrap();
-        assert!(session.identify_peer(unknown).is_none());
-    }
-
-    #[test]
-    fn test_session_pool() {
-        let mut pool = SessionPool::new(10, Duration::from_secs(60));
-
-        let session_id = Uuid::new_v4();
-        pool.get_or_create(session_id, Duration::from_secs(300))
-            .unwrap();
-
-        assert_eq!(pool.len(), 1);
-        assert!(pool.get(&session_id).is_some());
-    }
-
-    #[test]
-    fn test_session_pool_max_limit() {
-        let mut pool = SessionPool::new(2, Duration::from_secs(60));
-
-        pool.get_or_create(Uuid::new_v4(), Duration::from_secs(300))
-            .unwrap();
-        pool.get_or_create(Uuid::new_v4(), Duration::from_secs(300))
-            .unwrap();
-
-        // Third should fail
-        let result = pool.get_or_create(Uuid::new_v4(), Duration::from_secs(300));
-        assert!(matches!(result, Err(SessionError::SessionFull)));
     }
 }

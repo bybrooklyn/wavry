@@ -148,13 +148,13 @@ Relay                                   Master
   ],
   "region": "us-east-1",
   "asn": 15169,
-  "capacity": {
-    "max_sessions": 100,
-    "mbps": 1000
-  },
+  "max_sessions": 100,
+  "max_bitrate_kbps": 20000,
   "features": ["udp", "ipv6", "fec"]
 }
 ```
+
+> **Minimum Requirements:** All relays must support at least **10,000 kbps (10 Mbps)**. Registration will be rejected if `max_bitrate_kbps` is below this threshold.
 
 ### 2.3 Heartbeat Protocol
 
@@ -176,7 +176,43 @@ Authorization: Bearer <relay_token>
 
 ---
 
-## 3. Lease Issuance
+## 3. Admin & Operations
+
+### 3.1 Relay Management
+
+Admins can update relay states (e.g., from `New` to `Active`) via the admin API.
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| POST | `/admin/api/relays/update_state` | Admin | Update relay state |
+| GET | `/v1/relays` | Token | List relays (includes state) |
+
+**Relay States:**
+- `New`: Default state. Multiplier 0.0 (inactive).
+- `Probation`: Trial state. Multiplier 0.5 with exploration bonus.
+- `Active`: Production state. Multiplier 1.0.
+- `Degraded`: Performance issues detected. Multiplier 0.3.
+- `Banned`: Manually disabled. Multiplier 0.0.
+
+### 3.2 Feedback Loop
+
+Clients report session quality at the end of every relay session:
+
+```
+POST /v1/feedback
+{
+  "session_id": "<uuid>",
+  "relay_id": "<id>",
+  "quality_score": 100,
+  "issues": []
+}
+```
+
+Master uses this to calculate a moving average `success_rate` for each relay, which influences the selection algorithm.
+
+---
+
+## 4. Lease Issuance
 
 When P2P fails or is blocked, clients request a relay lease.
 

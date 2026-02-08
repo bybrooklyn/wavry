@@ -10,21 +10,21 @@ use wavry_media::{CapabilityProbe, Codec};
 pub fn local_supported_encoders() -> Vec<Codec> {
     #[cfg(target_os = "windows")]
     {
-        return WindowsProbe
+        WindowsProbe
             .supported_encoders()
-            .unwrap_or_else(|_| vec![Codec::H264]);
+            .unwrap_or_else(|_| vec![Codec::H264])
     }
     #[cfg(target_os = "macos")]
     {
-        return MacProbe
+        MacProbe
             .supported_encoders()
-            .unwrap_or_else(|_| vec![Codec::H264]);
+            .unwrap_or_else(|_| vec![Codec::H264])
     }
     #[cfg(target_os = "linux")]
     {
-        return LinuxProbe
+        LinuxProbe
             .supported_encoders()
-            .unwrap_or_else(|_| vec![Codec::H264]);
+            .unwrap_or_else(|_| vec![Codec::H264])
     }
     #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
     {

@@ -2,6 +2,7 @@ package com.wavry.android.core
 
 class NativeBridge {
     external fun nativeInit()
+    external fun nativeAndroidInit(context: Any)
     external fun nativeInitIdentity(storagePath: String): Int
     external fun nativeGetPublicKeyHex(): String
     external fun nativeVersion(): String

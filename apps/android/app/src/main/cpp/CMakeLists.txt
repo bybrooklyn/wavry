@@ -17,6 +17,8 @@ find_library(log-lib log)
 find_library(android-lib android)
 find_library(dl-lib dl)
 find_library(m-lib m)
+find_library(media-lib mediandk)
+find_library(opensles-lib OpenSLES)
 
 target_link_libraries(
     wavry_android
@@ -25,4 +27,6 @@ target_link_libraries(
     ${android-lib}
     ${dl-lib}
     ${m-lib}
+    ${media-lib}
+    ${opensles-lib}
 )

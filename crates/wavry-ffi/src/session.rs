@@ -14,14 +14,14 @@ use anyhow::{anyhow, Result};
 #[allow(unused_imports)]
 use bytes::Bytes;
 use tokio::net::UdpSocket;
-use tokio::sync::oneshot;
+use tokio::sync::{mpsc, oneshot};
 use tokio::time;
 
 // Imports
 use wavry_media::{Codec, EncodeConfig, EncodedFrame, Renderer, Resolution};
 
 #[cfg(target_os = "macos")]
-use wavry_media::{MacScreenEncoder, MacVideoRenderer as PlatformVideoRenderer};
+use wavry_media::{MacAudioCapturer, MacScreenEncoder, MacVideoRenderer as PlatformVideoRenderer};
 
 #[cfg(target_os = "android")]
 use wavry_media::AndroidVideoRenderer as PlatformVideoRenderer;
@@ -233,6 +233,7 @@ pub struct SessionStats {
 
 pub struct SessionHandle {
     pub stop_tx: Option<oneshot::Sender<()>>,
+    pub monitor_tx: Option<mpsc::UnboundedSender<u32>>,
     pub stats: Arc<SessionStats>,
 }
 
@@ -349,6 +350,28 @@ async fn send_video_frame(
     Ok(())
 }
 
+async fn send_audio_packet(
+    socket: &UdpSocket,
+    peer_state: &mut PeerState,
+    peer: SocketAddr,
+    packet: EncodedFrame,
+) -> Result<()> {
+    let msg = ProtoMessage {
+        content: Some(rift_core::message::Content::Media(
+            rift_core::MediaMessage {
+                content: Some(rift_core::media_message::Content::Audio(
+                    rift_core::AudioPacket {
+                        timestamp_us: packet.timestamp_us,
+                        payload: packet.data,
+                    },
+                )),
+            },
+        )),
+    };
+    send_rift_msg(socket, peer_state, peer, msg).await?;
+    Ok(())
+}
+
 pub async fn run_host(
     port: u16,
     host_config: HostRuntimeConfig,
@@ -395,6 +418,8 @@ pub async fn run_host(
         bitrate_kbps: host_config.bitrate_kbps,
         keyframe_interval_ms: host_config.keyframe_interval_ms,
         display_id: host_config.display_id,
+        enable_10bit: false,
+        enable_hdr: false,
     };
 
     #[cfg(target_os = "macos")]
@@ -405,6 +430,15 @@ pub async fn run_host(
             Err(e) => {
                 let _ = init_tx.send(Err(anyhow!("Failed to create encoder: {}", e)));
                 return Err(e);
+            }
+        };
+
+        // 2b. Setup Audio (Mac Only)
+        let mut audio_capturer = match MacAudioCapturer::new().await {
+            Ok(ac) => Some(ac),
+            Err(e) => {
+                log::warn!("Failed to create audio capturer: {}", e);
+                None
             }
         };
 
@@ -673,6 +707,27 @@ pub async fn run_host(
                         }
                     }
                 }
+
+                // Audio packets
+                res = async {
+                    if let Some(ac) = audio_capturer.as_mut() {
+                        ac.next_packet_async().await
+                    } else {
+                        std::future::pending::<Result<EncodedFrame>>().await
+                    }
+                } => {
+                    if let Ok(packet) = res {
+                        if let (Some(addr), Some(state)) = (client_addr, peer_state.as_mut()) {
+                             let ready = state.crypto.is_established() &&
+                                matches!(state.handshake.state(), rift_core::HandshakeState::Established { .. });
+                            if ready {
+                                if let Err(e) = send_audio_packet(socket.as_ref(), state, addr, packet).await {
+                                    log::warn!("send audio packet error: {}", e);
+                                }
+                            }
+                        }
+                    }
+                }
             }
         }
         Ok(())
@@ -706,6 +761,7 @@ pub async fn run_client(
     stats: Arc<SessionStats>,
     mut stop_rx: oneshot::Receiver<()>,
     init_tx: oneshot::Sender<Result<()>>,
+    monitor_rx: mpsc::UnboundedReceiver<u32>,
 ) -> Result<()> {
     let mut init_tx = Some(init_tx);
     let connect_addr = match direct_target.as_ref() {
@@ -744,6 +800,7 @@ pub async fn run_client(
         no_encrypt: false,
         identity_key: crate::identity::get_private_key(),
         relay_info,
+        master_url: None, // FFI layer currently doesn't pass master_url
         max_resolution: None,
         gamepad_enabled: true,
         gamepad_deadzone: 0.1,
@@ -764,7 +821,12 @@ pub async fn run_client(
     let mut started = false;
     let startup_deadline = Instant::now() + Duration::from_secs(12);
     let mut stats_tick = time::interval(Duration::from_millis(250));
-    let client_fut = run_rift_client(config, Some(factory));
+    
+    let (monitor_tx, monitor_rx) = tokio::sync::mpsc::unbounded_channel::<u32>();
+    // Note: SessionHandle needs to be created by the caller or we need a way to return the tx.
+    // For now, I'll just pass None or fix the caller.
+    
+    let client_fut = run_rift_client(config, Some(factory), Some(monitor_rx));
     tokio::pin!(client_fut);
 
     loop {

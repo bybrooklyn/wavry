@@ -53,14 +53,42 @@ pub enum ControlMessage {
         value: f32,
         timestamp_us: u64,
     },
+    WebRtcOffer {
+        target_username: String,
+        sdp: String,
+    },
+    WebRtcAnswer {
+        target_username: String,
+        sdp: String,
+    },
+    WebRtcCandidate {
+        target_username: String,
+        candidate: String,
+    },
     StatsRequest,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum WebControlResponse {
-    Connected { server_name: String },
-    Error { message: String },
+    Connected {
+        server_name: String,
+    },
+    Error {
+        message: String,
+    },
+    WebRtcOffer {
+        from_username: String,
+        sdp: String,
+    },
+    WebRtcAnswer {
+        from_username: String,
+        sdp: String,
+    },
+    WebRtcCandidate {
+        from_username: String,
+        candidate: String,
+    },
     Stats(StatsReport),
 }
 

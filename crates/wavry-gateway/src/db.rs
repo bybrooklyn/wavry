@@ -243,3 +243,194 @@ pub async fn delete_expired_sessions(pool: &SqlitePool) -> anyhow::Result<u64> {
         .await?;
     Ok(result.rows_affected())
 }
+
+// Security Hardening Operations
+
+pub async fn record_login_failure(pool: &SqlitePool, identifier: &str) -> anyhow::Result<i64> {
+    let count: i64 = sqlx::query_scalar(
+        r#"
+        INSERT INTO login_failures (identifier, count, last_failure)
+        VALUES (?, 1, CURRENT_TIMESTAMP)
+        ON CONFLICT(identifier) DO UPDATE SET
+            count = count + 1,
+            last_failure = CURRENT_TIMESTAMP
+        RETURNING count
+        "#,
+    )
+    .bind(identifier)
+    .fetch_one(pool)
+    .await?;
+    Ok(count)
+}
+
+pub async fn reset_login_failure(pool: &SqlitePool, identifier: &str) -> anyhow::Result<()> {
+    sqlx::query("DELETE FROM login_failures WHERE identifier = ?")
+        .bind(identifier)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+pub async fn get_login_failures(
+    pool: &SqlitePool,
+    identifier: &str,
+) -> anyhow::Result<Option<(i64, DateTime<Utc>)>> {
+    let row: Option<(i64, DateTime<Utc>)> =
+        sqlx::query_as("SELECT count, last_failure FROM login_failures WHERE identifier = ?")
+            .bind(identifier)
+            .fetch_optional(pool)
+            .await?;
+    Ok(row)
+}
+
+pub async fn check_ban_status(pool: &SqlitePool, user_id: &str) -> anyhow::Result<Option<String>> {
+    let row: Option<(String,)> = sqlx::query_as(
+        r#"
+        SELECT reason FROM user_bans
+        WHERE user_id = ? AND (expires_at IS NULL OR expires_at > CURRENT_TIMESTAMP)
+        "#,
+    )
+    .bind(user_id)
+    .fetch_optional(pool)
+    .await?;
+    Ok(row.map(|v| v.0))
+}
+
+pub async fn ban_user(
+    pool: &SqlitePool,
+    user_id: &str,
+    reason: &str,
+    expires_at: Option<DateTime<Utc>>,
+) -> anyhow::Result<()> {
+    sqlx::query(
+        r#"
+        INSERT INTO user_bans (user_id, reason, expires_at, created_at)
+        VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+        ON CONFLICT(user_id) DO UPDATE SET
+            reason = excluded.reason,
+            expires_at = excluded.expires_at,
+            created_at = CURRENT_TIMESTAMP
+        "#,
+    )
+    .bind(user_id)
+    .bind(reason)
+    .bind(expires_at)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+pub async fn unban_user(pool: &SqlitePool, user_id: &str) -> anyhow::Result<()> {
+    sqlx::query("DELETE FROM user_bans WHERE user_id = ?")
+        .bind(user_id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+// Relay Reputation Operations
+
+#[derive(Debug, Serialize, Deserialize, sqlx::FromRow)]
+pub struct AdminBannedUserRow {
+    pub user_id: String,
+    pub email: String,
+    pub username: String,
+    pub reason: String,
+    pub expires_at: Option<DateTime<Utc>>,
+    pub created_at: DateTime<Utc>,
+}
+
+pub async fn list_active_bans(pool: &SqlitePool) -> anyhow::Result<Vec<AdminBannedUserRow>> {
+    let rows = sqlx::query_as::<_, AdminBannedUserRow>(
+        r#"
+        SELECT
+            b.user_id,
+            u.email,
+            u.username,
+            b.reason,
+            b.expires_at,
+            b.created_at
+        FROM user_bans b
+        JOIN users u ON b.user_id = u.id
+        WHERE b.expires_at IS NULL OR b.expires_at > CURRENT_TIMESTAMP
+        ORDER BY b.created_at DESC
+        "#,
+    )
+    .fetch_all(pool)
+    .await?;
+    Ok(rows)
+}
+
+pub async fn record_relay_success(pool: &SqlitePool, relay_id: &str) -> anyhow::Result<()> {
+    sqlx::query(
+        r#"
+        INSERT INTO relay_reputation (relay_id, success_count, last_updated)
+        VALUES (?, 1, CURRENT_TIMESTAMP)
+        ON CONFLICT(relay_id) DO UPDATE SET
+            success_count = success_count + 1,
+            last_updated = CURRENT_TIMESTAMP
+        "#,
+    )
+    .bind(relay_id)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+pub async fn record_relay_failure(pool: &SqlitePool, relay_id: &str) -> anyhow::Result<()> {
+    sqlx::query(
+        r#"
+        INSERT INTO relay_reputation (relay_id, failure_count, last_updated)
+        VALUES (?, 1, CURRENT_TIMESTAMP)
+        ON CONFLICT(relay_id) DO UPDATE SET
+            failure_count = failure_count + 1,
+            last_updated = CURRENT_TIMESTAMP
+        "#,
+    )
+    .bind(relay_id)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+#[derive(Debug, Serialize, Deserialize, sqlx::FromRow)]
+#[allow(dead_code)]
+pub struct RelayReputationRow {
+    pub relay_id: String,
+    pub success_count: i64,
+    pub failure_count: i64,
+    pub avg_latency_ms: f64,
+}
+
+#[allow(dead_code)]
+pub async fn get_relay_reputation(
+    pool: &SqlitePool,
+    relay_id: &str,
+) -> anyhow::Result<Option<RelayReputationRow>> {
+    let row = sqlx::query_as::<_, RelayReputationRow>(
+        "SELECT relay_id, success_count, failure_count, avg_latency_ms FROM relay_reputation WHERE relay_id = ?"
+    )
+    .bind(relay_id)
+    .fetch_optional(pool)
+    .await?;
+    Ok(row)
+}
+
+pub async fn record_relay_usage(
+    pool: &SqlitePool,
+    relay_id: &str,
+    session_id: &str,
+    bytes: i64,
+    duration: i64,
+) -> anyhow::Result<()> {
+    sqlx::query(
+        "INSERT INTO relay_usage (relay_id, session_id, bytes_transferred, duration_secs) VALUES (?, ?, ?, ?)"
+    )
+    .bind(relay_id)
+    .bind(session_id)
+    .bind(bytes)
+    .bind(duration)
+    .execute(pool)
+    .await?;
+    Ok(())
+}

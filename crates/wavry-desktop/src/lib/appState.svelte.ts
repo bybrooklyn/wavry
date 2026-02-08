@@ -59,7 +59,7 @@ export class AppState {
 
     // Settings
     authServer = $state("https://auth.wavry.dev");
-    hostPort = $state(8000);
+    hostPort = $state(0);
     upnpEnabled = $state(true);
 
     private parseStoredNumber(key: string, fallback: number): number {
@@ -198,7 +198,7 @@ export class AppState {
     resetSettingsToDefaults() {
         this.connectivityMode = "wavry";
         this.authServer = "https://auth.wavry.dev";
-        this.hostPort = 8000;
+        this.hostPort = 0;
         this.upnpEnabled = true;
         this.resolutionMode = "native";
         this.customResolution = { width: 1920, height: 1080 };
@@ -244,7 +244,7 @@ export class AppState {
         }
 
         this.authServer = localStorage.getItem("authServer") || "https://auth.wavry.dev";
-        this.hostPort = this.parseStoredNumber("hostPort", 8000);
+        this.hostPort = this.parseStoredNumber("hostPort", 0);
         this.upnpEnabled = localStorage.getItem("upnpEnabled") !== "false";
         const resolutionMode = localStorage.getItem("resolutionMode");
         this.resolutionMode =

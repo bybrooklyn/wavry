@@ -22,6 +22,7 @@ pub struct AdminOverview {
     sessions_active: i64,
     recent_users: Vec<db::AdminUserRow>,
     recent_sessions: Vec<db::AdminSessionRow>,
+    active_bans: Vec<db::AdminBannedUserRow>,
 }
 
 #[derive(Deserialize)]
@@ -32,6 +33,23 @@ pub struct RevokeSessionRequest {
 #[derive(Serialize)]
 pub struct RevokeSessionResponse {
     revoked: bool,
+}
+
+#[derive(Deserialize)]
+pub struct BanUserRequest {
+    pub user_id: String,
+    pub reason: String,
+    pub duration_hours: Option<i64>,
+}
+
+#[derive(Deserialize)]
+pub struct UnbanUserRequest {
+    pub user_id: String,
+}
+
+#[derive(Serialize)]
+pub struct SimpleAdminResponse {
+    pub success: bool,
 }
 
 fn unauthorized(message: &str) -> axum::response::Response {
@@ -180,12 +198,26 @@ pub async fn admin_overview(
         }
     };
 
+    let active_bans = match db::list_active_bans(&pool).await {
+        Ok(v) => v,
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(AdminError {
+                    error: format!("failed to list bans: {e}"),
+                }),
+            )
+                .into_response();
+        }
+    };
+
     let payload = AdminOverview {
         users_total,
         sessions_total,
         sessions_active,
         recent_users,
         recent_sessions,
+        active_bans,
     };
 
     (StatusCode::OK, Json(payload)).into_response()
@@ -226,6 +258,80 @@ pub async fn admin_revoke_session(
     }
 }
 
+pub async fn admin_ban_user(
+    headers: HeaderMap,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    State(pool): State<SqlitePool>,
+    Json(payload): Json<BanUserRequest>,
+) -> impl IntoResponse {
+    if !check_admin_rate_limit(addr) {
+        return (
+            StatusCode::TOO_MANY_REQUESTS,
+            Json(AdminError {
+                error: "Too many admin requests".to_string(),
+            }),
+        )
+            .into_response();
+    }
+
+    if let Err(err) = assert_admin(&headers) {
+        return match err {
+            AdminAuthError::Disabled => unauthorized("admin panel disabled: set ADMIN_PANEL_TOKEN"),
+            AdminAuthError::Invalid => unauthorized("invalid admin token"),
+        };
+    }
+
+    let expires_at = payload
+        .duration_hours
+        .map(|h| chrono::Utc::now() + chrono::Duration::hours(h));
+
+    match db::ban_user(&pool, &payload.user_id, &payload.reason, expires_at).await {
+        Ok(_) => (StatusCode::OK, Json(SimpleAdminResponse { success: true })).into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(AdminError {
+                error: format!("failed to ban user: {e}"),
+            }),
+        )
+            .into_response(),
+    }
+}
+
+pub async fn admin_unban_user(
+    headers: HeaderMap,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    State(pool): State<SqlitePool>,
+    Json(payload): Json<UnbanUserRequest>,
+) -> impl IntoResponse {
+    if !check_admin_rate_limit(addr) {
+        return (
+            StatusCode::TOO_MANY_REQUESTS,
+            Json(AdminError {
+                error: "Too many admin requests".to_string(),
+            }),
+        )
+            .into_response();
+    }
+
+    if let Err(err) = assert_admin(&headers) {
+        return match err {
+            AdminAuthError::Disabled => unauthorized("admin panel disabled: set ADMIN_PANEL_TOKEN"),
+            AdminAuthError::Invalid => unauthorized("invalid admin token"),
+        };
+    }
+
+    match db::unban_user(&pool, &payload.user_id).await {
+        Ok(_) => (StatusCode::OK, Json(SimpleAdminResponse { success: true })).into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(AdminError {
+                error: format!("failed to unban user: {e}"),
+            }),
+        )
+            .into_response(),
+    }
+}
+
 const ADMIN_HTML: &str = r#"<!doctype html>
 <html lang=\"en\">
 <head>
@@ -259,16 +365,63 @@ const ADMIN_HTML: &str = r#"<!doctype html>
   </div>
 
   <h3>Recent Users</h3>
-  <table id=\"usersTable\"><thead><tr><th>Email</th><th>Username</th><th>TOTP</th><th>Created</th></tr></thead><tbody></tbody></table>
+  <table id=\"usersTable\"><thead><tr><th>Email</th><th>Username</th><th>TOTP</th><th>Created</th><th>Actions</th></tr></thead><tbody></tbody></table>
 
   <h3>Recent Sessions</h3>
-  <table id=\"sessionsTable\"><thead><tr><th>Username</th><th>Expires</th><th>IP</th><th>Token</th></tr></thead><tbody></tbody></table>
+  <table id=\"sessionsTable\"><thead><tr><th>Username</th><th>Expires</th><th>IP</th><th>Token</th><th>Actions</th></tr></thead><tbody></tbody></table>
+
+  <h3>Active Bans</h3>
+  <table id=\"bansTable\"><thead><tr><th>Username</th><th>Reason</th><th>Expires</th><th>Actions</th></tr></thead><tbody></tbody></table>
 
   <script>
     function appendCell(row, value) {
       const cell = document.createElement('td');
       cell.textContent = value == null ? '' : String(value);
       row.appendChild(cell);
+      return cell;
+    }
+
+    async function apiPost(path, body) {
+      const token = document.getElementById('token').value.trim();
+      const res = await fetch(path, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(body)
+      });
+      if (!res.ok) {
+        alert('Action failed: ' + (await res.text()));
+        return false;
+      }
+      return true;
+    }
+
+    async function revokeSession(token) {
+      if (confirm('Revoke this session?')) {
+        if (await apiPost('/admin/api/sessions/revoke', { token })) {
+          loadOverview();
+        }
+      }
+    }
+
+    async function banUser(userId) {
+      const reason = prompt('Reason for ban?');
+      if (reason === null) return;
+      const hours = prompt('Duration in hours? (leave blank for permanent)');
+      const duration_hours = hours ? parseInt(hours) : null;
+      if (await apiPost('/admin/api/ban', { user_id: userId, reason, duration_hours })) {
+        loadOverview();
+      }
+    }
+
+    async function unbanUser(userId) {
+      if (confirm('Unban this user?')) {
+        if (await apiPost('/admin/api/unban', { user_id: userId })) {
+          loadOverview();
+        }
+      }
     }
 
     async function loadOverview() {
@@ -293,6 +446,13 @@ const ADMIN_HTML: &str = r#"<!doctype html>
         appendCell(row, u.username);
         appendCell(row, u.has_totp ? 'yes' : 'no');
         appendCell(row, u.created_at);
+        const actionCell = document.createElement('td');
+        const banBtn = document.createElement('button');
+        banBtn.textContent = 'Ban';
+        banBtn.style.padding = '4px 8px';
+        banBtn.onclick = () => banUser(u.id);
+        actionCell.appendChild(banBtn);
+        row.appendChild(actionCell);
         usersBody.appendChild(row);
       }
 
@@ -304,7 +464,31 @@ const ADMIN_HTML: &str = r#"<!doctype html>
         appendCell(row, s.expires_at);
         appendCell(row, s.ip_address || '');
         appendCell(row, `${(s.token || '').slice(0, 12)}...`);
+        const actionCell = document.createElement('td');
+        const revokeBtn = document.createElement('button');
+        revokeBtn.textContent = 'Revoke';
+        revokeBtn.style.padding = '4px 8px';
+        revokeBtn.onclick = () => revokeSession(s.token);
+        actionCell.appendChild(revokeBtn);
+        row.appendChild(actionCell);
         sessionsBody.appendChild(row);
+      }
+
+      const bansBody = document.querySelector('#bansTable tbody');
+      bansBody.innerHTML = '';
+      for (const b of data.active_bans) {
+        const row = document.createElement('tr');
+        appendCell(row, b.username);
+        appendCell(row, b.reason);
+        appendCell(row, b.expires_at || 'Permanent');
+        const actionCell = document.createElement('td');
+        const unbanBtn = document.createElement('button');
+        unbanBtn.textContent = 'Unban';
+        unbanBtn.style.padding = '4px 8px';
+        unbanBtn.onclick = () => unbanUser(b.user_id);
+        actionCell.appendChild(unbanBtn);
+        row.appendChild(actionCell);
+        bansBody.appendChild(row);
       }
     }
 

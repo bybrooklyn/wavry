@@ -15,8 +15,13 @@ bytes.workspace = true
 rift-core = { path = "../../crates/rift-core" }
 rift-crypto = { path = "../../crates/rift-crypto" }
 wavry-common = { path = "../../crates/wavry-common" }
-wavry-media = { path = "../../crates/wavry-media" }
+wavry-media = { path = "../../crates/wavry-media", features = ["opus-support"] }
 wavry-platform = { path = "../../crates/wavry-platform" }
+wavry-web = { path = "../../crates/wavry-web" }
 rand.workspace = true
 hex = "0.4.3"
 socket2 = { workspace = true }
+webrtc = "0.11"
+tokio-tungstenite = { version = "0.21", features = ["rustls-tls-native-roots"] }
+serde_json.workspace = true
+futures-util.workspace = true

@@ -219,22 +219,25 @@ async fn present_relay_lease(socket: &UdpSocket, relay: &RelayInfo) -> Result<()
 pub async fn run_client(
     config: ClientConfig,
     renderer_factory: Option<RendererFactory>,
+    monitor_rx: Option<mpsc::UnboundedReceiver<u32>>,
 ) -> Result<()> {
-    run_client_inner(config, renderer_factory, None).await
+    run_client_inner(config, renderer_factory, None, monitor_rx).await
 }
 
 pub async fn run_client_with_shutdown(
     config: ClientConfig,
     renderer_factory: Option<RendererFactory>,
     shutdown_rx: oneshot::Receiver<()>,
+    monitor_rx: Option<mpsc::UnboundedReceiver<u32>>,
 ) -> Result<()> {
-    run_client_inner(config, renderer_factory, Some(shutdown_rx)).await
+    run_client_inner(config, renderer_factory, Some(shutdown_rx), monitor_rx).await
 }
 
 async fn run_client_inner(
     config: ClientConfig,
     renderer_factory: Option<RendererFactory>,
     mut shutdown_rx: Option<oneshot::Receiver<()>>,
+    mut monitor_rx: Option<mpsc::UnboundedReceiver<u32>>,
 ) -> Result<()> {
     let runtime_stats = config.runtime_stats.clone();
     let _runtime_stats_guard = RuntimeStatsGuard::new(runtime_stats.clone());
@@ -542,6 +545,29 @@ async fn run_client_inner(
                 }
             }
 
+            // Handle monitor selection from UI
+            Some(monitor_id) = async {
+                if let Some(rx) = monitor_rx.as_mut() {
+                    rx.recv().await
+                } else {
+                    None
+                }
+            } => {
+                if let Some(alias) = session_alias {
+                    info!("Sending SelectMonitor request for display {}", monitor_id);
+                    let msg = ProtoMessage {
+                        content: Some(rift_core::message::Content::Control(ProtoControl {
+                            content: Some(rift_core::control_message::Content::SelectMonitor(
+                                rift_core::SelectMonitor { monitor_id },
+                            )),
+                        })),
+                    };
+                    if let Err(e) = send_rift_msg(&socket, &mut crypto, connect_addr, msg, Some(alias), next_packet_id(), relay_info).await {
+                        warn!("SelectMonitor send error: {}", e);
+                    }
+                }
+            }
+
             // VR outbound (pose/timing)
             Some(out) = vr_rx.recv() => {
                 if let Some(alias) = session_alias {
@@ -771,6 +797,8 @@ async fn run_client_inner(
                                                     width: res.width as u16,
                                                     height: res.height as u16,
                                                 },
+                                                enable_10bit: false,
+                                                enable_hdr: false,
                                             };
 
                                             if let Some(factory) = &renderer_factory {
@@ -857,6 +885,14 @@ async fn run_client_inner(
                                                 width,
                                                 height,
                                             });
+                                        }
+                                    }
+                                }
+                                rift_core::control_message::Content::MonitorList(list) => {
+                                    info!("Received monitor list: {} displays", list.monitors.len());
+                                    if let Some(stats) = runtime_stats.as_ref() {
+                                        if let Ok(mut monitors) = stats.monitors.lock() {
+                                            *monitors = list.monitors;
                                         }
                                     }
                                 }
@@ -985,6 +1021,46 @@ async fn run_client_inner(
         if let Ok(mut adapter) = adapter.lock() {
             adapter.stop();
         }
+    }
+
+    // Send session feedback if using a relay
+    if let (Some(master_url), Some(relay)) = (config.master_url, relay_info) {
+        let frames_decoded = runtime_stats
+            .as_ref()
+            .map(|s| s.frames_decoded.load(Ordering::Relaxed))
+            .unwrap_or(0);
+
+        // Simple heuristic for quality score: 100 if > 100 frames, 0 if 0
+        let quality_score = if frames_decoded > 100 {
+            100
+        } else if frames_decoded > 0 {
+            50
+        } else {
+            0
+        };
+
+        let feedback = wavry_common::protocol::RelayFeedbackRequest {
+            session_id: relay.session_id,
+            relay_id: relay.relay_id.clone(),
+            quality_score,
+            issues: if quality_score < 100 {
+                vec!["low_frame_count".to_string()]
+            } else {
+                vec![]
+            },
+            signature: String::new(), // TODO: Sign feedback with identity key
+        };
+
+        let client = reqwest::Client::new();
+        let _ = client
+            .post(format!("{}/v1/feedback", master_url))
+            .json(&feedback)
+            .send()
+            .await;
+        info!(
+            "sent session feedback to master for relay {}: score={}",
+            relay.relay_id, quality_score
+        );
     }
 
     Ok(())

@@ -8,6 +8,7 @@ extern "C" {
 #endif
 
 int wavry_init(void);
+int wavry_android_init(void *vm, void *context);
 const char *wavry_version(void);
 
 // Session Management

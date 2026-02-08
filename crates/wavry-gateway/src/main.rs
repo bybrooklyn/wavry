@@ -154,14 +154,14 @@ async fn main() -> anyhow::Result<()> {
 
     let app_state = AppState {
         pool: pool.clone(),
-        connections,
+        connections: connections.clone(),
         relay_sessions: relay_sessions.clone(),
     };
 
     let relay_port: u16 = std::env::var("WAVRY_GATEWAY_RELAY_PORT")
         .ok()
         .and_then(|v| v.parse().ok())
-        .unwrap_or(3478);
+        .unwrap_or(0); // Default to 0 for random port
     tokio::spawn(async move {
         if let Err(err) = relay::run_relay_server(relay_port, relay_sessions).await {
             tracing::error!("relay server crashed: {}", err);
@@ -219,13 +219,17 @@ async fn main() -> anyhow::Result<()> {
     #[cfg(feature = "webtransport-runtime")]
     {
         if env_bool("WAVRY_ENABLE_INSECURE_WEBTRANSPORT_RUNTIME", false) {
-            let bind_addr = std::env::var("WEBTRANSPORT_BIND_ADDR")
-                .unwrap_or_else(|_| "127.0.0.1:4444".to_string());
+            let bind_addr =
+                std::env::var("WEBTRANSPORT_BIND_ADDR").unwrap_or_else(|_| "0.0.0.0:0".to_string());
             let socket_addr: SocketAddr =
                 bind_addr.parse().expect("invalid WEBTRANSPORT_BIND_ADDR");
             check_public_bind_allowed(socket_addr).expect("WebTransport bind rejected");
+            let pool_clone = pool.clone();
+            let connections_clone = connections.clone();
             tokio::spawn(async move {
-                if let Err(err) = web::run_webtransport_runtime(&bind_addr).await {
+                if let Err(err) =
+                    web::run_webtransport_runtime(&bind_addr, pool_clone, connections_clone).await
+                {
                     tracing::error!("WebTransport runtime crashed: {}", err);
                 }
             });
@@ -247,6 +251,8 @@ async fn main() -> anyhow::Result<()> {
             "/admin/api/sessions/revoke",
             post(admin::admin_revoke_session),
         )
+        .route("/admin/api/ban", post(admin::admin_ban_user))
+        .route("/admin/api/unban", post(admin::admin_unban_user))
         .route("/auth/register", post(auth::register))
         .route("/auth/login", post(auth::login))
         .route("/auth/logout", post(auth::logout))
@@ -256,17 +262,21 @@ async fn main() -> anyhow::Result<()> {
         .route("/webrtc/offer", post(web::webrtc_offer))
         .route("/webrtc/answer", post(web::webrtc_answer))
         .route("/webrtc/candidate", post(web::webrtc_candidate))
+        .route("/v1/relays/report", post(web::handle_relay_report))
+        .route("/v1/relays/reputation", get(web::handle_relay_reputation))
         .route("/ws", get(signal::ws_handler))
         .layer(build_cors_layer())
         .with_state(app_state);
 
     let bind_addr =
-        std::env::var("WAVRY_GATEWAY_BIND_ADDR").unwrap_or_else(|_| "127.0.0.1:3000".to_string());
+        std::env::var("WAVRY_GATEWAY_BIND_ADDR").unwrap_or_else(|_| "0.0.0.0:3000".to_string());
     let addr: SocketAddr = bind_addr.parse()?;
     check_public_bind_allowed(addr)?;
-    tracing::info!("gateway listening on {}", addr);
 
     let listener = TcpListener::bind(addr).await?;
+    let bound_addr = listener.local_addr()?;
+    tracing::info!("gateway listening on {}", bound_addr);
+
     axum::serve(
         listener,
         app.into_make_service_with_connect_info::<SocketAddr>(),

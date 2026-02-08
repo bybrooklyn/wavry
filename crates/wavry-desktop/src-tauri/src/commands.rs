@@ -271,6 +271,7 @@ pub async fn start_session(
         no_encrypt: false,
         identity_key: None,
         relay_info: None,
+        master_url: None, // Direct IP sessions don't usually need master feedback
         max_resolution,
         gamepad_enabled: gamepad_enabled.unwrap_or(true),
         gamepad_deadzone: gamepad_deadzone.unwrap_or(0.1).clamp(0.0, 0.95),
@@ -405,6 +406,7 @@ pub async fn connect_via_id(target_username: String) -> Result<String, String> {
                         );
                         sig.send(SignalMessage::REQUEST_RELAY {
                             target_username: target_username.clone(),
+                            region: None,
                         })
                         .await
                         .map_err(|e: anyhow::Error| format!("Failed to request relay: {}", e))?;
@@ -414,6 +416,7 @@ pub async fn connect_via_id(target_username: String) -> Result<String, String> {
                                 loop {
                                     match sig.recv().await {
                                         Ok(SignalMessage::RELAY_CREDENTIALS {
+                                            relay_id,
                                             token,
                                             addr,
                                             session_id,
@@ -425,6 +428,7 @@ pub async fn connect_via_id(target_username: String) -> Result<String, String> {
                                                     .to_string()
                                             })?;
                                             break Ok(wavry_client::RelayInfo {
+                                                relay_id,
                                                 addr: relay_addr,
                                                 token,
                                                 session_id,
@@ -451,12 +455,19 @@ pub async fn connect_via_id(target_username: String) -> Result<String, String> {
                         );
                     }
 
+                    let master_url = if signaling_url.contains("/ws") {
+                        Some(signaling_url.replace("/ws", ""))
+                    } else {
+                        None
+                    };
+
                     let config = wavry_client::ClientConfig {
                         connect_addr,
                         client_name: "wavry-desktop".into(),
                         no_encrypt: false,
                         identity_key: None,
                         relay_info,
+                        master_url,
                         max_resolution: None,
                         gamepad_enabled: true,
                         gamepad_deadzone: 0.1,
@@ -469,13 +480,15 @@ pub async fn connect_via_id(target_username: String) -> Result<String, String> {
                     return Ok("Connected".into());
                 }
                 Ok(SignalMessage::RELAY_CREDENTIALS {
+                    relay_id,
                     token,
                     addr,
                     session_id,
                 }) => {
-                    log::info!("Received relay credentials: {}", addr);
+                    log::info!("Received relay credentials: {} (id={})", addr, relay_id);
                     if let Ok(relay_addr) = addr.parse::<std::net::SocketAddr>() {
                         relay_info = Some(wavry_client::RelayInfo {
+                            relay_id,
                             addr: relay_addr,
                             token,
                             session_id,

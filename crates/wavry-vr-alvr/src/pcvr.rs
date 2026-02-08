@@ -148,17 +148,17 @@ mod linux {
             })
         }
 
-        fn bindings_for_profile(
-            instance: &xr::Instance,
-            profile: &str,
-            trigger: &xr::Action<f32>,
-            trigger_click: &xr::Action<bool>,
-            grip: &xr::Action<f32>,
-            grip_click: &xr::Action<bool>,
-            stick: &xr::Action<xr::Vector2f>,
-            primary: &xr::Action<bool>,
-            secondary: &xr::Action<bool>,
-        ) -> VrResult<Vec<xr::Binding<'_>>> {
+        fn bindings_for_profile<'a>(
+            instance: &'a xr::Instance,
+            profile: &'a str,
+            trigger: &'a xr::Action<f32>,
+            trigger_click: &'a xr::Action<bool>,
+            grip: &'a xr::Action<f32>,
+            _grip_click: &'a xr::Action<bool>,
+            stick: &'a xr::Action<xr::Vector2f>,
+            primary: &'a xr::Action<bool>,
+            secondary: &'a xr::Action<bool>,
+        ) -> VrResult<Vec<xr::Binding<'a>>> {
             let mut bindings = Vec::with_capacity(24);
             macro_rules! bind_f32 {
                 ($action:expr, $path:expr) => {
@@ -660,7 +660,7 @@ mod linux {
 
     impl VulkanContext {
         fn new(xr_instance: &xr::Instance, system: xr::SystemId) -> VrResult<Self> {
-            let entry = VkEntry::load()
+            let entry = unsafe { VkEntry::load() }
                 .map_err(|e| VrError::Adapter(format!("Vulkan entry load failed: {e}")))?;
 
             let reqs = xr_instance
@@ -1747,9 +1747,9 @@ mod linux {
         let mut vk_ctx = VulkanContext::new(&instance, system)?;
 
         let create_info = xr::vulkan::SessionCreateInfo {
-            instance: vk_ctx.instance.handle().as_raw(),
-            physical_device: vk_ctx.physical_device.as_raw(),
-            device: vk_ctx.device.handle().as_raw(),
+            instance: vk_ctx.instance.handle().as_raw() as *const _,
+            physical_device: vk_ctx.physical_device.as_raw() as *const _,
+            device: vk_ctx.device.handle().as_raw() as *const _,
             queue_family_index: vk_ctx.queue_family_index,
             queue_index: 0,
         };
@@ -2210,17 +2210,17 @@ mod windows {
             })
         }
 
-        fn bindings_for_profile(
-            instance: &xr::Instance,
-            profile: &str,
-            trigger: &xr::Action<f32>,
-            trigger_click: &xr::Action<bool>,
-            grip: &xr::Action<f32>,
-            grip_click: &xr::Action<bool>,
-            stick: &xr::Action<xr::Vector2f>,
-            primary: &xr::Action<bool>,
-            secondary: &xr::Action<bool>,
-        ) -> VrResult<Vec<xr::Binding<'_>>> {
+        fn bindings_for_profile<'a>(
+            instance: &'a xr::Instance,
+            profile: &'a str,
+            trigger: &'a xr::Action<f32>,
+            trigger_click: &'a xr::Action<bool>,
+            grip: &'a xr::Action<f32>,
+            _grip_click: &'a xr::Action<bool>,
+            stick: &'a xr::Action<xr::Vector2f>,
+            primary: &'a xr::Action<bool>,
+            secondary: &'a xr::Action<bool>,
+        ) -> VrResult<Vec<xr::Binding<'a>>> {
             let mut bindings = Vec::with_capacity(24);
             macro_rules! bind_f32 {
                 ($action:expr, $path:expr) => {
@@ -3171,6 +3171,611 @@ mod windows {
     }
 }
 
+#[cfg(target_os = "android")]
+mod android {
+    use super::*;
+    use ash::vk::{self, Handle};
+    use ash::Entry as VkEntry;
+    use openxr as xr;
+    use std::ffi::CString;
+    use std::sync::atomic::Ordering;
+    use std::thread;
+    use std::time::{Duration, Instant};
+    use wavry_vr::types::{GamepadAxis, GamepadButton, GamepadInput};
+
+    const INPUT_SEND_INTERVAL: Duration = Duration::from_millis(20);
+    const AXIS_EPS: f32 = 0.01;
+    const STICK_DEADZONE: f32 = 0.05;
+
+    #[derive(Clone, Copy, Default)]
+    struct GamepadSnapshot {
+        axes: [f32; 4],
+        buttons: [bool; 2],
+        active: bool,
+    }
+
+    struct InputActions {
+        action_set: xr::ActionSet,
+        trigger: xr::Action<f32>,
+        trigger_click: xr::Action<bool>,
+        grip: xr::Action<f32>,
+        grip_click: xr::Action<bool>,
+        stick: xr::Action<xr::Vector2f>,
+        primary: xr::Action<bool>,
+        secondary: xr::Action<bool>,
+        left: xr::Path,
+        right: xr::Path,
+        last_sent: [GamepadSnapshot; 2],
+        last_sent_at: [Instant; 2],
+    }
+
+    impl InputActions {
+        fn new<G>(instance: &xr::Instance, session: &xr::Session<G>) -> VrResult<Self> {
+            let action_set = instance
+                .create_action_set("wavry", "Wavry", 0)
+                .map_err(|e| VrError::Adapter(format!("OpenXR action set: {e:?}")))?;
+
+            let left = instance
+                .string_to_path("/user/hand/left")
+                .map_err(|e| VrError::Adapter(format!("OpenXR path left: {e:?}")))?;
+            let right = instance
+                .string_to_path("/user/hand/right")
+                .map_err(|e| VrError::Adapter(format!("OpenXR path right: {e:?}")))?;
+            let subaction_paths = [left, right];
+
+            let trigger = action_set
+                .create_action("trigger", "Trigger", &subaction_paths)
+                .map_err(|e| VrError::Adapter(format!("OpenXR action trigger: {e:?}")))?;
+            let trigger_click = action_set
+                .create_action("trigger_click", "Trigger Click", &subaction_paths)
+                .map_err(|e| VrError::Adapter(format!("OpenXR action trigger_click: {e:?}")))?;
+            let grip = action_set
+                .create_action("grip", "Grip", &subaction_paths)
+                .map_err(|e| VrError::Adapter(format!("OpenXR action grip: {e:?}")))?;
+            let grip_click = action_set
+                .create_action("grip_click", "Grip Click", &subaction_paths)
+                .map_err(|e| VrError::Adapter(format!("OpenXR action grip_click: {e:?}")))?;
+            let stick = action_set
+                .create_action("thumbstick", "Thumbstick", &subaction_paths)
+                .map_err(|e| VrError::Adapter(format!("OpenXR action thumbstick: {e:?}")))?;
+            let primary = action_set
+                .create_action("primary", "Primary", &subaction_paths)
+                .map_err(|e| VrError::Adapter(format!("OpenXR action primary: {e:?}")))?;
+            let secondary = action_set
+                .create_action("secondary", "Secondary", &subaction_paths)
+                .map_err(|e| VrError::Adapter(format!("OpenXR action secondary: {e:?}")))?;
+
+            let profile_paths = [
+                "/interaction_profiles/oculus/touch_controller",
+                "/interaction_profiles/khr/simple_controller",
+            ];
+
+            for profile in profile_paths {
+                let profile_path = instance
+                    .string_to_path(profile)
+                    .map_err(|e| VrError::Adapter(format!("OpenXR profile path: {e:?}")))?;
+                let bindings = Self::bindings_for_profile(
+                    instance,
+                    profile,
+                    &trigger,
+                    &trigger_click,
+                    &grip,
+                    &grip_click,
+                    &stick,
+                    &primary,
+                    &secondary,
+                )?;
+                if let Err(err) =
+                    instance.suggest_interaction_profile_bindings(profile_path, &bindings)
+                {
+                    eprintln!(
+                        "OpenXR binding suggestion rejected for {}: {:?}",
+                        profile, err
+                    );
+                }
+            }
+
+            session
+                .attach_action_sets(&[&action_set])
+                .map_err(|e| VrError::Adapter(format!("OpenXR attach actions: {e:?}")))?;
+
+            Ok(Self {
+                action_set,
+                trigger,
+                trigger_click,
+                grip,
+                grip_click,
+                stick,
+                primary,
+                secondary,
+                left,
+                right,
+                last_sent: [GamepadSnapshot::default(), GamepadSnapshot::default()],
+                last_sent_at: [Instant::now(), Instant::now()],
+            })
+        }
+
+        fn bindings_for_profile<'a>(
+            instance: &'a xr::Instance,
+            profile: &'a str,
+            trigger: &'a xr::Action<f32>,
+            trigger_click: &'a xr::Action<bool>,
+            grip: &'a xr::Action<f32>,
+            _grip_click: &'a xr::Action<bool>,
+            stick: &'a xr::Action<xr::Vector2f>,
+            primary: &'a xr::Action<bool>,
+            secondary: &'a xr::Action<bool>,
+        ) -> VrResult<Vec<xr::Binding<'a>>> {
+            let mut bindings = Vec::with_capacity(24);
+            macro_rules! bind_f32 {
+                ($action:expr, $path:expr) => {
+                    if let Ok(path) = instance.string_to_path($path) {
+                        bindings.push(xr::Binding::new($action, path));
+                    }
+                };
+            }
+            macro_rules! bind_vec2 {
+                ($action:expr, $path:expr) => {
+                    if let Ok(path) = instance.string_to_path($path) {
+                        bindings.push(xr::Binding::new($action, path));
+                    }
+                };
+            }
+            macro_rules! bind_bool {
+                ($action:expr, $path:expr) => {
+                    if let Ok(path) = instance.string_to_path($path) {
+                        bindings.push(xr::Binding::new($action, path));
+                    }
+                };
+            }
+
+            match profile {
+                "/interaction_profiles/oculus/touch_controller" => {
+                    bind_f32!(trigger, "/user/hand/left/input/trigger/value");
+                    bind_f32!(trigger, "/user/hand/right/input/trigger/value");
+                    bind_f32!(grip, "/user/hand/left/input/squeeze/value");
+                    bind_f32!(grip, "/user/hand/right/input/squeeze/value");
+                    bind_vec2!(stick, "/user/hand/left/input/thumbstick");
+                    bind_vec2!(stick, "/user/hand/right/input/thumbstick");
+                    bind_bool!(primary, "/user/hand/left/input/x/click");
+                    bind_bool!(primary, "/user/hand/right/input/a/click");
+                    bind_bool!(secondary, "/user/hand/left/input/y/click");
+                    bind_bool!(secondary, "/user/hand/right/input/b/click");
+                }
+                "/interaction_profiles/khr/simple_controller" => {
+                    bind_bool!(trigger_click, "/user/hand/left/input/select/click");
+                    bind_bool!(trigger_click, "/user/hand/right/input/select/click");
+                    bind_bool!(primary, "/user/hand/left/input/menu/click");
+                    bind_bool!(primary, "/user/hand/right/input/menu/click");
+                }
+                _ => {}
+            }
+
+            Ok(bindings)
+        }
+
+        fn poll<G>(
+            &mut self,
+            session: &xr::Session<G>,
+            timestamp_us: u64,
+        ) -> VrResult<Vec<GamepadInput>> {
+            session
+                .sync_actions(&[xr::ActiveActionSet::new(&self.action_set)])
+                .map_err(|e| VrError::Adapter(format!("OpenXR sync actions: {e:?}")))?;
+
+            let mut outputs = Vec::new();
+            let now = Instant::now();
+            let hands = [(self.left, 0usize), (self.right, 1usize)];
+
+            for (path, index) in hands {
+                let trigger = self.trigger.state(session, path).ok();
+                let trigger_click = self.trigger_click.state(session, path).ok();
+                let grip = self.grip.state(session, path).ok();
+                let grip_click = self.grip_click.state(session, path).ok();
+                let stick = self.stick.state(session, path).ok();
+                let primary = self.primary.state(session, path).ok();
+                let secondary = self.secondary.state(session, path).ok();
+
+                let active = trigger.as_ref().map(|s| s.is_active).unwrap_or(false)
+                    || trigger_click.as_ref().map(|s| s.is_active).unwrap_or(false)
+                    || grip.as_ref().map(|s| s.is_active).unwrap_or(false)
+                    || grip_click.as_ref().map(|s| s.is_active).unwrap_or(false)
+                    || stick.as_ref().map(|s| s.is_active).unwrap_or(false)
+                    || primary.as_ref().map(|s| s.is_active).unwrap_or(false)
+                    || secondary.as_ref().map(|s| s.is_active).unwrap_or(false);
+
+                let mut axes = [0.0f32; 4];
+                let mut buttons = [false; 2];
+                if active {
+                    let trigger_val = trigger.map(|s| s.current_state).unwrap_or(0.0).max(
+                        if trigger_click.map(|s| s.current_state).unwrap_or(false) {
+                            1.0
+                        } else {
+                            0.0
+                        },
+                    );
+                    let grip_val = grip.map(|s| s.current_state).unwrap_or(0.0).max(
+                        if grip_click.map(|s| s.current_state).unwrap_or(false) {
+                            1.0
+                        } else {
+                            0.0
+                        },
+                    );
+                    let stick_val = stick
+                        .map(|s| s.current_state)
+                        .unwrap_or(xr::Vector2f { x: 0.0, y: 0.0 });
+                    let stick_x = if stick_val.x.abs() < STICK_DEADZONE {
+                        0.0
+                    } else {
+                        stick_val.x
+                    };
+                    let stick_y = if stick_val.y.abs() < STICK_DEADZONE {
+                        0.0
+                    } else {
+                        stick_val.y
+                    };
+                    axes = [stick_x, stick_y, trigger_val, grip_val];
+                    buttons = [
+                        primary.map(|s| s.current_state).unwrap_or(false),
+                        secondary.map(|s| s.current_state).unwrap_or(false),
+                    ];
+                }
+
+                let snapshot = GamepadSnapshot {
+                    axes,
+                    buttons,
+                    active,
+                };
+
+                let should_send = Self::should_send(
+                    snapshot,
+                    self.last_sent[index],
+                    now,
+                    self.last_sent_at[index],
+                );
+                if should_send {
+                    self.last_sent[index] = snapshot;
+                    self.last_sent_at[index] = now;
+
+                    let axes_out = vec![
+                        GamepadAxis {
+                            axis: 0,
+                            value: axes[0],
+                        },
+                        GamepadAxis {
+                            axis: 1,
+                            value: axes[1],
+                        },
+                        GamepadAxis {
+                            axis: 2,
+                            value: axes[2],
+                        },
+                        GamepadAxis {
+                            axis: 3,
+                            value: axes[3],
+                        },
+                    ];
+                    let buttons_out = vec![
+                        GamepadButton {
+                            button: 0,
+                            pressed: buttons[0],
+                        },
+                        GamepadButton {
+                            button: 1,
+                            pressed: buttons[1],
+                        },
+                    ];
+                    outputs.push(GamepadInput {
+                        timestamp_us,
+                        gamepad_id: index as u32,
+                        axes: axes_out,
+                        buttons: buttons_out,
+                    });
+                }
+            }
+
+            Ok(outputs)
+        }
+
+        fn should_send(
+            current: GamepadSnapshot,
+            last: GamepadSnapshot,
+            now: Instant,
+            last_sent_at: Instant,
+        ) -> bool {
+            if current.active || last.active {
+                if now.duration_since(last_sent_at) >= INPUT_SEND_INTERVAL {
+                    return true;
+                }
+                for i in 0..current.axes.len() {
+                    if (current.axes[i] - last.axes[i]).abs() > AXIS_EPS {
+                        return true;
+                    }
+                }
+                for i in 0..current.buttons.len() {
+                    if current.buttons[i] != last.buttons[i] {
+                        return true;
+                    }
+                }
+            }
+            false
+        }
+    }
+
+    struct VulkanContext {
+        instance: ash::Instance,
+        device: ash::Device,
+        physical_device: vk::PhysicalDevice,
+        queue_family_index: u32,
+    }
+
+    impl VulkanContext {
+        fn new(xr_instance: &xr::Instance, system: xr::SystemId) -> VrResult<Self> {
+            let entry = unsafe { VkEntry::load() }
+                .map_err(|e| VrError::Adapter(format!("Vulkan entry load failed: {e}")))?;
+
+            let reqs = xr_instance
+                .graphics_requirements::<xr::Vulkan>(system)
+                .map_err(|e| VrError::Adapter(format!("OpenXR Vulkan requirements: {e:?}")))?;
+            let api_version = vk::make_api_version(
+                0,
+                reqs.min_api_version_supported.major() as u32,
+                reqs.min_api_version_supported.minor() as u32,
+                reqs.min_api_version_supported.patch(),
+            );
+
+            let instance_exts = xr_instance
+                .vulkan_legacy_instance_extensions(system)
+                .map_err(|e| {
+                    VrError::Adapter(format!("OpenXR Vulkan instance extensions: {e:?}"))
+                })?;
+            let instance_exts = parse_extension_list(&instance_exts);
+            let instance_ext_ptrs: Vec<*const std::os::raw::c_char> =
+                instance_exts.iter().map(|s| s.as_ptr() as *const std::os::raw::c_char).collect();
+
+            let app_name = CString::new("Wavry").unwrap();
+            let engine_name = CString::new("Wavry").unwrap();
+            let app_info = vk::ApplicationInfo {
+                p_application_name: app_name.as_ptr() as *const std::os::raw::c_char,
+                application_version: 1,
+                p_engine_name: engine_name.as_ptr() as *const std::os::raw::c_char,
+                engine_version: 1,
+                api_version,
+                ..Default::default()
+            };
+
+            let create_info = vk::InstanceCreateInfo {
+                p_application_info: &app_info,
+                enabled_extension_count: instance_ext_ptrs.len() as u32,
+                pp_enabled_extension_names: instance_ext_ptrs.as_ptr() as *const *const std::os::raw::c_char,
+                ..Default::default()
+            };
+
+            let instance = unsafe {
+                entry
+                    .create_instance(&create_info, None)
+                    .map_err(|e| VrError::Adapter(format!("Vulkan instance create failed: {e}")))?
+            };
+
+            let physical_device = unsafe {
+                xr_instance
+                    .vulkan_graphics_device(system, instance.handle().as_raw() as *const _)
+                    .map_err(|e| {
+                        VrError::Adapter(format!("OpenXR Vulkan graphics device: {e:?}"))
+                    })?
+            };
+            let physical_device = vk::PhysicalDevice::from_raw(physical_device as u64);
+
+            let queue_family_index = find_graphics_queue_family(&instance, physical_device)?;
+
+            let device_exts = xr_instance
+                .vulkan_legacy_device_extensions(system)
+                .map_err(|e| VrError::Adapter(format!("OpenXR Vulkan device extensions: {e:?}")))?;
+            let device_exts = parse_extension_list(&device_exts);
+            let device_ext_ptrs: Vec<*const std::os::raw::c_char> =
+                device_exts.iter().map(|s| s.as_ptr() as *const std::os::raw::c_char).collect();
+
+            let priorities = [1.0f32];
+            let queue_info = vk::DeviceQueueCreateInfo {
+                queue_family_index,
+                queue_count: 1,
+                p_queue_priorities: priorities.as_ptr(),
+                ..Default::default()
+            };
+
+            let device_create = vk::DeviceCreateInfo {
+                queue_create_info_count: 1,
+                p_queue_create_infos: &queue_info,
+                enabled_extension_count: device_ext_ptrs.len() as u32,
+                pp_enabled_extension_names: device_ext_ptrs.as_ptr() as *const *const std::os::raw::c_char,
+                ..Default::default()
+            };
+
+            let device = unsafe {
+                instance
+                    .create_device(physical_device, &device_create, None)
+                    .map_err(|e| VrError::Adapter(format!("Vulkan device create failed: {e}")))?
+            };
+
+            Ok(Self {
+                instance,
+                device,
+                physical_device,
+                queue_family_index,
+            })
+        }
+    }
+
+    impl Drop for VulkanContext {
+        fn drop(&mut self) {
+            unsafe {
+                self.device.destroy_device(None);
+                self.instance.destroy_instance(None);
+            }
+        }
+    }
+
+    fn parse_extension_list(list: &str) -> Vec<CString> {
+        list.split_whitespace()
+            .filter(|s| !s.is_empty())
+            .map(|s| CString::new(s).unwrap())
+            .collect()
+    }
+
+    fn find_graphics_queue_family(
+        instance: &ash::Instance,
+        physical_device: vk::PhysicalDevice,
+    ) -> VrResult<u32> {
+        let families =
+            unsafe { instance.get_physical_device_queue_family_properties(physical_device) };
+        families
+            .iter()
+            .enumerate()
+            .find(|(_, family)| family.queue_flags.contains(vk::QueueFlags::GRAPHICS))
+            .map(|(idx, _)| idx as u32)
+            .ok_or_else(|| VrError::Adapter("No Vulkan graphics queue family".to_string()))
+    }
+
+    pub(super) fn spawn(state: Arc<SharedState>) -> VrResult<JoinHandle<()>> {
+        thread::Builder::new()
+            .name("wavry-pcvr-android".to_string())
+            .spawn(move || {
+                wavry_vr::set_pcvr_status("PCVR: starting (Android/Quest runtime)".to_string());
+                let result = run(state);
+                match result {
+                    Ok(()) => {
+                        wavry_vr::set_pcvr_status("PCVR: runtime stopped".to_string());
+                    }
+                    Err(err) => {
+                        wavry_vr::set_pcvr_status(format!("PCVR: runtime failed: {err}"));
+                    }
+                }
+            })
+            .map_err(|e| VrError::Adapter(format!("thread spawn: {e}")))
+    }
+
+    fn run(state: Arc<SharedState>) -> VrResult<()> {
+        log::info!("Quest/Android VR runtime started");
+
+        let entry = unsafe { xr::Entry::load() }
+            .map_err(|e| VrError::Adapter(format!("OpenXR load failed: {e:?}")))?;
+
+        #[cfg(target_os = "android")]
+        {
+            entry.initialize_android_loader().map_err(|e| {
+                VrError::Adapter(format!("OpenXR android loader init failed: {e:?}"))
+            })?;
+        }
+
+        let mut exts = xr::ExtensionSet::default();
+        exts.khr_vulkan_enable = true;
+        exts.khr_android_create_instance = true;
+
+        let app_info = xr::ApplicationInfo {
+            application_name: "Wavry",
+            application_version: 1,
+            engine_name: "Wavry",
+            engine_version: 1,
+        };
+
+        let instance = entry
+            .create_instance(&app_info, &exts, &[])
+            .map_err(|e| VrError::Adapter(format!("OpenXR create_instance: {e:?}")))?;
+
+        let system = instance
+            .system(xr::FormFactor::HEAD_MOUNTED_DISPLAY)
+            .map_err(|e| VrError::Adapter(format!("OpenXR system: {e:?}")))?;
+
+        let vk_ctx = VulkanContext::new(&instance, system)?;
+
+        let create_info = xr::vulkan::SessionCreateInfo {
+            instance: vk_ctx.instance.handle().as_raw() as *const _,
+            physical_device: vk_ctx.physical_device.as_raw() as *const _,
+            device: vk_ctx.device.handle().as_raw() as *const _,
+            queue_family_index: vk_ctx.queue_family_index,
+            queue_index: 0,
+        };
+
+        let (session, mut frame_waiter, mut frame_stream) = unsafe {
+            instance
+                .create_session::<xr::Vulkan>(system, &create_info)
+                .map_err(|e| VrError::Adapter(format!("OpenXR create_session: {e:?}")))?
+        };
+
+        wavry_vr::set_pcvr_status("PCVR: Quest OpenXR active".to_string());
+
+        let mut input_actions = InputActions::new(&instance, &session).ok();
+        let mut event_buffer = xr::EventDataBuffer::new();
+        let mut session_running = false;
+
+        while !state.stop.load(Ordering::Relaxed) {
+            while let Some(event) = instance
+                .poll_event(&mut event_buffer)
+                .map_err(|e| VrError::Adapter(format!("OpenXR poll_event: {e:?}")))?
+            {
+                if let xr::Event::SessionStateChanged(e) = event {
+                    match e.state() {
+                        xr::SessionState::READY => {
+                            session
+                                .begin(xr::ViewConfigurationType::PRIMARY_STEREO)
+                                .map_err(|e| {
+                                    VrError::Adapter(format!("OpenXR session begin: {e:?}"))
+                                })?;
+                            session_running = true;
+                        }
+                        xr::SessionState::STOPPING => {
+                            session.end().map_err(|e| {
+                                VrError::Adapter(format!("OpenXR session end: {e:?}"))
+                            })?;
+                            session_running = false;
+                        }
+                        xr::SessionState::EXITING | xr::SessionState::LOSS_PENDING => {
+                            return Ok(());
+                        }
+                        _ => {}
+                    }
+                }
+            }
+
+            if !session_running {
+                thread::sleep(Duration::from_millis(50));
+                continue;
+            }
+
+            let frame_state = frame_waiter
+                .wait()
+                .map_err(|e| VrError::Adapter(format!("OpenXR wait: {e:?}")))?;
+            frame_stream
+                .begin()
+                .map_err(|e| VrError::Adapter(format!("OpenXR begin: {e:?}")))?;
+
+            if let Some(actions) = input_actions.as_mut() {
+                let timestamp_us = (frame_state.predicted_display_time.as_nanos() / 1_000) as u64;
+                if let Ok(inputs) = actions.poll(&session, timestamp_us) {
+                    for input in inputs {
+                        state.callbacks.on_gamepad_input(input);
+                    }
+                }
+            }
+
+            // We must end the frame even if we don't render anything
+            frame_stream
+                .end(
+                    frame_state.predicted_display_time,
+                    xr::EnvironmentBlendMode::OPAQUE,
+                    &[],
+                )
+                .map_err(|e| VrError::Adapter(format!("OpenXR end: {e:?}")))?;
+        }
+
+        if session_running {
+            let _ = session.end();
+        }
+
+        Ok(())
+    }
+}
+
 pub(crate) fn spawn_runtime(state: Arc<SharedState>) -> VrResult<JoinHandle<()>> {
     #[cfg(target_os = "linux")]
     {
@@ -3180,11 +3785,15 @@ pub(crate) fn spawn_runtime(state: Arc<SharedState>) -> VrResult<JoinHandle<()>>
     {
         return windows::spawn(state);
     }
-    #[cfg(not(any(target_os = "linux", target_os = "windows")))]
+    #[cfg(target_os = "android")]
+    {
+        return android::spawn(state);
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "windows", target_os = "android")))]
     {
         let _ = state;
         Err(VrError::Unavailable(
-            "ALVR PCVR adapter only supported on Linux and Windows".to_string(),
+            "ALVR PCVR adapter only supported on Linux, Windows and Android".to_string(),
         ))
     }
 }

@@ -1,8 +1,11 @@
+mod webrtc_bridge;
+
 mod host {
     use std::{
         collections::{HashMap, VecDeque},
         fmt,
         net::SocketAddr,
+        sync::Arc,
         time::Duration,
     };
 
@@ -32,12 +35,14 @@ mod host {
     use bytes::Bytes;
     use socket2::SockRef;
     use tokio::{net::UdpSocket, sync::mpsc, time};
-    use tracing::{debug, info, warn};
+    use tracing::{debug, error, info, warn};
     #[cfg(not(target_os = "linux"))]
     use wavry_platform::DummyInjector as InjectorImpl;
     use wavry_platform::InputInjector;
     #[cfg(target_os = "linux")]
     use wavry_platform::UinputInjector as InjectorImpl;
+
+    use crate::webrtc_bridge::WebRtcBridge;
 
     const MAX_DATAGRAM_SIZE: usize = 1200;
     const FEC_SHARD_COUNT: u32 = 8;
@@ -56,18 +61,19 @@ mod host {
     #[derive(Parser, Debug)]
     #[command(name = "wavry-server")]
     struct Args {
-        #[arg(long, default_value = "127.0.0.1:5000")]
+        /// UDP listen address (use :0 for random)
+        #[arg(long, env = "WAVRY_LISTEN_ADDR", default_value = "0.0.0.0:0")]
         listen: SocketAddr,
 
         /// Disable encryption (for testing/debugging)
-        #[arg(long, default_value = "false")]
+        #[arg(long, env = "WAVRY_NO_ENCRYPT", default_value = "false")]
         no_encrypt: bool,
 
-        /// Default stream width used when client does not request a resolution
+        /// Default stream width
         #[arg(long, default_value_t = DEFAULT_RESOLUTION_WIDTH as u32)]
         width: u32,
 
-        /// Default stream height used when client does not request a resolution
+        /// Default stream height
         #[arg(long, default_value_t = DEFAULT_RESOLUTION_HEIGHT as u32)]
         height: u32,
 
@@ -83,15 +89,15 @@ mod host {
         #[arg(long, default_value_t = 1_000)]
         keyframe_interval_ms: u32,
 
-        /// Display ID for capture backends that support multi-monitor selection
-        #[arg(long)]
+        /// Display ID for capture backends
+        #[arg(long, env = "WAVRY_DISPLAY_ID")]
         display_id: Option<u32>,
 
         /// Disable mDNS host advertisement
         #[arg(long, default_value_t = false)]
         disable_mdns: bool,
 
-        /// Maximum number of tracked peer endpoints (active + pending handshakes)
+        /// Maximum number of tracked peer endpoints
         #[arg(long, default_value_t = 64)]
         max_peers: usize,
 
@@ -99,9 +105,25 @@ mod host {
         #[arg(long, default_value_t = 30)]
         peer_idle_timeout_secs: u64,
 
-        /// Minimum interval between detailed stats logs for each peer
+        /// Minimum interval between detailed stats logs
         #[arg(long, default_value_t = 10)]
         stats_log_interval_secs: u64,
+
+        /// Signaling gateway URL (WebSocket)
+        #[arg(
+            long,
+            env = "WAVRY_GATEWAY_URL",
+            default_value = "ws://127.0.0.1:3000/ws"
+        )]
+        gateway_url: String,
+
+        /// Session token for signaling
+        #[arg(long, env = "WAVRY_SESSION_TOKEN")]
+        session_token: Option<String>,
+
+        /// Enable WebRTC bridge for web clients
+        #[arg(long, env = "WAVRY_ENABLE_WEBRTC", default_value_t = false)]
+        enable_webrtc: bool,
     }
 
     #[derive(Clone, Copy, Debug)]
@@ -181,10 +203,11 @@ mod host {
     async fn ensure_encoder(
         frame_rx: &mut Option<mpsc::Receiver<FrameIn>>,
         selected_codec: &mut Option<Codec>,
+        current_display_id: &mut Option<u32>,
         base: EncodeConfig,
         codec: Codec,
     ) -> Result<()> {
-        if selected_codec == &Some(codec) && frame_rx.is_some() {
+        if selected_codec == &Some(codec) && current_display_id == &base.display_id && frame_rx.is_some() {
             return Ok(());
         }
 
@@ -212,7 +235,8 @@ mod host {
 
         *frame_rx = Some(rx);
         *selected_codec = Some(codec);
-        info!("Selected encoder codec: {:?}", codec);
+        *current_display_id = base.display_id;
+        info!("Selected encoder codec: {:?}, display: {:?}", codec, base.display_id);
         Ok(())
     }
 
@@ -300,6 +324,32 @@ mod host {
     #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
     fn local_supported_encoders() -> Vec<Codec> {
         vec![Codec::H264]
+    }
+
+    fn get_monitor_list() -> Vec<rift_core::MonitorInfo> {
+        #[cfg(target_os = "linux")]
+        let probe = LinuxProbe;
+        #[cfg(target_os = "macos")]
+        let probe = MacProbe;
+        #[cfg(target_os = "windows")]
+        let probe = WindowsProbe;
+
+        #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
+        {
+            if let Ok(displays) = probe.enumerate_displays() {
+                return displays
+                    .into_iter()
+                    .map(|d| rift_core::MonitorInfo {
+                        id: d.id,
+                        name: d.name,
+                        width: d.resolution.width as u32,
+                        height: d.resolution.height as u32,
+                    })
+                    .collect();
+            }
+        }
+
+        vec![]
     }
 
     impl PeerState {
@@ -449,10 +499,13 @@ mod host {
         }
 
         let socket = UdpSocket::bind(args.listen).await?;
+        let local_addr = socket.local_addr()?;
+        info!("listening on {}", local_addr);
+
         if let Err(e) = SockRef::from(&socket).set_tos_v4(DSCP_EF) {
             debug!("failed to set DSCP/TOS: {}", e);
         }
-        info!("listening on {}", args.listen);
+
         if args.no_encrypt {
             warn!("ENCRYPTION DISABLED - not for production use");
         }
@@ -460,18 +513,44 @@ mod host {
             info!("mDNS advertisement disabled");
             None
         } else {
-            Some(advertise_mdns(args.listen)?)
+            Some(advertise_mdns(local_addr)?)
         };
 
         let mut injector = InjectorImpl::new()?;
 
-        let base_config = EncodeConfig {
+        let (webrtc_input_tx, mut webrtc_input_rx) =
+            mpsc::unbounded_channel::<rift_core::input_message::Event>();
+
+        let webrtc_bridge = if args.enable_webrtc {
+            if let Some(token) = &args.session_token {
+                let bridge = Arc::new(
+                    WebRtcBridge::new(args.gateway_url.clone(), token.clone(), webrtc_input_tx)
+                        .await?,
+                );
+                let bridge_clone = Arc::clone(&bridge);
+                tokio::spawn(async move {
+                    if let Err(e) = bridge_clone.run().await {
+                        error!("WebRTC bridge error: {}", e);
+                    }
+                });
+                Some(bridge)
+            } else {
+                warn!("WebRTC enabled but no session token provided; bridge will not start");
+                None
+            }
+        } else {
+            None
+        };
+
+        let mut base_config = EncodeConfig {
             codec: Codec::H264,
             resolution: runtime.default_resolution,
             fps: runtime.fps as u16,
             bitrate_kbps: runtime.initial_bitrate_kbps,
             keyframe_interval_ms: runtime.keyframe_interval_ms,
             display_id: args.display_id,
+            enable_10bit: false,
+            enable_hdr: false,
         };
 
         let mut buf = vec![0u8; 64 * 1024];
@@ -479,14 +558,24 @@ mod host {
         let mut active_peer: Option<SocketAddr> = None;
         let mut frame_rx: Option<mpsc::Receiver<FrameIn>> = None;
         let mut selected_codec: Option<Codec> = None;
+        let mut current_display_id: Option<u32> = None;
         let local_supported = local_supported_encoders();
         info!("Local encoder candidates: {:?}", local_supported);
         let no_encrypt = args.no_encrypt;
         let mut peer_cleanup_interval =
             time::interval(Duration::from_secs(PEER_CLEANUP_INTERVAL_SECS));
 
+        if args.enable_webrtc && selected_codec.is_none() {
+            ensure_encoder(&mut frame_rx, &mut selected_codec, &mut current_display_id, base_config, Codec::H264).await?;
+        }
+
         loop {
             tokio::select! {
+                Some(event) = webrtc_input_rx.recv() => {
+                    if let Err(e) = handle_input_event(&mut injector, event) {
+                        warn!("WebRTC input injection failed: {}", e);
+                    }
+                }
                 _ = peer_cleanup_interval.tick() => {
                     cleanup_inactive_peers(
                         &mut peers,
@@ -501,6 +590,10 @@ mod host {
                         None
                     }
                 } => {
+                    if let Some(ref bridge) = webrtc_bridge {
+                        let _ = bridge.push_frame(frame.clone()).await;
+                    }
+
                     if let Some(peer) = active_peer {
                         if let Some(peer_state) = peers.get_mut(&peer) {
                             if peer_state.skip_frames > 0 {
@@ -526,12 +619,10 @@ mod host {
                         continue;
                     }
 
-                    // Get or create peer state
                     let peer_state = peers
                         .entry(peer)
                         .or_insert_with(|| PeerState::new(no_encrypt, runtime.initial_bitrate_kbps));
 
-                    // Handle raw packet
                     match handle_raw_packet(
                         &socket,
                         peer_state,
@@ -541,12 +632,13 @@ mod host {
                         &mut injector,
                         runtime,
                         &local_supported,
+                        &mut base_config,
                     )
                     .await
                     {
                         Ok(Some(codec)) => {
                             if let Err(err) =
-                                ensure_encoder(&mut frame_rx, &mut selected_codec, base_config, codec).await
+                                ensure_encoder(&mut frame_rx, &mut selected_codec, &mut current_display_id, base_config, codec).await
                             {
                                 warn!("encoder start failed: {}", err);
                             }
@@ -561,6 +653,7 @@ mod host {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn handle_raw_packet(
         socket: &UdpSocket,
         peer_state: &mut PeerState,
@@ -570,12 +663,12 @@ mod host {
         injector: &mut InjectorImpl,
         runtime: HostRuntimeConfig,
         local_supported: &[Codec],
+        base_config: &mut EncodeConfig,
     ) -> Result<Option<Codec>> {
         peer_state.last_seen = time::Instant::now();
         let phys = PhysicalPacket::decode(Bytes::copy_from_slice(raw))
             .map_err(|e| anyhow!("RIFT decode error: {}", e))?;
 
-        // Dispatch based on crypto state
         match &mut peer_state.crypto {
             CryptoState::Disabled => {
                 let msg =
@@ -589,6 +682,7 @@ mod host {
                     injector,
                     runtime,
                     local_supported,
+                    base_config,
                 )
                 .await
             }
@@ -627,7 +721,6 @@ mod host {
                         .process_client_finish(&phys.payload)
                         .map_err(|e| anyhow!("Noise error: {}", e))?;
 
-                    // Transition to established
                     let old_crypto =
                         std::mem::replace(&mut peer_state.crypto, CryptoState::Disabled);
                     if let CryptoState::Handshaking(server) = old_crypto {
@@ -656,12 +749,14 @@ mod host {
                     injector,
                     runtime,
                     local_supported,
+                    base_config,
                 )
                 .await
             }
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn handle_rift_msg(
         socket: &UdpSocket,
         peer_state: &mut PeerState,
@@ -671,6 +766,7 @@ mod host {
         injector: &mut InjectorImpl,
         runtime: HostRuntimeConfig,
         local_supported: &[Codec],
+        base_config: &mut EncodeConfig,
     ) -> Result<Option<Codec>> {
         use rift_core::message::Content;
 
@@ -689,7 +785,6 @@ mod host {
                         }
 
                         if active_peer.is_some() && *active_peer != Some(peer) {
-                            // Already busy
                             let ack = ProtoHelloAck {
                                 accepted: false,
                                 selected_codec: 0,
@@ -775,6 +870,20 @@ mod host {
                             },
                         )
                         .await?;
+
+                        // Send monitor list for discovery
+                        let monitors = get_monitor_list();
+                        if !monitors.is_empty() {
+                            let list_msg = ProtoMessage {
+                                content: Some(Content::Control(ProtoControl {
+                                    content: Some(rift_core::control_message::Content::MonitorList(
+                                        rift_core::MonitorList { monitors },
+                                    )),
+                                })),
+                            };
+                            let _ = send_rift_msg(socket, peer_state, peer, list_msg).await;
+                        }
+
                         info!(
                             "session established with {} (client={}, codec={:?}, resolution={}x{}, session_id={})",
                             peer,
@@ -856,8 +965,11 @@ mod host {
                     rift_core::control_message::Content::HandPoseUpdate(hand_pose) => {
                         let _ = hand_pose;
                     }
-                    rift_core::control_message::Content::VrTiming(_timing) => {
-                        // Reserved for VR timing hints.
+                    rift_core::control_message::Content::VrTiming(_timing) => {}
+                    rift_core::control_message::Content::SelectMonitor(select) => {
+                        info!("Client selected monitor: {}", select.monitor_id);
+                        base_config.display_id = Some(select.monitor_id);
+                        return Ok(Some(selected_codec.unwrap_or(Codec::H264)));
                     }
                     _ => {}
                 }
@@ -881,7 +993,7 @@ mod host {
             Event::Key(k) => injector.key(k.keycode, k.pressed)?,
             Event::MouseButton(m) => injector.mouse_button(m.button as u8, m.pressed)?,
             Event::MouseMove(m) => injector.mouse_motion(m.x as i32, m.y as i32)?,
-            _ => {} // Handle scroll/absolute if needed
+            _ => {}
         }
         Ok(())
     }

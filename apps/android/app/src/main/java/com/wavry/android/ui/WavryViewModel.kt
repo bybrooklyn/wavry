@@ -58,6 +58,14 @@ private enum class SignalingRefreshReason {
     MANUAL_RETRY,
 }
 
+data class SessionEntry(
+    val id: String = java.util.UUID.randomUUID().toString(),
+    val target: String,
+    val timestamp: Long = System.currentTimeMillis(),
+    val durationMs: Long = 0,
+    val success: Boolean = true,
+)
+
 data class WavryUiState(
     val mode: ConnectionMode = ConnectionMode.CLIENT,
     val hostText: String = "192.168.1.10",
@@ -83,6 +91,7 @@ data class WavryUiState(
     val authFormMode: AuthFormMode = AuthFormMode.LOGIN,
     val cloudSignalingState: CloudSignalingState = CloudSignalingState.DISCONNECTED,
     val stats: SessionStats = SessionStats(),
+    val sessionHistory: List<SessionEntry> = emptyList(),
 )
 
 class WavryViewModel(application: Application) : AndroidViewModel(application) {
@@ -113,6 +122,7 @@ class WavryViewModel(application: Application) : AndroidViewModel(application) {
             } else {
                 CloudSignalingState.DISCONNECTED
             },
+            sessionHistory = loadSessionHistory(),
         ),
     )
     val state: StateFlow<WavryUiState> = _state.asStateFlow()
@@ -824,6 +834,10 @@ class WavryViewModel(application: Application) : AndroidViewModel(application) {
             }
 
             if (rc == 0 || (rc == -1 && !hasConnectedOnce && activeTargetLabel.startsWith("@"))) {
+                if (hasConnectedOnce) {
+                    val duration = SystemClock.elapsedRealtime() - connectStartedAtMs
+                    recordSessionInHistory(activeTargetLabel, true, duration)
+                }
                 resetConnectionTracking()
                 stopStatsPolling()
                 _state.update {
@@ -843,6 +857,15 @@ class WavryViewModel(application: Application) : AndroidViewModel(application) {
                     )
                 }
             }
+        }
+    }
+
+    private fun recordSessionInHistory(target: String, success: Boolean, durationMs: Long) {
+        val entry = SessionEntry(target = target, success = success, durationMs = durationMs)
+        _state.update { current ->
+            val newHistory = (listOf(entry) + current.sessionHistory).take(20)
+            saveSessionHistory(newHistory)
+            current.copy(sessionHistory = newHistory)
         }
     }
 
@@ -870,6 +893,7 @@ class WavryViewModel(application: Application) : AndroidViewModel(application) {
                                 withContext(Dispatchers.IO) {
                                     core.stop()
                                 }
+                                recordSessionInHistory(activeTargetLabel, false, 0)
                                 resetConnectionTracking()
                                 val message = normalizeCloudFailure(cloudStatus, detail)
                                 _state.update {
@@ -910,6 +934,7 @@ class WavryViewModel(application: Application) : AndroidViewModel(application) {
                         withContext(Dispatchers.IO) {
                             core.stop()
                         }
+                        recordSessionInHistory(activeTargetLabel, false, elapsedMs)
                         resetConnectionTracking()
                         val hint = networkHintForHost(activeResolvedHost)
                         val baseMessage = if (activeTargetLabel.startsWith("@")) {
@@ -1440,11 +1465,27 @@ class WavryViewModel(application: Application) : AndroidViewModel(application) {
         private const val KEY_AUTH_TOKEN = "auth_token"
         private const val KEY_AUTH_EMAIL = "auth_email"
         private const val KEY_AUTH_USERNAME = "auth_username"
+        private const val KEY_SESSION_HISTORY = "session_history"
 
         private const val DEFAULT_HOST = "192.168.1.10"
         private const val DEFAULT_PORT = "4444"
         private const val DEFAULT_AUTH_SERVER = "https://auth.wavry.dev"
         private const val CONNECT_TIMEOUT_MS = 12_000L
+    }
+
+    private fun loadSessionHistory(): List<SessionEntry> {
+        val json = prefs.getString(KEY_SESSION_HISTORY, "[]") ?: "[]"
+        return try {
+            val listType = object : com.google.gson.reflect.TypeToken<List<SessionEntry>>() {}.type
+            com.google.gson.Gson().fromJson(json, listType)
+        } catch (e: Exception) {
+            emptyList()
+        }
+    }
+
+    private fun saveSessionHistory(history: List<SessionEntry>) {
+        val json = com.google.gson.Gson().toJson(history.take(20))
+        prefs.edit().putString(KEY_SESSION_HISTORY, json).apply()
     }
 }
 

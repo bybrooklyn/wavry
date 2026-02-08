@@ -8,6 +8,7 @@ class WavryCore(
 ) {
     init {
         native.nativeInit()
+        native.nativeAndroidInit(context)
         native.nativeInitIdentity(context.filesDir.absolutePath)
     }
 
@@ -53,6 +54,8 @@ class WavryCore(
             bitrateKbps = raw[3],
             framesEncoded = raw[4],
             framesDecoded = raw[5],
+            jitterMs = 0,
+            packetLoss = 0f,
         )
     }
 

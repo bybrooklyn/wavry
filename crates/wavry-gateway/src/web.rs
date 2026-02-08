@@ -1,5 +1,5 @@
 use axum::{
-    extract::{ws::Message, ConnectInfo, Json, State},
+    extract::{ConnectInfo, Json, State},
     http::StatusCode,
     response::IntoResponse,
 };
@@ -9,6 +9,19 @@ use std::net::SocketAddr;
 
 use crate::signal::{ConnectionMap, SignalMessage};
 use crate::{db, security};
+
+#[cfg(feature = "webtransport-runtime")]
+use serde_json;
+#[cfg(feature = "webtransport-runtime")]
+use std::collections::HashMap;
+#[cfg(feature = "webtransport-runtime")]
+use std::sync::Arc;
+#[cfg(feature = "webtransport-runtime")]
+use tokio::sync::{mpsc, RwLock};
+#[cfg(feature = "webtransport-runtime")]
+use wavry_common as common;
+#[cfg(feature = "webtransport-runtime")]
+use wavry_web as web_transport;
 
 const MAX_SDP_BYTES: usize = 32 * 1024;
 const MAX_CANDIDATE_BYTES: usize = 4096;
@@ -223,47 +236,214 @@ async fn relay_message(
     target_username: &str,
     msg: SignalMessage,
 ) -> bool {
-    let tx = {
+    let signaler = {
         let guard = connections.read().await;
         guard.get(target_username).cloned()
     };
-    let Some(tx) = tx else {
+    let Some(signaler) = signaler else {
         return false;
     };
 
-    match serde_json::to_string(&msg) {
-        Ok(json) => tx.try_send(Message::Text(json)).is_ok(),
-        Err(err) => {
-            tracing::warn!("failed to serialize relayed signaling message: {}", err);
-            false
-        }
+    signaler.try_send(msg)
+}
+
+#[cfg(feature = "webtransport-runtime")]
+pub struct GatewayWebTransportHandler {
+    pub pool: sqlx::SqlitePool,
+    pub connections: ConnectionMap,
+    pub active_sessions: Arc<RwLock<HashMap<String, String>>>, // peer_addr -> username
+    pub active_targets: Arc<RwLock<HashMap<String, String>>>,  // session_id -> target_username
+    pub session_senders:
+        Arc<RwLock<HashMap<String, mpsc::Sender<web_transport::ControlStreamFrame>>>>,
+}
+
+#[cfg(feature = "webtransport-runtime")]
+impl web_transport::WebTransportSessionHandler for GatewayWebTransportHandler {
+    fn on_session_started(&self, session: web_transport::WebTransportSession) {
+        tracing::info!("webtransport session started: {}", session.session_id);
+        let senders = self.session_senders.clone();
+        tokio::spawn(async move {
+            senders.write().await.insert(session.session_id, session.tx);
+        });
+    }
+
+    fn on_input_datagram(&self, session_id: &str, datagram: web_transport::InputDatagram) {
+        let active_targets = self.active_targets.clone();
+        let connections = self.connections.clone();
+        let session_id = session_id.to_string();
+
+        tokio::spawn(async move {
+            let target = active_targets.read().await.get(&session_id).cloned();
+            if let Some(target_user) = target {
+                let bytes = datagram.encode();
+                let vec = bytes.to_vec();
+
+                let guard = connections.read().await;
+                if let Some(signaler) = guard.get(&target_user) {
+                    signaler.try_send_binary(vec);
+                }
+            }
+        });
+    }
+
+    fn on_control_frame(&self, session_id: &str, frame: web_transport::ControlStreamFrame) {
+        let pool = self.pool.clone();
+        let connections = self.connections.clone();
+        let active_sessions = self.active_sessions.clone();
+        let active_targets = self.active_targets.clone();
+        let session_senders = self.session_senders.clone();
+        let session_id = session_id.to_string();
+
+        tokio::spawn(async move {
+            match frame {
+                web_transport::ControlStreamFrame::Control(msg) => {
+                    match msg {
+                        web_transport::ControlMessage::Connect { session_token, .. } => {
+                            if let Ok(Some(username)) =
+                                db::get_username_by_session_token(&pool, &session_token).await
+                            {
+                                let maybe_tx =
+                                    session_senders.read().await.get(&session_id).cloned();
+                                if let Some(tx) = maybe_tx {
+                                    tracing::info!(
+                                        "WebTransport client {} bound to user {}",
+                                        session_id,
+                                        username
+                                    );
+                                    active_sessions
+                                        .write()
+                                        .await
+                                        .insert(session_id.clone(), username.clone());
+                                    connections.write().await.insert(
+                                        username,
+                                        crate::signal::Signaler::WebTransport(tx),
+                                    );
+                                }
+                            }
+                        }
+                        _ => {
+                            // Handle signaling
+                            if let Some(from_user) =
+                                active_sessions.read().await.get(&session_id).cloned()
+                            {
+                                let signal = match msg {
+                                    web_transport::ControlMessage::WebRtcOffer {
+                                        target_username,
+                                        sdp,
+                                    } => {
+                                        active_targets
+                                            .write()
+                                            .await
+                                            .insert(session_id.clone(), target_username.clone());
+                                        Some((
+                                            target_username,
+                                            crate::signal::SignalMessage::Offer {
+                                                target_username: from_user,
+                                                sdp,
+                                            },
+                                        ))
+                                    }
+                                    web_transport::ControlMessage::WebRtcAnswer {
+                                        target_username,
+                                        sdp,
+                                    } => Some((
+                                        target_username,
+                                        crate::signal::SignalMessage::Answer {
+                                            target_username: from_user,
+                                            sdp,
+                                        },
+                                    )),
+                                    web_transport::ControlMessage::WebRtcCandidate {
+                                        target_username,
+                                        candidate,
+                                    } => Some((
+                                        target_username,
+                                        crate::signal::SignalMessage::Candidate {
+                                            target_username: from_user,
+                                            candidate,
+                                        },
+                                    )),
+                                    _ => None,
+                                };
+
+                                if let Some((target, relayed_signal)) = signal {
+                                    let guard = connections.read().await;
+                                    if let Some(target_signaler) = guard.get(&target) {
+                                        target_signaler.try_send(relayed_signal);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            }
+        });
     }
 }
 
 #[cfg(feature = "webtransport-runtime")]
-pub struct GatewayWebTransportHandler;
-
-#[cfg(feature = "webtransport-runtime")]
-impl wavry_web::WebTransportSessionHandler for GatewayWebTransportHandler {
-    fn on_input_datagram(&self, session_id: &str, datagram: wavry_web::InputDatagram) {
-        tracing::debug!(
-            "webtransport input datagram from {}: {:?}",
-            session_id,
-            datagram
-        );
-    }
-
-    fn on_control_frame(&self, session_id: &str, frame: wavry_web::ControlStreamFrame) {
-        tracing::debug!(
-            "webtransport control frame from {}: {:?}",
-            session_id,
-            frame
-        );
-    }
+pub async fn run_webtransport_runtime(
+    bind_addr: &str,
+    pool: sqlx::SqlitePool,
+    connections: ConnectionMap,
+) -> anyhow::Result<()> {
+    let server = web_transport::WebTransportServer::bind(bind_addr).await?;
+    server
+        .run(GatewayWebTransportHandler {
+            pool,
+            connections,
+            active_sessions: Arc::new(RwLock::new(HashMap::new())),
+            active_targets: Arc::new(RwLock::new(HashMap::new())),
+            session_senders: Arc::new(RwLock::new(HashMap::new())),
+        })
+        .await
 }
 
-#[cfg(feature = "webtransport-runtime")]
-pub async fn run_webtransport_runtime(bind_addr: &str) -> anyhow::Result<()> {
-    let server = wavry_web::WebTransportServer::bind(bind_addr).await?;
-    server.run(GatewayWebTransportHandler).await
+#[derive(Debug, Deserialize)]
+pub struct RelayReportRequest {
+    pub session_token: String,
+    pub relay_id: String,
+    pub success: bool,
+    pub bytes_sent: i64,
+    pub duration_secs: i64,
+}
+
+pub async fn handle_relay_report(
+    State(pool): State<SqlitePool>,
+    Json(payload): Json<RelayReportRequest>,
+) -> impl IntoResponse {
+    // Basic verification: does the token exist?
+    let _user_id = match db::get_username_by_session_token(&pool, &payload.session_token).await {
+        Ok(Some(id)) => id,
+        _ => return error_response(StatusCode::UNAUTHORIZED, "Invalid session token"),
+    };
+
+    if payload.success {
+        db::record_relay_success(&pool, &payload.relay_id)
+            .await
+            .ok();
+    } else {
+        db::record_relay_failure(&pool, &payload.relay_id)
+            .await
+            .ok();
+    }
+
+    db::record_relay_usage(
+        &pool,
+        &payload.relay_id,
+        "web-session", // Placeholder for actual session ID
+        payload.bytes_sent,
+        payload.duration_secs,
+    )
+    .await
+    .ok();
+
+    StatusCode::OK.into_response()
+}
+
+pub async fn handle_relay_reputation(State(_pool): State<SqlitePool>) -> impl IntoResponse {
+    // This would ideally return a list of all known relay reputations
+    // For now, return a placeholder or implement list in db.rs
+    StatusCode::NOT_IMPLEMENTED.into_response()
 }

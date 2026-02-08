@@ -109,6 +109,22 @@ pub extern "C" fn wavry_init() {
 }
 
 #[no_mangle]
+pub unsafe extern "C" fn wavry_android_init(
+    _vm: *mut std::ffi::c_void,
+    _context: *mut std::ffi::c_void,
+) {
+    #[cfg(target_os = "android")]
+    {
+        log::info!(
+            "FFI: Initializing Android context (VM: {:?}, Context: {:?})",
+            _vm,
+            _context
+        );
+        ndk_context::initialize_android_context(_vm, _context);
+    }
+}
+
+#[no_mangle]
 pub unsafe extern "C" fn wavry_init_identity(storage_path_ptr: *const c_char) -> i32 {
     if storage_path_ptr.is_null() {
         set_last_error("Identity init failed: null storage path");
@@ -218,6 +234,7 @@ fn start_host_internal(port: u16, host_config: HostRuntimeConfig) -> i32 {
         Ok(Ok(bound_port)) => {
             *guard = Some(SessionHandle {
                 stop_tx: Some(tx),
+                monitor_tx: None, // Host mode doesn't currently use monitor_tx
                 stats,
             });
             clear_last_error();
@@ -299,6 +316,7 @@ fn start_client_internal(
     let stats = Arc::new(SessionStats::default());
     let (tx, rx) = tokio::sync::oneshot::channel();
     let (init_tx, init_rx) = tokio::sync::oneshot::channel();
+    let (monitor_tx, monitor_rx) = tokio::sync::mpsc::unbounded_channel::<u32>();
 
     let stats_clone = stats.clone();
     let renderer = VIDEO_RENDERER.clone(); // Shared Reference
@@ -312,6 +330,7 @@ fn start_client_internal(
             stats_clone,
             rx,
             init_tx,
+            monitor_rx,
         )
         .await
         {
@@ -325,6 +344,7 @@ fn start_client_internal(
         Ok(Ok(())) => {
             *guard = Some(SessionHandle {
                 stop_tx: Some(tx),
+                monitor_tx: Some(monitor_tx),
                 stats,
             });
             clear_last_error();
@@ -505,6 +525,8 @@ pub extern "C" fn wavry_init_renderer(layer_ptr: *mut std::ffi::c_void) -> i32 {
                 width: 1920,
                 height: 1080,
             },
+            enable_10bit: false,
+            enable_hdr: false,
         };
         match VideoRenderer::new(config, layer_ptr) {
             Ok(renderer) => {

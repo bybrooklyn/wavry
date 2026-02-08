@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [lib]
-crate-type = ["staticlib"]
+crate-type = ["staticlib", "cdylib"]
 
 [dependencies]
 libc = "0.2"
@@ -15,13 +15,18 @@ env_logger = "0.10"
 
 # Internal dependencies
 wavry-common = { path = "../wavry-common" }
-wavry-media = { version = "0.0.1", path = "../wavry-media" }
+wavry-media = { version = "0.0.1", path = "../wavry-media", default-features = false }
 rift-core = { path = "../rift-core" }
 rift-crypto = { path = "../rift-crypto" }
 tokio = { workspace = true, features = ["full"] }
 anyhow = { workspace = true }
 once_cell = "1.18"
 wavry-client = { path = "../wavry-client" }
+wavry-vr = { path = "../wavry-vr" }
 x25519-dalek.workspace = true
 bytes.workspace = true
 rand.workspace = true
+
+[target.'cfg(target_os = "android")'.dependencies]
+ndk-context = "0.1"
+jni = "0.21"

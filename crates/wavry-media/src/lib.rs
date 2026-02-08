@@ -64,12 +64,16 @@ pub struct EncodeConfig {
     pub bitrate_kbps: u32,
     pub keyframe_interval_ms: u32,
     pub display_id: Option<u32>,
+    pub enable_10bit: bool,
+    pub enable_hdr: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct DecodeConfig {
     pub codec: Codec,
     pub resolution: Resolution,
+    pub enable_10bit: bool,
+    pub enable_hdr: bool,
 }
 
 pub trait Encoder: Send {
@@ -206,7 +210,7 @@ impl CapabilityProbe for NullProbe {
 pub mod android;
 
 #[cfg(target_os = "android")]
-pub use android::{AndroidProbe, AndroidVideoRenderer};
+pub use android::{AndroidAudioRenderer, AndroidProbe, AndroidVideoRenderer};
 
 #[cfg(target_os = "linux")]
 mod linux;

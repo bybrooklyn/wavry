@@ -7,4 +7,6 @@ data class SessionStats(
     val bitrateKbps: Long = 0,
     val framesEncoded: Long = 0,
     val framesDecoded: Long = 0,
+    val jitterMs: Long = 0,
+    val packetLoss: Float = 0f,
 )

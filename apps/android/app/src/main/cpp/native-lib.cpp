@@ -8,6 +8,15 @@ Java_com_wavry_android_core_NativeBridge_nativeInit(JNIEnv *, jobject) {
     wavry_init();
 }
 
+extern "C" JNIEXPORT void JNICALL
+Java_com_wavry_android_core_NativeBridge_nativeAndroidInit(JNIEnv *env, jobject, jobject context) {
+    JavaVM *vm = nullptr;
+    env->GetJavaVM(&vm);
+    // context is a jobject, but wavry_android_init expects a void* which should be the global ref to the context
+    jobject global_context = env->NewGlobalRef(context);
+    wavry_android_init(vm, global_context);
+}
+
 extern "C" JNIEXPORT jint JNICALL
 Java_com_wavry_android_core_NativeBridge_nativeInitIdentity(
     JNIEnv *env,

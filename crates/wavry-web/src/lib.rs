@@ -37,6 +37,8 @@ impl WebGateway {
         {
             struct NoopHandler;
             impl WebTransportSessionHandler for NoopHandler {
+                fn on_session_started(&self, _session: WebTransportSession) {}
+
                 fn on_input_datagram(&self, _session_id: &str, _datagram: InputDatagram) {}
 
                 fn on_control_frame(&self, _session_id: &str, _frame: ControlStreamFrame) {}

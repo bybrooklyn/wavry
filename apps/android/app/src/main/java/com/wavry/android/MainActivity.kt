@@ -7,6 +7,15 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.History
+import androidx.compose.material.icons.filled.Speed
+import androidx.compose.material.icons.filled.Timer
+import androidx.compose.material.icons.filled.Wifi
+import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Error
+import androidx.compose.material.icons.filled.DataUsage
+import androidx.compose.material.icons.filled.Monitor
+import androidx.compose.material.icons.outlined.History
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -77,7 +86,16 @@ import com.wavry.android.ui.ConnectivityMode
 import com.wavry.android.ui.WavryUiState
 import com.wavry.android.ui.WavryViewModel
 import com.wavry.android.ui.theme.WavryTheme
+import androidx.compose.foundation.layout.size
+import com.wavry.android.ui.SessionEntry
 import kotlinx.coroutines.launch
+
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.runtime.LaunchedEffect
+import android.Manifest
+import android.content.pm.PackageManager
+import androidx.core.content.ContextCompat
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: android.os.Bundle?) {
@@ -85,6 +103,28 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
         setContent {
             WavryTheme(dynamicColor = true) {
+                val context = androidx.compose.ui.platform.LocalContext.current
+                var hasAudioPermission by rememberSaveable {
+                    mutableStateOf(
+                        ContextCompat.checkSelfPermission(
+                            context,
+                            Manifest.permission.RECORD_AUDIO
+                        ) == PackageManager.PERMISSION_GRANTED
+                    )
+                }
+
+                val permissionLauncher = rememberLauncherForActivityResult(
+                    ActivityResultContracts.RequestPermission()
+                ) { isGranted ->
+                    hasAudioPermission = isGranted
+                }
+
+                LaunchedEffect(Unit) {
+                    if (!hasAudioPermission) {
+                        permissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+                    }
+                }
+
                 val vm: WavryViewModel = viewModel()
                 val state by vm.state.collectAsStateWithLifecycle()
                 WavryScreen(
@@ -260,7 +300,10 @@ private fun WavryScreen(
                         modifier = Modifier
                             .weight(1f)
                             .fillMaxSize()
-                            .padding(horizontal = 16.dp, vertical = 8.dp)
+                            .padding(
+                                horizontal = if (state.isQuestBuild) 48.dp else 16.dp,
+                                vertical = 8.dp
+                            )
                             .verticalScroll(rememberScrollState()),
                         horizontalAlignment = Alignment.CenterHorizontally,
                         verticalArrangement = Arrangement.spacedBy(12.dp),
@@ -746,6 +789,12 @@ private fun SessionTab(
         }
     }
 
+    StatsDashboard(state)
+
+    if (!state.isRunning) {
+        SessionHistoryList(state.sessionHistory)
+    }
+
     if (state.isQuestBuild) {
         Card(
             modifier = Modifier.fillMaxWidth(),
@@ -768,8 +817,180 @@ private fun SessionTab(
             }
         }
     }
+}
 
-    StatsCard(state)
+@Composable
+@OptIn(ExperimentalLayoutApi::class)
+private fun StatsDashboard(state: WavryUiState) {
+    if (!state.isRunning && !state.stats.connected) return
+
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(24.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
+    ) {
+        Column(
+            modifier = Modifier.padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp),
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    text = "Live Dashboard",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold,
+                )
+                if (state.stats.connected) {
+                    AssistChip(
+                        onClick = { },
+                        label = { Text("Connected") },
+                        leadingIcon = {
+                            Icon(
+                                Icons.Filled.CheckCircle,
+                                null,
+                                tint = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.size(16.dp),
+                            )
+                        },
+                    )
+                }
+            }
+
+            FlowRow(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                StatItem(
+                    label = "Latency",
+                    value = "${state.stats.rttMs}ms",
+                    icon = Icons.Filled.Timer,
+                )
+                StatItem(
+                    label = "Framerate",
+                    value = "${state.stats.fps} FPS",
+                    icon = Icons.Filled.Speed,
+                )
+                StatItem(
+                    label = "Bitrate",
+                    value = "${state.stats.bitrateKbps}kbps",
+                    icon = Icons.Filled.Wifi,
+                )
+                StatItem(
+                    label = "Decoded",
+                    value = "${state.stats.framesDecoded}",
+                    icon = Icons.Filled.Monitor,
+                )
+                StatItem(
+                    label = "Jitter",
+                    value = "${state.stats.jitterMs}ms",
+                    icon = Icons.Filled.DataUsage,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun StatItem(label: String, value: String, icon: ImageVector) {
+    Card(
+        modifier = Modifier.widthIn(min = 100.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)),
+        shape = RoundedCornerShape(12.dp),
+    ) {
+        Column(
+            modifier = Modifier.padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            Icon(
+                icon,
+                contentDescription = null,
+                modifier = Modifier.size(18.dp),
+                tint = MaterialTheme.colorScheme.primary,
+            )
+            Text(
+                text = label,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Text(
+                text = value,
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold,
+            )
+        }
+    }
+}
+
+@Composable
+private fun SessionHistoryList(history: List<SessionEntry>) {
+    if (history.isEmpty()) return
+
+    Column(
+        modifier = Modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Icon(
+                Icons.Filled.History,
+                null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(20.dp),
+            )
+            Text(
+                "Recent Sessions",
+                style = MaterialTheme.typography.titleSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+
+        history.forEach { entry ->
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
+            ) {
+                Row(
+                    modifier = Modifier.padding(12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    Icon(
+                        if (entry.success) Icons.Filled.CheckCircle else Icons.Filled.Error,
+                        contentDescription = null,
+                        tint = if (entry.success) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error,
+                        modifier = Modifier.size(24.dp),
+                    )
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            entry.target,
+                            style = MaterialTheme.typography.bodyLarge,
+                            fontWeight = FontWeight.SemiBold,
+                        )
+                        val date = java.text.SimpleDateFormat(
+                            "MMM dd, HH:mm",
+                            java.util.Locale.getDefault(),
+                        ).format(java.util.Date(entry.timestamp))
+                        Text(
+                            date,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    if (entry.success && entry.durationMs > 0) {
+                        val mins = entry.durationMs / 60000
+                        val secs = (entry.durationMs % 60000) / 1000
+                        Text("${mins}m ${secs}s", style = MaterialTheme.typography.bodySmall)
+                    }
+                }
+            }
+        }
+    }
 }
 
 @Composable
@@ -1205,47 +1426,5 @@ private fun ConnectivitySelector(
                 },
             )
         }
-    }
-}
-
-@Composable
-private fun StatsCard(state: WavryUiState) {
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(20.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
-    ) {
-        Column(
-            modifier = Modifier.padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            Text(
-                text = "Session Stats",
-                style = MaterialTheme.typography.titleMedium,
-            )
-            StatRow("Connected", if (state.stats.connected) "Yes" else "No")
-            StatRow("FPS", state.stats.fps.toString())
-            StatRow("RTT", "${state.stats.rttMs} ms")
-            StatRow("Bitrate", "${state.stats.bitrateKbps} kbps")
-            StatRow("Frames Encoded", state.stats.framesEncoded.toString())
-            StatRow("Frames Decoded", state.stats.framesDecoded.toString())
-        }
-    }
-}
-
-@Composable
-private fun StatRow(label: String, value: String) {
-    Row(modifier = Modifier.fillMaxWidth()) {
-        Text(
-            text = label,
-            modifier = Modifier.width(150.dp),
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        Text(
-            text = value,
-            style = MaterialTheme.typography.bodyMedium,
-            fontWeight = FontWeight.SemiBold,
-        )
     }
 }
