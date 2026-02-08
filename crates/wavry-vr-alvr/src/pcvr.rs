@@ -10,6 +10,7 @@ mod linux {
     use super::*;
     use std::env;
     use std::ffi::CString;
+    use std::str::FromStr;
     use std::ptr;
     use std::sync::atomic::Ordering;
     use std::thread;
@@ -154,7 +155,7 @@ mod linux {
             trigger: &'a xr::Action<f32>,
             trigger_click: &'a xr::Action<bool>,
             grip: &'a xr::Action<f32>,
-            _grip_click: &'a xr::Action<bool>,
+            grip_click: &'a xr::Action<bool>,
             stick: &'a xr::Action<xr::Vector2f>,
             primary: &'a xr::Action<bool>,
             secondary: &'a xr::Action<bool>,
@@ -400,7 +401,7 @@ mod linux {
     struct GlxContext {
         display: *mut xlib::Display,
         fb_config: glx::GLXFBConfig,
-        visualid: u32,
+        visualid: u64,
         drawable: glx::GLXDrawable,
         context: glx::GLXContext,
     }
@@ -701,12 +702,12 @@ mod linux {
 
             let physical_device = unsafe {
                 xr_instance
-                    .vulkan_graphics_device(system, instance.handle().as_raw())
+                    .vulkan_graphics_device(system, instance.handle().as_raw() as *const _)
                     .map_err(|e| {
                         VrError::Adapter(format!("OpenXR Vulkan graphics device: {e:?}"))
                     })?
             };
-            let physical_device = vk::PhysicalDevice::from_raw(physical_device);
+            let physical_device = vk::PhysicalDevice::from_raw(physical_device as u64);
 
             let queue_family_index = find_graphics_queue_family(&instance, physical_device)?;
 
@@ -1130,37 +1131,37 @@ mod linux {
         (fallback, name, srgb)
     }
 
-    fn describe_vk_swapchain_format(format: i64) -> (&'static str, bool) {
-        if format == vk::Format::R8G8B8A8_UNORM.as_raw() as i64 {
+    fn describe_vk_swapchain_format(format: u32) -> (&'static str, bool) {
+        if format == vk::Format::R8G8B8A8_UNORM.as_raw() as u32 {
             ("VK_FORMAT_R8G8B8A8_UNORM", false)
-        } else if format == vk::Format::B8G8R8A8_UNORM.as_raw() as i64 {
+        } else if format == vk::Format::B8G8R8A8_UNORM.as_raw() as u32 {
             ("VK_FORMAT_B8G8R8A8_UNORM", false)
-        } else if format == vk::Format::R8G8B8A8_SRGB.as_raw() as i64 {
+        } else if format == vk::Format::R8G8B8A8_SRGB.as_raw() as u32 {
             ("VK_FORMAT_R8G8B8A8_SRGB", true)
-        } else if format == vk::Format::B8G8R8A8_SRGB.as_raw() as i64 {
+        } else if format == vk::Format::B8G8R8A8_SRGB.as_raw() as u32 {
             ("VK_FORMAT_B8G8R8A8_SRGB", true)
         } else {
             ("UNKNOWN_VK_FORMAT", false)
         }
     }
 
-    fn choose_vk_swapchain_format(formats: &[i64]) -> (i64, &'static str, bool) {
+    fn choose_vk_swapchain_format(formats: &[u32]) -> (i64, &'static str, bool) {
         let preferred = [
-            vk::Format::R8G8B8A8_UNORM.as_raw() as i64,
-            vk::Format::B8G8R8A8_UNORM.as_raw() as i64,
-            vk::Format::R8G8B8A8_SRGB.as_raw() as i64,
-            vk::Format::B8G8R8A8_SRGB.as_raw() as i64,
+            vk::Format::R8G8B8A8_UNORM.as_raw() as u32,
+            vk::Format::B8G8R8A8_UNORM.as_raw() as u32,
+            vk::Format::R8G8B8A8_SRGB.as_raw() as u32,
+            vk::Format::B8G8R8A8_SRGB.as_raw() as u32,
         ];
-        if let Some(format) = preferred.iter().copied().find(|fmt| formats.contains(fmt)) {
+        if let Some(format) = preferred.iter().copied().find(|&fmt| formats.contains(&fmt)) {
             let (name, srgb) = describe_vk_swapchain_format(format);
-            return (format, name, srgb);
+            return (format as i64, name, srgb);
         }
         let fallback = formats
             .first()
             .copied()
-            .unwrap_or(vk::Format::R8G8B8A8_UNORM.as_raw() as i64);
+            .unwrap_or(vk::Format::R8G8B8A8_UNORM.as_raw() as u32);
         let (name, srgb) = describe_vk_swapchain_format(fallback);
-        (fallback, name, srgb)
+        (fallback as i64, name, srgb)
     }
 
     fn log_swapchain_validation_u32(
@@ -1345,7 +1346,7 @@ mod linux {
         let gl = unsafe {
             glow::Context::from_loader_function(|s| {
                 let s = CString::new(s).unwrap();
-                unsafe { glx::glXGetProcAddress(s.as_ptr() as *const u8) as *const _ }
+                unsafe { std::mem::transmute(glx::glXGetProcAddress(s.as_ptr() as *const u8)) }
             })
         };
         unsafe {
@@ -1382,11 +1383,11 @@ mod linux {
             .map_err(|e| VrError::Adapter(format!("OpenXR system: {e:?}")))?;
 
         let create_info = xr::opengl::SessionCreateInfo::Xlib {
-            x_display: glx.display,
-            visualid: glx.visualid,
-            glx_fb_config: glx.fb_config,
+            x_display: glx.display as *mut _,
+            visualid: glx.visualid as u32,
+            glx_fb_config: glx.fb_config as *mut _,
             glx_drawable: glx.drawable,
-            glx_context: glx.context,
+            glx_context: glx.context as *mut _,
         };
 
         let (session, mut frame_waiter, mut frame_stream) = unsafe {
@@ -1573,7 +1574,7 @@ mod linux {
                         .map_err(|e| VrError::Adapter(format!("OpenXR swapchain images: {e:?}")))?;
                     for tex in imgs0.iter().chain(imgs1.iter()) {
                         unsafe {
-                            gl.bind_texture(glow::TEXTURE_2D, Some(*tex));
+                            gl.bind_texture(glow::TEXTURE_2D, std::mem::transmute(*tex));
                             gl.tex_parameter_i32(
                                 glow::TEXTURE_2D,
                                 glow::TEXTURE_MIN_FILTER,
@@ -1647,7 +1648,7 @@ mod linux {
                         };
                         let copy_height = decoded.height.min(eye_height);
                         unsafe {
-                            gl.bind_texture(glow::TEXTURE_2D, Some(tex));
+                            gl.bind_texture(glow::TEXTURE_2D, std::mem::transmute(tex));
                             gl.pixel_store_i32(glow::UNPACK_ROW_LENGTH, decoded.width as i32);
                             gl.pixel_store_i32(glow::UNPACK_SKIP_PIXELS, src_offset_x as i32);
                             gl.tex_sub_image_2d(
@@ -1689,7 +1690,7 @@ mod linux {
                 let layer = xr::CompositionLayerProjection::new()
                     .space(&reference_space)
                     .views(&layer_views);
-                let layers: [&xr::CompositionLayerBase<xr::OpenGL>; 1] = [&layer.into()];
+                let layers: [&xr::CompositionLayerBase<xr::OpenGL>; 1] = [&layer];
 
                 frame_stream
                     .end(
@@ -1905,11 +1906,11 @@ mod linux {
                         VrError::Adapter(format!("OpenXR swapchain formats: {e:?}"))
                     })?;
                     let (format, format_name, format_srgb) = choose_vk_swapchain_format(&formats);
-                    log_swapchain_validation_i64(
+                    log_swapchain_validation_u32(
                         &instance,
                         "linux-vulkan",
                         &formats,
-                        format,
+                        format as u32,
                         format_name,
                         format_srgb,
                     );
@@ -2038,7 +2039,7 @@ mod linux {
                 let layer = xr::CompositionLayerProjection::new()
                     .space(&reference_space)
                     .views(&layer_views);
-                let layers: [&xr::CompositionLayerBase<xr::Vulkan>; 1] = [&layer.into()];
+                let layers: [&xr::CompositionLayerBase<xr::Vulkan>; 1] = [&layer];
 
                 frame_stream
                     .end(
@@ -2216,7 +2217,7 @@ mod windows {
             trigger: &'a xr::Action<f32>,
             trigger_click: &'a xr::Action<bool>,
             grip: &'a xr::Action<f32>,
-            _grip_click: &'a xr::Action<bool>,
+            grip_click: &'a xr::Action<bool>,
             stick: &'a xr::Action<xr::Vector2f>,
             primary: &'a xr::Action<bool>,
             secondary: &'a xr::Action<bool>,
@@ -3158,7 +3159,7 @@ mod windows {
             let layer = xr::CompositionLayerProjection::new()
                 .space(&reference_space)
                 .views(&layer_views);
-            let layers: [&xr::CompositionLayerBase<xr::D3D11>; 1] = [&layer.into()];
+            let layers: [&xr::CompositionLayerBase<xr::D3D11>; 1] = [&layer];
 
             frame_stream
                 .end(
@@ -3301,7 +3302,7 @@ mod android {
             trigger: &'a xr::Action<f32>,
             trigger_click: &'a xr::Action<bool>,
             grip: &'a xr::Action<f32>,
-            _grip_click: &'a xr::Action<bool>,
+            grip_click: &'a xr::Action<bool>,
             stick: &'a xr::Action<xr::Vector2f>,
             primary: &'a xr::Action<bool>,
             secondary: &'a xr::Action<bool>,
