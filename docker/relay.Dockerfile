@@ -1,18 +1,5 @@
 # syntax=docker/dockerfile:1.7
 
-# 1. Planner stage
-FROM lukemathwalker/cargo-chef:latest-rust-1-bookworm AS planner
-WORKDIR /app
-COPY . .
-RUN cargo chef prepare --recipe-path recipe.json
-
-# 2. Cacher stage
-FROM lukemathwalker/cargo-chef:latest-rust-1-bookworm AS cacher
-WORKDIR /app
-COPY --from=planner /app/recipe.json recipe.json
-RUN cargo chef cook --release --recipe-path recipe.json
-
-# 3. Builder stage
 FROM rust:1-bookworm AS builder
 WORKDIR /app
 
@@ -21,13 +8,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     protobuf-compiler \
     && rm -rf /var/lib/apt/lists/*
 
-COPY . .
-COPY --from=cacher /app/target target
-COPY --from=cacher /usr/local/cargo /usr/local/cargo
+COPY Cargo.toml Cargo.lock ./
+COPY crates ./crates
 
 RUN cargo build --locked --release -p wavry-relay
 
-# 4. Runtime stage
 FROM debian:bookworm-slim AS runtime
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
