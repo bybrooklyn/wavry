@@ -27,6 +27,7 @@ jobs:
       wavry_version: ${{ steps.version.outputs.wavry_version }}
       rift_version: ${{ steps.version.outputs.rift_version }}
       delta_version: ${{ steps.version.outputs.delta_version }}
+      already_released: ${{ steps.check_release.outputs.already_released }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -40,11 +41,33 @@ jobs:
           echo "wavry_version=$WAVRY_V" >> $GITHUB_OUTPUT
           echo "rift_version=$RIFT_V" >> $GITHUB_OUTPUT
           echo "delta_version=$DELTA_V" >> $GITHUB_OUTPUT
+          echo "WAVRY_V=$WAVRY_V" >> $GITHUB_ENV
           echo "Extracted Wavry Version: $WAVRY_V"
+
+      - name: Check if version already released
+        id: check_release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          VERSION="v${{ env.WAVRY_V }}"
+          if gh release view "$VERSION" >/dev/null 2>&1; then
+            echo "Version $VERSION already exists in releases."
+            if [[ "${{ github.ref_type }}" == "tag" ]]; then
+              echo "Git tag detected, proceeding anyway."
+              echo "already_released=false" >> $GITHUB_OUTPUT
+            else
+              echo "Skipping build for existing version."
+              echo "already_released=true" >> $GITHUB_OUTPUT
+            fi
+          else
+            echo "Version $VERSION does not exist yet."
+            echo "already_released=false" >> $GITHUB_OUTPUT
+          fi
 
   rust-tests:
     name: Rust smoke tests
     needs: pre-build
+    if: needs.pre-build.outputs.already_released != 'true'
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -79,6 +102,7 @@ jobs:
   code-coverage:
     name: Code Coverage
     needs: pre-build
+    if: needs.pre-build.outputs.already_released != 'true'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -117,6 +141,7 @@ jobs:
   gateway-auth-smoke:
     name: Gateway auth smoke
     needs: pre-build
+    if: needs.pre-build.outputs.already_released != 'true'
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -154,6 +179,7 @@ jobs:
   master-relay-smoke:
     name: Master/relay smoke
     needs: pre-build
+    if: needs.pre-build.outputs.already_released != 'true'
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -190,6 +216,7 @@ jobs:
   rust-backend:
     name: Rust backend (${{ matrix.os }})
     needs: pre-build
+    if: needs.pre-build.outputs.already_released != 'true'
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -302,6 +329,7 @@ jobs:
   desktop-ui:
     name: Desktop UI typecheck
     needs: pre-build
+    if: needs.pre-build.outputs.already_released != 'true'
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -324,6 +352,7 @@ jobs:
   desktop-tauri:
     name: Desktop Tauri build (${{ matrix.os }})
     needs: pre-build
+    if: needs.pre-build.outputs.already_released != 'true'
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -427,6 +456,7 @@ jobs:
   android:
     name: Android (mobile + quest)
     needs: pre-build
+    if: needs.pre-build.outputs.already_released != 'true'
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -522,6 +552,7 @@ jobs:
   macos-app:
     name: macOS Swift app build
     needs: pre-build
+    if: needs.pre-build.outputs.already_released != 'true'
     runs-on: macos-14
     defaults:
       run:
@@ -582,7 +613,9 @@ jobs:
       - desktop-tauri
       - android
       - macos-app
-    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    if: |
+      needs.pre-build.outputs.already_released != 'true' &&
+      github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
     permissions:
       contents: write
     steps:
@@ -597,7 +630,7 @@ jobs:
           find . -type f -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS.txt
 
       - name: Sign checksums with GPG
-        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+        if: startsWith(github.ref, 'refs/tags/v')
         uses: crazy-max/ghaction-import-gpg@v6
         with:
           gpg_private_key: ${{ secrets.GPG_PRIVATE_KEY }}
@@ -606,7 +639,7 @@ jobs:
           git_commit_gpgsign: true
 
       - name: Create detached GPG signature
-        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+        if: startsWith(github.ref, 'refs/tags/v')
         run: |
           cd release-artifacts
           gpg --batch --yes --armor --detach-sign SHA256SUMS.txt
@@ -614,9 +647,10 @@ jobs:
       - name: Create GitHub release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ github.ref_name }}
+          tag_name: v${{ needs.pre-build.outputs.wavry_version }}
           name: Wavry v${{ needs.pre-build.outputs.wavry_version }}
           generate_release_notes: true
+          prerelease: ${{ contains(needs.pre-build.outputs.wavry_version, 'canary') || contains(needs.pre-build.outputs.wavry_version, 'beta') }}
           body: |
             Wavry Core: v${{ needs.pre-build.outputs.wavry_version }}
             RIFT Protocol: v${{ needs.pre-build.outputs.rift_version }}

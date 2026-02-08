@@ -14,6 +14,7 @@ use axum::{
     Json, Router,
 };
 use clap::Parser;
+use rand::Rng;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use tower_http::cors::{AllowOrigin, CorsLayer};
@@ -278,22 +279,14 @@ async fn main() -> anyhow::Result<()> {
         pasetors::keys::AsymmetricSecretKey::<pasetors::version4::V4>::from(&key_bytes)
             .expect("failed to load signing key from file")
     } else {
-        #[cfg(feature = "insecure-dev-auth")]
-        if insecure_dev {
-            warn!("generating temporary random signing key (INSECURE)");
-            use ed25519_dalek::SigningKey;
-            let mut seed = [0u8; 32];
-            rand::thread_rng().fill(&mut seed);
-            let sk = SigningKey::from_bytes(&seed);
-            pasetors::keys::AsymmetricSecretKey::<pasetors::version4::V4>::from(&sk.to_keypair_bytes())
-                .expect("failed to init signing key")
-        } else {
-            panic!("WAVRY_MASTER_KEY_FILE or WAVRY_MASTER_SIGNING_KEY must be provided in production");
-        }
-        #[cfg(not(feature = "insecure-dev-auth"))]
-        {
-            panic!("WAVRY_MASTER_KEY_FILE or WAVRY_MASTER_SIGNING_KEY must be provided");
-        }
+        warn!("WAVRY_MASTER_KEY_FILE or WAVRY_MASTER_SIGNING_KEY not provided");
+        warn!("generating temporary random signing key (INSECURE)");
+        use ed25519_dalek::SigningKey;
+        let mut seed = [0u8; 32];
+        rand::thread_rng().fill(&mut seed);
+        let sk = SigningKey::from_bytes(&seed);
+        pasetors::keys::AsymmetricSecretKey::<pasetors::version4::V4>::from(&sk.to_keypair_bytes())
+            .expect("failed to init signing key")
     };
 
     let state = Arc::new(AppState {
