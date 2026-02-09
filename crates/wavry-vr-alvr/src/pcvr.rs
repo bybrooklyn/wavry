@@ -1145,7 +1145,7 @@ mod linux {
         }
     }
 
-    fn choose_vk_swapchain_format(formats: &[u32]) -> (i64, &'static str, bool) {
+    fn choose_vk_swapchain_format(formats: &[u32]) -> (u32, &'static str, bool) {
         let preferred = [
             vk::Format::R8G8B8A8_UNORM.as_raw() as u32,
             vk::Format::B8G8R8A8_UNORM.as_raw() as u32,
@@ -1154,14 +1154,14 @@ mod linux {
         ];
         if let Some(format) = preferred.iter().copied().find(|&fmt| formats.contains(&fmt)) {
             let (name, srgb) = describe_vk_swapchain_format(format);
-            return (format as i64, name, srgb);
+            return (format, name, srgb);
         }
         let fallback = formats
             .first()
             .copied()
             .unwrap_or(vk::Format::R8G8B8A8_UNORM.as_raw() as u32);
         let (name, srgb) = describe_vk_swapchain_format(fallback);
-        (fallback as i64, name, srgb)
+        (fallback, name, srgb)
     }
 
     fn log_swapchain_validation_u32(
@@ -1672,13 +1672,15 @@ mod linux {
                         .map_err(|e| VrError::Adapter(format!("OpenXR release: {e:?}")))?;
 
                     if views.len() > i {
-                        let sub_image = xr::SwapchainSubImage {
-                            swapchain: &swapchains[i],
-                            image_rect: xr::Rect2Di {
-                                offset: xr::Offset2Di { x: 0, y: 0 },
-                                extent: xr::Extent2Di { width, height },
-                            },
-                            image_array_index: 0,
+                        let sub_image = unsafe {
+                            xr::SwapchainSubImage::from_raw(xr::sys::SwapchainSubImage {
+                                swapchain: swapchains[i].as_raw(),
+                                image_rect: xr::Rect2Di {
+                                    offset: xr::Offset2Di { x: 0, y: 0 },
+                                    extent: xr::Extent2Di { width, height },
+                                },
+                                image_array_index: 0,
+                            })
                         };
                         layer_views[i] = xr::CompositionLayerProjectionView::new()
                             .pose(views[i].pose)
@@ -1910,7 +1912,7 @@ mod linux {
                         &instance,
                         "linux-vulkan",
                         &formats,
-                        format as u32,
+                        format,
                         format_name,
                         format_srgb,
                     );
@@ -2021,13 +2023,15 @@ mod linux {
                         .map_err(|e| VrError::Adapter(format!("OpenXR release: {e:?}")))?;
 
                     if views.len() > i {
-                        let sub_image = xr::SwapchainSubImage {
-                            swapchain: &swapchains[i],
-                            image_rect: xr::Rect2Di {
-                                offset: xr::Offset2Di { x: 0, y: 0 },
-                                extent: xr::Extent2Di { width, height },
-                            },
-                            image_array_index: 0,
+                        let sub_image = unsafe {
+                            xr::SwapchainSubImage::from_raw(xr::sys::SwapchainSubImage {
+                                swapchain: swapchains[i].as_raw(),
+                                image_rect: xr::Rect2Di {
+                                    offset: xr::Offset2Di { x: 0, y: 0 },
+                                    extent: xr::Extent2Di { width, height },
+                                },
+                                image_array_index: 0,
+                            })
                         };
                         layer_views[i] = xr::CompositionLayerProjectionView::new()
                             .pose(views[i].pose)
@@ -3140,13 +3144,15 @@ mod windows {
                         .map_err(|e| VrError::Adapter(format!("OpenXR release: {e:?}")))?;
 
                     if views.len() > i {
-                        let sub_image = xr::SwapchainSubImage {
-                            swapchain: &swapchains[i],
-                            image_rect: xr::Rect2Di {
-                                offset: xr::Offset2Di { x: 0, y: 0 },
-                                extent: xr::Extent2Di { width, height },
-                            },
-                            image_array_index: 0,
+                        let sub_image = unsafe {
+                            xr::SwapchainSubImage::from_raw(xr::sys::SwapchainSubImage {
+                                swapchain: swapchains[i].as_raw(),
+                                image_rect: xr::Rect2Di {
+                                    offset: xr::Offset2Di { x: 0, y: 0 },
+                                    extent: xr::Extent2Di { width, height },
+                                },
+                                image_array_index: 0,
+                            })
                         };
                         layer_views[i] = xr::CompositionLayerProjectionView::new()
                             .pose(views[i].pose)

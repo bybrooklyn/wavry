@@ -1,9 +1,15 @@
 # Wavry Security & Operations — Design Specification v1.0
 
 **Status:** Current  
-**Last Updated:** 2026-02-07
+**Last Updated:** 2026-02-09  
+**Implementation Note:** This document describes the **target security architecture**. Current implementation status:
+- ✅ End-to-end encryption via Noise XX (fully implemented)
+- ✅ Basic relay forwarding with session validation
+- 🚧 Advanced lease system with PASETO (partial - simpler token model in use)
+- 🚧 Kill switches and automated responses (admin manual only)
+- 🚧 Advanced Sybil detection (not yet implemented)
 
-This document defines the threat model, security mitigations, operational procedures, and privacy posture for Wavry's public volunteer relay network.
+This document defines the threat model, security mitigations, operational procedures, and privacy posture for Wavry's relay network.
 
 ---
 

@@ -20,7 +20,7 @@ log = "0.4"
 gstreamer = "0.22"
 gstreamer-app = "0.22"
 glow = "0.12"
-x11 = "2.21"
+x11 = { version = "2.21", features = ["xlib", "glx"] }
 ash = "0.37"
 
 [target.'cfg(target_os = "android")'.dependencies]

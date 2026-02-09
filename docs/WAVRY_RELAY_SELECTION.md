@@ -1,8 +1,9 @@
 # Wavry Relay Selection & Reputation — Design Specification v0.1
 
-**Status:** Draft — Pending Review
+**Status:** Draft — Design Specification  
+**Implementation Note:** This document describes a **target design** for relay selection and reputation. The current implementation uses a simpler relay coordination model. Advanced features (scoring algorithms, probation states, probe protocol, Sybil detection) are planned for future releases.
 
-This document defines how Wavry Master selects relays for session establishment and how it maintains a trust model for public volunteer relays.
+This document defines how Wavry Gateway selects relays for session establishment and how it maintains a trust model for public volunteer relays.
 
 ---
 

@@ -178,8 +178,8 @@ For detailed security specifications, see [WAVRY_SECURITY.md](WAVRY_SECURITY.md)
 | Linux (Wayland) | ✅ Primary | PipeWire | VA-API/NVENC | VA-API | uinput/evdev |
 | Linux (X11) | ✅ Supported | PipeWire | VA-API/NVENC | VA-API | uinput/evdev |
 | Windows | ✅ Supported | WGC | Media Foundation | Media Foundation | SendInput |
-| macOS | ✅ In Development | ScreenCaptureKit | VideoToolbox | VideoToolbox | CGEvent |
-| Android | 🚧 Planned | MediaProjection | MediaCodec | MediaCodec | Android Input |
+| macOS | ✅ Supported | ScreenCaptureKit | VideoToolbox | VideoToolbox | CGEvent |
+| Android | ✅ Supported | MediaProjection | MediaCodec | MediaCodec | Android Input |
 | Quest/VR | 🚧 Planned | OpenXR | NDK Media | NDK Media | OpenXR Input |
 
 Legend: ✅ Available | 🚧 In Development | ❌ Not Supported

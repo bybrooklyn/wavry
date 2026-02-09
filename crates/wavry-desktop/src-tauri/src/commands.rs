@@ -515,7 +515,8 @@ pub async fn start_host(port: u16, display_id: Option<u32>) -> Result<String, St
     use std::sync::Arc;
     use std::thread;
     use wavry_client::signaling::{SignalMessage, SignalingClient};
-    use wavry_media::{EncodeConfig, Resolution};
+    use crate::state::SessionState;
+    use wavry_media::{Codec, EncodeConfig, Resolution};
 
     {
         let state = SESSION_STATE.lock().unwrap();
@@ -550,6 +551,8 @@ pub async fn start_host(port: u16, display_id: Option<u32>) -> Result<String, St
         bitrate_kbps: 8000,
         keyframe_interval_ms: 2000,
         display_id,
+        enable_10bit: false,
+        enable_hdr: false,
     };
 
     let video_encoder = PipewireEncoder::new(config)

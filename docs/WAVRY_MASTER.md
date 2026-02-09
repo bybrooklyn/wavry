@@ -1,14 +1,15 @@
-# Wavry Master — Design Specification v0.1
+# Wavry Gateway — Design Specification
 
-**Status:** Draft — Pending Review
+**Status:** Current  
+**Last Updated:** 2026-02-09
 
-Wavry Master is the central coordination service for identity, relay registration, lease issuance, and session matchmaking. It is a **directory + decision engine**, not a transport—Master never sees stream data.
+Wavry Gateway is the central coordination service for authentication, session signaling, relay coordination, and WebRTC bridge support. It is a **signaling + auth service**, not a transport—Gateway never sees encrypted stream data.
 
 ---
 
 ## Production Endpoint
 
-The production instance of Wavry Master (Auth/Matchmaker) is available at:
+The production instance of Wavry Gateway is available at:  
 **`https://auth.wavry.dev`**
 
 Clients should default to this URL for all signaling, unless manually overridden for development.
@@ -19,805 +20,415 @@ Clients should default to this URL for all signaling, unless manually overridden
 
 | Principle | Rationale |
 |-----------|-----------|
-| **Master is blind** | Never proxies or inspects media; only issues credentials |
+| **Gateway is blind** | Never proxies or inspects media; only coordinates connections |
 | **P2P by default** | Relays are optional fallbacks, not the primary path |
-| **Short-lived leases** | Minimize blast radius; leases expire in minutes |
-| **Ed25519 everywhere** | Single key scheme for users, relays, and leases |
-| **Stateless tokens** | PASETO for session tokens; no server-side session store |
+| **Email-based auth** | Simple email/password with optional TOTP 2FA |
+| **Ephemeral sessions** | Sessions expire after 24 hours; no long-lived tokens |
+| **SQLite simplicity** | Single-file database for easy deployment |
 
 ---
 
 ## 1. Identity System
 
-### 1.1 Wavry ID
+### 1.1 User Registration
 
-A **Wavry ID** is the Base64url-encoded Ed25519 public key (32 bytes → 43 characters).
-
-```
-WavryID = base64url_encode(ed25519_public_key)
-```
-
-### 1.2 Registration Flow
-
-New users register by proving control of their private key:
+New users register with email, password, and profile information:
 
 ```
-Client                                  Master
+Client                                  Gateway
    |                                       |
-   |  POST /v1/auth/register               |
-   |  { wavry_id, display_name }           |
+   |  POST /auth/register                  |
+   |  { email, password, display_name,     |
+   |    username, public_key }             |
    |-------------------------------------->|
    |                                       |
-   |  200 { challenge: bytes32 }           |
-   |<--------------------------------------|
-   |                                       |
-   |  POST /v1/auth/register/verify        |
-   |  { wavry_id, signature(challenge) }   |
-   |-------------------------------------->|
-   |                                       |
-   |  201 { session_token }                |
+   |  201 { user, session, token }         |
    |<--------------------------------------|
 ```
 
-### 1.3 Login Flow
+**Password Security:**
+- Passwords are hashed using **Argon2id** (memory-hard password hashing)
+- Minimum password length enforced
+- Rate limiting on registration attempts
 
-Returning users authenticate via challenge/response:
+### 1.2 Login Flow
+
+Returning users authenticate with email/password and optional TOTP:
 
 ```
-Client                                  Master
+Client                                  Gateway
    |                                       |
-   |  POST /v1/auth/login                  |
-   |  { wavry_id }                         |
+   |  POST /auth/login                     |
+   |  { email, password, totp_code? }      |
    |-------------------------------------->|
    |                                       |
-   |  200 { challenge: bytes32 }           |
-   |<--------------------------------------|
-   |                                       |
-   |  POST /v1/auth/login/verify           |
-   |  { wavry_id, signature(challenge) }   |
-   |-------------------------------------->|
-   |                                       |
-   |  200 { session_token }                |
+   |  200 { user, session, token }         |
+   |  OR 403 { totp_required: true }       |
    |<--------------------------------------|
 ```
 
-### 1.4 Session Token (PASETO v4.local)
+### 1.3 Session Tokens
 
-> **Why PASETO over JWT?**  
-> - No algorithm confusion attacks (fixed Ed25519 for v4.public / XChaCha20-Poly1305 for v4.local)
-> - Authenticated encryption by default
-> - Simpler, safer API
+Sessions are identified by high-entropy random tokens (256-bit):
 
-**Token Claims:**
+- **Token Format:** Hex-encoded 32-byte random value
+- **Storage:** Only SHA-256 hash stored in database (actual token returned to client)
+- **Expiry:** 24 hours from creation
+- **Transport:** Sent via `Authorization: Bearer <token>` header or `X-Session-Token` header
+
+**Session Claims:**
 
 ```json
 {
-  "sub": "<wavry_id>",
-  "iat": 1706969400,
-  "exp": 1706973000,
-  "jti": "<uuid>",
-  "scope": ["user"]
+  "token": "<hex-encoded-random>",
+  "user_id": "<uuid>",
+  "expires_at": "2026-02-10T12:00:00Z",
+  "ip_address": "203.0.113.42",
+  "created_at": "2026-02-09T12:00:00Z"
 }
 ```
 
-| Field | Description |
-|-------|-------------|
-| `sub` | Wavry ID (subject) |
-| `iat` | Issued-at timestamp (Unix seconds) |
-| `exp` | Expiry timestamp (default: 1 hour) |
-| `jti` | Unique token ID for revocation |
-| `scope` | Permission array (`user`, `relay`, `admin`) |
+### 1.4 TOTP Two-Factor Authentication
 
-**Token Refresh:** Clients call `POST /v1/auth/refresh` with a valid (not-yet-expired) token to obtain a new one. The old `jti` is added to a short-lived revocation list.
+Users can optionally enable TOTP-based 2FA:
+
+1. **Setup:** `POST /auth/2fa/setup` → Returns secret + QR code PNG
+2. **Enable:** `POST /auth/2fa/enable` → Verifies code and activates 2FA
+3. **Login:** If 2FA enabled, `totp_code` required in login request
+
+TOTP secrets are encrypted at rest using XChaCha20-Poly1305.
 
 ---
 
-## 2. Relay Registration
+## 2. WebSocket Signaling
 
-Community relays register with Master to join the pool.
-
-### 2.1 Registration Flow
+Clients establish WebSocket connections for real-time session coordination:
 
 ```
-Relay                                   Master
+Client                                  Gateway
    |                                       |
-   |  POST /v1/relays/register             |
-   |  { relay_id, endpoints[], region?,    |
-   |    capacity, features[] }             |
+   |  GET /ws (upgrade)                    |
+   |  Headers: Authorization: Bearer <tok> |
    |-------------------------------------->|
    |                                       |
-   |  200 { challenge: bytes32 }           |
-   |<--------------------------------------|
-   |                                       |
-   |  POST /v1/relays/register/verify      |
-   |  { relay_id, signature(challenge) }   |
-   |-------------------------------------->|
-   |                                       |
-   |  201 { relay_token, heartbeat_url }   |
+   |  101 Switching Protocols              |
    |<--------------------------------------|
 ```
 
-### 2.2 Relay Registration Payload
+**WebSocket Features:**
+- Bidirectional JSON message protocol
+- Heartbeat/ping-pong handling
+- Connection multiplexing (one WS per user, multiple sessions)
+- Automatic cleanup on disconnect
+
+### 2.1 Message Types
+
+**Client → Gateway:**
+
+| Message | Purpose |
+|:--------|:--------|
+| `RegisterHost` | Announce host availability with endpoints |
+| `UnregisterHost` | Remove host from discovery |
+| `ConnectRequest` | Request connection to a host |
+| `IceCandidate` | WebRTC ICE candidate exchange |
+| `Disconnect` | Close session gracefully |
+
+**Gateway → Client:**
+
+| Message | Purpose |
+|:--------|:--------|
+| `HostRegistered` | Confirmation of host registration |
+| `ConnectOffer` | Incoming connection request from client |
+| `ConnectAccept` | Host accepted connection |
+| `ConnectReject` | Host rejected connection |
+| `IceCandidate` | Forwarded ICE candidate |
+| `SessionEnded` | Session terminated |
+| `Error` | Protocol or session error |
+
+---
+
+## 3. WebRTC Bridge
+
+Gateway provides WebRTC configuration and signaling for browser-based clients:
+
+### 3.1 WebRTC Endpoints
+
+| Method | Path | Description |
+|:-------|:-----|:------------|
+| GET | `/webrtc/config` | Get ICE servers and config |
+| POST | `/webrtc/offer` | Submit SDP offer |
+| POST | `/webrtc/answer` | Submit SDP answer |
+| POST | `/webrtc/candidate` | Exchange ICE candidates |
+
+### 3.2 WebRTC Flow
+
+```
+Browser Client                          Gateway
+     |                                     |
+     |  GET /webrtc/config                 |
+     |------------------------------------>|
+     |  { ice_servers: [...] }             |
+     |<------------------------------------|
+     |                                     |
+     |  POST /webrtc/offer                 |
+     |  { sdp, session_id }                |
+     |------------------------------------>|
+     |                                     |
+     |  (Signaling via WebSocket to Host)  |
+     |                                     |
+     |  POST /webrtc/answer (from Host)    |
+     |<------------------------------------|
+```
+
+---
+
+## 4. Relay Coordination
+
+Gateway coordinates with external relay nodes for NAT traversal:
+
+### 4.1 Relay Reporting
+
+Relays report their status and client feedback:
+
+| Method | Path | Auth | Description |
+|:-------|:-----|:-----|:------------|
+| POST | `/v1/relays/report` | None | Report relay session quality |
+| GET | `/v1/relays/reputation` | None | Get relay reputation scores |
+
+### 4.2 Relay Report Format
 
 ```json
 {
-  "relay_id": "<base64url ed25519 pubkey>",
-  "endpoints": [
-    { "ip": "203.0.113.42", "port": 4000, "proto": "udp" },
-    { "ip": "2001:db8::1", "port": 4000, "proto": "udp" }
-  ],
-  "region": "us-east-1",
-  "asn": 15169,
-  "max_sessions": 100,
-  "max_bitrate_kbps": 20000,
-  "features": ["udp", "ipv6", "fec"]
+  "relay_id": "<relay-identifier>",
+  "session_id": "<session-uuid>",
+  "quality_score": 95,
+  "bytes_transferred": 10485760,
+  "duration_secs": 300,
+  "issues": ["packet_loss", "latency_spike"]
 }
 ```
-
-> **Minimum Requirements:** All relays must support at least **10,000 kbps (10 Mbps)**. Registration will be rejected if `max_bitrate_kbps` is below this threshold.
-
-### 2.3 Heartbeat Protocol
-
-Relays send periodic heartbeats (every 30s) to maintain registration:
-
-```
-POST /v1/relays/heartbeat
-Authorization: Bearer <relay_token>
-
-{
-  "relay_id": "<id>",
-  "active_sessions": 12,
-  "bandwidth_mbps": 450,
-  "uptime_secs": 86400
-}
-```
-
-**Failure:** Missing 3 consecutive heartbeats marks the relay as `unhealthy`. After 5 minutes without heartbeat, relay is removed from active pool.
 
 ---
 
-## 3. Admin & Operations
+## 5. Admin Operations
 
-### 3.1 Relay Management
+Admin panel available at `/admin` for system management:
 
-Admins can update relay states (e.g., from `New` to `Active`) via the admin API.
+### 5.1 Admin Endpoints
 
-| Method | Path | Auth | Description |
-|--------|------|------|-------------|
-| POST | `/admin/api/relays/update_state` | Admin | Update relay state |
-| GET | `/v1/relays` | Token | List relays (includes state) |
+| Method | Path | Description |
+|:-------|:-----|:------------|
+| GET | `/admin` | Admin panel HTML interface |
+| GET | `/admin/api/overview` | System overview stats |
+| POST | `/admin/api/sessions/revoke` | Revoke user session |
+| POST | `/admin/api/ban` | Ban user by email |
+| POST | `/admin/api/unban` | Remove user ban |
 
-**Relay States:**
-- `New`: Default state. Multiplier 0.0 (inactive).
-- `Probation`: Trial state. Multiplier 0.5 with exploration bonus.
-- `Active`: Production state. Multiplier 1.0.
-- `Degraded`: Performance issues detected. Multiplier 0.3.
-- `Banned`: Manually disabled. Multiplier 0.0.
+### 5.2 Metrics Endpoints
 
-### 3.2 Feedback Loop
-
-Clients report session quality at the end of every relay session:
-
-```
-POST /v1/feedback
-{
-  "session_id": "<uuid>",
-  "relay_id": "<id>",
-  "quality_score": 100,
-  "issues": []
-}
-```
-
-Master uses this to calculate a moving average `success_rate` for each relay, which influences the selection algorithm.
-
----
-
-## 4. Lease Issuance
-
-When P2P fails or is blocked, clients request a relay lease.
-
-### 3.1 Lease Request Flow
-
-```
-Client                                  Master
-   |                                       |
-   |  POST /v1/leases/request              |
-   |  { client_id, server_id, region? }    |
-   |-------------------------------------->|
-   |                                       |
-   |  Master selects relay, issues leases  |
-   |                                       |
-   |  200 { client_lease, server_lease }   |
-   |<--------------------------------------|
-```
-
-Master also pushes `server_lease` to the server via the session's control channel (or the server polls `/v1/leases/pending`).
-
-### 3.2 Relay Lease Token (PASETO v4.public)
-
-Leases are **signed** (not encrypted) so relays can verify them without holding a shared secret.
-
-**Lease Claims:**
-
-```json
-{
-  "iss": "wavry-master",
-  "sub": "<session_id>",
-  "iat": 1706969400,
-  "exp": 1706969700,
-  "nbf": 1706969400,
-  "jti": "<lease_uuid>",
-  "relay_id": "<relay pubkey>",
-  "relay_endpoint": "203.0.113.42:4000",
-  "peers": ["<client_wavry_id>", "<server_wavry_id>"],
-  "allowed_ports": [4000, 4001],
-  "rate_limit": {
-    "soft_mbps": 50,
-    "hard_mbps": 100
-  },
-  "nonce": "<random 16 bytes base64>",
-  "seq_window": 1024
-}
-```
-
-| Field | Description |
-|-------|-------------|
-| `iss` | Issuer (always `wavry-master`) |
-| `sub` | Session ID binding this lease |
-| `exp` | Expiry (default: 5 minutes; max: 15 minutes) |
-| `nbf` | Not-before timestamp |
-| `jti` | Unique lease ID |
-| `relay_id` | Target relay's Wavry ID |
-| `relay_endpoint` | IP:port to connect to |
-| `peers` | Allowed peer Wavry IDs (exactly 2) |
-| `allowed_ports` | Ports the relay should forward |
-| `rate_limit` | Soft/hard throughput caps |
-| `nonce` | Replay protection seed |
-| `seq_window` | Sequence number window size |
-
-### 3.3 Relay Validation Rules
-
-Relays **must**:
-1. Verify signature against Master's well-known public key
-2. Reject expired leases (`exp < now`)
-3. Reject future leases (`nbf > now + max_clock_skew`)
-4. Verify `relay_id` matches their own identity
-5. Only forward traffic between the two `peers`
-6. Track sequence numbers within `seq_window` to prevent replay
-7. Enforce `rate_limit.hard_mbps` (drop excess)
-
-### 3.4 Lease Renewal
-
-Clients request renewal before expiry:
-
-```
-POST /v1/leases/renew
-Authorization: Bearer <session_token>
-
-{
-  "lease_id": "<jti from current lease>"
-}
-```
-
-Response includes new leases with fresh `exp`, `nonce`, and `jti`. Old `jti` enters a short denial window.
-
----
-
-## 4. Matchmaking
-
-Matchmaking returns connection candidates for a session.
-
-### 4.1 Connect Flow
-
-```
-Client                                  Master
-   |                                       |
-   |  POST /v1/connect                     |
-   |  { server_id }                        |
-   |-------------------------------------->|
-   |                                       |
-   |  200 { session_id, candidates[] }     |
-   |<--------------------------------------|
-```
-
-### 4.2 Candidates Response
-
-```json
-{
-  "session_id": "<uuid>",
-  "server_wavry_id": "<server pubkey>",
-  "candidates": [
-    {
-      "type": "direct",
-      "priority": 1,
-      "endpoints": [
-        { "ip": "192.168.1.100", "port": 4000, "proto": "udp" },
-        { "ip": "203.0.113.50", "port": 4000, "proto": "udp" }
-      ]
-    },
-    {
-      "type": "relay",
-      "priority": 2,
-      "relay_id": "<relay pubkey>",
-      "endpoint": { "ip": "203.0.113.42", "port": 4000, "proto": "udp" },
-      "lease": "<client_lease token (if pre-issued)>"
-    }
-  ],
-  "ice_credentials": {
-    "ufrag": "<short random>",
-    "pwd": "<longer random>"
-  }
-}
-```
-
-**Candidate Selection Logic:**
-1. Always include direct candidates (server-advertised endpoints)
-2. Include relay candidates if:
-   - Server or client request it
-   - Region heuristics suggest NAT traversal issues
-   - Previous direct attempts failed
-3. Order by priority (lower = preferred)
-
----
-
-## 5. API Reference
-
-### 5.1 Auth Endpoints
-
-| Method | Path | Auth | Description |
-|--------|------|------|-------------|
-| POST | `/v1/auth/register` | None | Start registration |
-| POST | `/v1/auth/register/verify` | None | Complete registration |
-| POST | `/v1/auth/login` | None | Start login |
-| POST | `/v1/auth/login/verify` | None | Complete login |
-| POST | `/v1/auth/refresh` | Token | Refresh session token |
-| POST | `/v1/auth/logout` | Token | Revoke token |
-
-### 5.2 Relay Endpoints
-
-| Method | Path | Auth | Description |
-|--------|------|------|-------------|
-| POST | `/v1/relays/register` | None | Start relay registration |
-| POST | `/v1/relays/register/verify` | None | Complete relay registration |
-| POST | `/v1/relays/heartbeat` | Relay Token | Send heartbeat |
-| GET | `/v1/relays` | Token | List healthy relays |
-| DELETE | `/v1/relays/{relay_id}` | Admin | Remove relay |
-
-### 5.3 Lease Endpoints
-
-| Method | Path | Auth | Description |
-|--------|------|------|-------------|
-| POST | `/v1/leases/request` | Token | Request relay lease |
-| POST | `/v1/leases/renew` | Token | Renew existing lease |
-| GET | `/v1/leases/pending` | Token | Poll for lease offers |
-
-### 5.4 Session Endpoints
-
-| Method | Path | Auth | Description |
-|--------|------|------|-------------|
-| POST | `/v1/connect` | Token | Initiate connection |
-| POST | `/v1/sessions/{id}/end` | Token | End session |
-| GET | `/v1/sessions` | Token | List user's sessions |
-
-### 5.5 Admin Endpoints
-
-| Method | Path | Auth | Description |
-|--------|------|------|-------------|
-| POST | `/v1/admin/bans` | Admin | Ban user/relay |
-| DELETE | `/v1/admin/bans/{id}` | Admin | Remove ban |
-| GET | `/v1/admin/stats` | Admin | System statistics |
+| Method | Path | Description |
+|:-------|:-----|:------------|
+| GET | `/metrics/runtime` | Active connections and sessions |
+| GET | `/metrics/auth` | Authentication attempt metrics |
 
 ---
 
 ## 6. Data Model
 
-### 6.1 Entity Relationship
+### 6.1 SQLite Schema
 
-```mermaid
-erDiagram
-    USERS ||--o{ SESSIONS : initiates
-    USERS ||--o{ BANS : receives
-    RELAYS ||--o{ LEASES : serves
-    SESSIONS ||--o{ LEASES : uses
-    RELAYS ||--o{ BANS : receives
-
-    USERS {
-        text wavry_id PK
-        text display_name
-        timestamp created_at
-        timestamp last_seen
-        text status
-    }
-
-    RELAYS {
-        text relay_id PK
-        jsonb endpoints
-        text region
-        int asn
-        jsonb capacity
-        jsonb features
-        text status
-        timestamp last_heartbeat
-        timestamp created_at
-    }
-
-    SESSIONS {
-        uuid session_id PK
-        text client_id FK
-        text server_id FK
-        text status
-        timestamp created_at
-        timestamp ended_at
-    }
-
-    LEASES {
-        uuid lease_id PK
-        uuid session_id FK
-        text relay_id FK
-        text client_id FK
-        text server_id FK
-        timestamp issued_at
-        timestamp expires_at
-        jsonb rate_limit
-        text status
-    }
-
-    BANS {
-        uuid ban_id PK
-        text target_type
-        text target_id
-        text reason
-        timestamp created_at
-        timestamp expires_at
-    }
-```
-
-### 6.2 Table Schemas
-
-#### `users`
+#### `users` Table
 
 | Column | Type | Constraints |
-|--------|------|-------------|
-| `wavry_id` | TEXT | PRIMARY KEY |
+|:-------|:-----|:------------|
+| `id` | TEXT | PRIMARY KEY (UUID) |
+| `email` | TEXT | UNIQUE, NOT NULL |
+| `username` | TEXT | UNIQUE, NOT NULL |
+| `password_hash` | TEXT | NOT NULL (Argon2) |
 | `display_name` | TEXT | NOT NULL |
-| `created_at` | TIMESTAMPTZ | DEFAULT now() |
-| `last_seen` | TIMESTAMPTZ | |
-| `status` | TEXT | DEFAULT 'active' |
+| `public_key` | TEXT | Ed25519 public key |
+| `totp_secret` | TEXT | Encrypted TOTP secret |
+| `created_at` | DATETIME | DEFAULT CURRENT_TIMESTAMP |
+| `is_banned` | INTEGER | DEFAULT 0 |
 
-#### `relays`
-
-| Column | Type | Constraints |
-|--------|------|-------------|
-| `relay_id` | TEXT | PRIMARY KEY |
-| `endpoints` | JSONB | NOT NULL |
-| `region` | TEXT | |
-| `asn` | INT | |
-| `capacity` | JSONB | NOT NULL |
-| `features` | JSONB | DEFAULT '[]' |
-| `status` | TEXT | DEFAULT 'pending' |
-| `last_heartbeat` | TIMESTAMPTZ | |
-| `created_at` | TIMESTAMPTZ | DEFAULT now() |
-
-Indexes: `idx_relays_region`, `idx_relays_status`
-
-#### `sessions`
+#### `sessions` Table
 
 | Column | Type | Constraints |
-|--------|------|-------------|
-| `session_id` | UUID | PRIMARY KEY |
-| `client_id` | TEXT | FK → users |
-| `server_id` | TEXT | FK → users |
-| `status` | TEXT | DEFAULT 'pending' |
-| `created_at` | TIMESTAMPTZ | DEFAULT now() |
-| `ended_at` | TIMESTAMPTZ | |
+|:-------|:-----|:------------|
+| `token` | TEXT | PRIMARY KEY (hashed) |
+| `user_id` | TEXT | FOREIGN KEY → users |
+| `expires_at` | DATETIME | NOT NULL |
+| `ip_address` | TEXT | Client IP |
+| `created_at` | DATETIME | DEFAULT CURRENT_TIMESTAMP |
 
-Indexes: `idx_sessions_client`, `idx_sessions_server`, `idx_sessions_status`
-
-#### `leases`
-
-| Column | Type | Constraints |
-|--------|------|-------------|
-| `lease_id` | UUID | PRIMARY KEY |
-| `session_id` | UUID | FK → sessions |
-| `relay_id` | TEXT | FK → relays |
-| `client_id` | TEXT | FK → users |
-| `server_id` | TEXT | FK → users |
-| `issued_at` | TIMESTAMPTZ | DEFAULT now() |
-| `expires_at` | TIMESTAMPTZ | NOT NULL |
-| `rate_limit` | JSONB | |
-| `status` | TEXT | DEFAULT 'active' |
-
-Indexes: `idx_leases_session`, `idx_leases_relay`, `idx_leases_expires`
-
-#### `bans`
-
-| Column | Type | Constraints |
-|--------|------|-------------|
-| `ban_id` | UUID | PRIMARY KEY |
-| `target_type` | TEXT | 'user' or 'relay' |
-| `target_id` | TEXT | NOT NULL |
-| `reason` | TEXT | |
-| `created_at` | TIMESTAMPTZ | DEFAULT now() |
-| `expires_at` | TIMESTAMPTZ | |
-
-Indexes: `idx_bans_target`
-
----
-
-## 7. Failure Modes & Recovery
-
-### 7.1 Challenge Expiry
-
-| Scenario | Behavior |
-|----------|----------|
-| Challenge not verified within 60s | Challenge expires; client must restart |
-| Invalid signature | 401 Unauthorized; no retry limit (keys are cryptographic) |
-
-### 7.2 Token Failures
-
-| Scenario | Behavior |
-|----------|----------|
-| Expired token | 401 with `error: token_expired` → refresh or re-login |
-| Revoked token | 401 with `error: token_revoked` → re-login |
-| Invalid token | 401 with `error: invalid_token` |
-
-### 7.3 Relay Failures
-
-| Scenario | Behavior |
-|----------|----------|
-| Heartbeat timeout | Mark relay `unhealthy` → exclude from selection |
-| Relay unreachable | Client reports failure → Master re-issues lease to different relay |
-| Lease expires mid-session | Client must renew proactively; grace period = 30s |
-
-### 7.4 Lease Renewal Timeline
+### 6.2 Entity Relationships
 
 ```
-|------ Lease (5 min) ------|
-|           80%             |  ← Client should renew here
-|                    100%   |  ← Expires
-|                      +30s |  ← Grace period (relay may still accept)
+┌─────────┐       ┌──────────┐
+│  users  │◄──────┤ sessions │
+└─────────┘ 1:M   └──────────┘
 ```
 
-Clients receive `Lease-Expires` header with each response; they should renew at ~80% lifetime.
+---
 
-### 7.5 Session Recovery
+## 7. Security Considerations
 
-| Scenario | Behavior |
-|----------|----------|
-| Direct connection fails | Client falls back to relay candidate |
-| Relay connection fails | Master issues new lease to alternate relay |
-| All candidates exhausted | Session fails; client must retry `/v1/connect` |
+### 7.1 Password Security
+
+- **Algorithm:** Argon2id (winner of Password Hashing Competition)
+- **Parameters:** Configurable memory, iterations, parallelism
+- **Storage:** Never store plaintext passwords
+
+### 7.2 Session Security
+
+- **Token Entropy:** 256-bit random values
+- **Hash Storage:** SHA-256 hash stored, original token only in client memory
+- **Expiry:** 24-hour maximum lifetime
+- **Revocation:** Immediate via admin API
+- **Binding:** Optional IP address binding for additional security
+
+### 7.3 Rate Limiting
+
+Fixed-window rate limiting on authentication endpoints:
+
+- **Registration:** 5 attempts per 15 minutes per IP
+- **Login:** 10 attempts per 5 minutes per IP
+- **WebRTC:** 20 requests per minute per IP
+
+### 7.4 CORS Policy
+
+Configurable allowed origins via environment:
+- Default allows localhost development origins
+- Production requires explicit origin whitelist
+- Credentials (cookies/auth headers) allowed
+
+### 7.5 TOTP Security
+
+- **Algorithm:** SHA-1 (30-second windows, 6 digits)
+- **Storage:** Encrypted with XChaCha20-Poly1305
+- **Backup:** No backup codes (account recovery via admin)
 
 ---
 
-## 8. Security Considerations
+## 8. API Reference
 
-### 8.1 Preventing Forged Relays
+### 8.1 Authentication Endpoints
 
-1. **Identity verification:** Relays must prove Ed25519 key ownership via challenge/response
-2. **Endpoint validation:** Master can optionally probe advertised endpoints
-3. **Reputation tracking:** Failed relay reports degrade trust score
-4. **Ban mechanism:** Malicious relays are banned by admin; `bans` table enforced on all flows
+| Method | Path | Auth | Description |
+|:-------|:-----|:-----|:------------|
+| POST | `/auth/register` | None | Create new account |
+| POST | `/auth/login` | None | Authenticate |
+| POST | `/auth/logout` | Bearer | Revoke session |
+| POST | `/auth/2fa/setup` | Bearer | Generate TOTP secret |
+| POST | `/auth/2fa/enable` | Bearer | Activate TOTP |
 
-### 8.2 Preventing Lease Reuse
+### 8.2 Signaling Endpoints
 
-1. **Unique `jti`:** Each lease has a unique ID tracked by the relay
-2. **Strict expiry:** Relays reject any lease where `exp < now`
-3. **Peer binding:** Lease is only valid for the two specified `peers`
-4. **Session binding:** Lease is tied to a specific `session_id`
+| Method | Path | Auth | Description |
+|:-------|:-----|:-----|:------------|
+| GET | `/ws` | Bearer | WebSocket upgrade |
 
-### 8.3 Replay Prevention
+### 8.3 WebRTC Endpoints
 
-1. **Nonce in lease:** Each lease includes a unique `nonce`
-2. **Sequence window:** Relays track packet sequence numbers per session
-3. **Window violation:** Packets outside `seq_window` are dropped
-4. **Challenge freshness:** Auth challenges expire after 60s and are single-use
+| Method | Path | Auth | Description |
+|:-------|:-----|:-----|:------------|
+| GET | `/webrtc/config` | None | ICE server configuration |
+| POST | `/webrtc/offer` | Bearer | Submit SDP offer |
+| POST | `/webrtc/answer` | Bearer | Submit SDP answer |
+| POST | `/webrtc/candidate` | Bearer | ICE candidate exchange |
 
-### 8.4 Cryptographic Choices
+### 8.4 Health & Monitoring
 
-| Component | Algorithm | Library (Rust) |
-|-----------|-----------|----------------|
-| Identity keys | Ed25519 | `ed25519-dalek` |
-| Session tokens | PASETO v4.local | `rusty_paseto` |
-| Lease tokens | PASETO v4.public | `rusty_paseto` |
-| Challenge generation | CSPRNG 32 bytes | `rand` |
-| Token IDs | UUID v4 | `uuid` |
-
-### 8.5 Key Management
-
-| Key | Location | Rotation |
-|-----|----------|----------|
-| Master signing key | HSM / Secrets Manager | Yearly (publish new + old for overlap) |
-| Master encryption key (tokens) | Secrets Manager | Quarterly |
-| User keys | User-managed | Never (identity = key) |
-| Relay keys | Relay-managed | Operator discretion |
+| Method | Path | Auth | Description |
+|:-------|:-----|:-----|:------------|
+| GET | `/` | None | Health check (returns "Wavry Gateway Online") |
+| GET | `/health` | None | Runtime metrics |
 
 ---
 
-## 9. API Response Formats
-
-### 9.1 Success Response
+## 9. Error Response Format
 
 ```json
 {
-  "data": { ... },
-  "meta": {
-    "request_id": "<uuid>"
-  }
+  "error": "invalid_credentials",
+  "message": "Email or password is incorrect"
 }
 ```
 
-### 9.2 Error Response
-
-```json
-{
-  "error": {
-    "code": "token_expired",
-    "message": "Session token has expired",
-    "details": {}
-  },
-  "meta": {
-    "request_id": "<uuid>"
-  }
-}
-```
-
-### 9.3 Standard Error Codes
+### 9.1 Standard Error Codes
 
 | Code | HTTP Status | Description |
-|------|-------------|-------------|
+|:-----|:------------|:------------|
 | `invalid_request` | 400 | Malformed request body |
-| `challenge_expired` | 400 | Auth challenge timed out |
-| `invalid_signature` | 401 | Ed25519 signature verification failed |
-| `token_expired` | 401 | Session/relay token expired |
-| `token_revoked` | 401 | Token has been revoked |
-| `unauthorized` | 401 | Missing or invalid auth |
+| `invalid_credentials` | 401 | Wrong email/password |
+| `totp_required` | 403 | 2FA code required |
+| `invalid_totp` | 401 | Wrong TOTP code |
+| `unauthorized` | 401 | Missing or invalid token |
 | `forbidden` | 403 | Insufficient permissions |
-| `not_found` | 404 | Resource not found |
-| `user_banned` | 403 | User is banned |
-| `relay_banned` | 403 | Relay is banned |
+| `user_banned` | 403 | Account suspended |
 | `rate_limited` | 429 | Too many requests |
-| `no_relays_available` | 503 | No healthy relays in region |
 | `internal_error` | 500 | Server error |
 
 ---
 
-## 10. Rust Implementation Notes
+## 10. Environment Configuration
 
-### 10.1 Recommended Crates
+| Variable | Default | Description |
+|:---------|:--------|:------------|
+| `WAVRY_GATEWAY_BIND_ADDR` | `0.0.0.0:3000` | HTTP server bind address |
+| `WAVRY_GATEWAY_RELAY_PORT` | `0` | UDP relay port (0 = random) |
+| `DATABASE_URL` | `sqlite:gateway.db` | SQLite database path |
+| `RUST_LOG` | `wavry_gateway=info` | Logging level |
+| `WAVRY_ALLOW_PUBLIC_BIND` | `false` | Allow non-loopback binding |
+| `WAVRY_RELAY_SESSION_TTL_SECS` | `300` | Relay session lifetime |
+| `WAVRY_RELAY_SESSION_LIMIT` | `4096` | Max relay sessions |
+| `WAVRY_ENABLE_INSECURE_WEBTRANSPORT_RUNTIME` | `false` | Enable WebTransport (dev only) |
+| `CORS_ORIGINS` | (localhost defaults) | Allowed CORS origins |
+
+---
+
+## 11. Rust Implementation
+
+### 11.1 Crate Structure
+
+```
+crates/wavry-gateway/
+├── Cargo.toml
+├── migrations/
+│   └── *.sql
+└── src/
+    ├── main.rs           # Entry point, axum router
+    ├── lib.rs            # Module exports
+    ├── auth.rs           # /auth/* endpoints
+    ├── db.rs             # Database operations
+    ├── security.rs       # Crypto, rate limiting, CORS
+    ├── signal.rs         # WebSocket signaling
+    ├── web.rs            # WebRTC bridge endpoints
+    ├── relay.rs          # UDP relay coordination
+    └── admin.rs          # Admin panel and API
+```
+
+### 11.2 Dependencies
 
 ```toml
 [dependencies]
 axum = "0.7"                    # HTTP framework
 tokio = { version = "1", features = ["full"] }
-sqlx = { version = "0.8", features = ["postgres", "runtime-tokio", "uuid", "chrono"] }
-ed25519-dalek = "2"             # Ed25519 signatures
-rusty_paseto = "0.6"            # PASETO tokens
-uuid = { version = "1", features = ["v4", "serde"] }
+sqlx = { version = "0.8", features = ["sqlite", "runtime-tokio"] }
+argon2 = "0.5"                  # Password hashing
+totp-rs = "5"                   # TOTP generation/verification
+chacha20poly1305 = "0.10"       # TOTP secret encryption
+uuid = { version = "1", features = ["v4"] }
 serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-rand = "0.8"                    # CSPRNG
-chrono = { version = "0.4", features = ["serde"] }
 tracing = "0.1"
-thiserror = "1"
-```
-
-### 10.2 Binary Structure
-
-```
-bins/
-└── wavry-master/
-    ├── Cargo.toml
-    └── src/
-        ├── main.rs           # Entry point
-        ├── config.rs         # Configuration
-        ├── api/
-        │   ├── mod.rs
-        │   ├── auth.rs       # /v1/auth/*
-        │   ├── relays.rs     # /v1/relays/*
-        │   ├── leases.rs     # /v1/leases/*
-        │   ├── sessions.rs   # /v1/connect, /v1/sessions/*
-        │   └── admin.rs      # /v1/admin/*
-        ├── services/
-        │   ├── mod.rs
-        │   ├── identity.rs   # Challenge/response, token issuance
-        │   ├── relay_pool.rs # Relay selection, health tracking
-        │   ├── lease.rs      # Lease generation/validation
-        │   └── matchmaker.rs # Connection candidate assembly
-        ├── db/
-        │   ├── mod.rs
-        │   ├── users.rs
-        │   ├── relays.rs
-        │   ├── sessions.rs
-        │   ├── leases.rs
-        │   └── bans.rs
-        └── error.rs          # Error types
 ```
 
 ---
 
-## 11. Future Considerations
+## Related Documents
 
-Out of scope for v0.1: these may require revision:
-
-- **Federation:** Multiple Master instances with shared state
-- **Paid relays:** Billing integration for premium relay tiers
-- **WebRTC interop:** STUN/TURN compatibility layer
-- **Mobile push:** Notifying mobile clients of incoming sessions
-
----
-
-## Appendix A: Full Request/Response Examples
-
-### A.1 User Registration
-
-**Request:**
-```http
-POST /v1/auth/register HTTP/1.1
-Content-Type: application/json
-
-{
-  "wavry_id": "SGVsbG8gV29ybGQhIFRoaXMgaXMgYSB0ZXN0",
-  "display_name": "alice"
-}
-```
-
-**Response:**
-```http
-HTTP/1.1 200 OK
-Content-Type: application/json
-
-{
-  "data": {
-    "challenge": "dGhpcyBpcyBhIDMyLWJ5dGUgY2hhbGxlbmdlLi4u"
-  },
-  "meta": {
-    "request_id": "550e8400-e29b-41d4-a716-446655440000"
-  }
-}
-```
-
-### A.2 Lease Token Example
-
-```
-v4.public.eyJpc3MiOiJ3YXZyeS1tYXN0ZXIiLCJzdWIiOiI1NTBlODQwMC1lMjliLTQxZDQtYTcxNi00NDY2NTU0NDAwMDAiLCJpYXQiOjE3MDY5Njk0MDAsImV4cCI6MTcwNjk2OTcwMCwibmJmIjoxNzA2OTY5NDAwLCJqdGkiOiI2NjBlODQwMC1lMjliLTQxZDQtYTcxNi00NDY2NTU0NDAwMDAiLCJyZWxheV9pZCI6IlJlbGF5UHViS2V5QmFzZTY0IiwicmVsYXlfZW5kcG9pbnQiOiIyMDMuMC4xMTMuNDI6NDAwMCIsInBlZXJzIjpbIkNsaWVudElkIiwiU2VydmVySWQiXSwiYWxsb3dlZF9wb3J0cyI6WzQwMDAsNDAwMV0sInJhdGVfbGltaXQiOnsic29mdF9tYnBzIjo1MCwiaGFyZF9tYnBzIjoxMDB9LCJub25jZSI6IlJhbmRvbU5vbmNlQmFzZTY0Iiwic2VxX3dpbmRvdyI6MTAyNH0.signature
-```
-
----
-
-## Appendix B: Sequence Diagrams
-
-### B.1 Full Session Establishment
-
-```mermaid
-sequenceDiagram
-    participant C as Client
-    participant M as Master
-    participant S as Server
-    participant R as Relay
-
-    C->>M: POST /v1/connect {server_id}
-    M->>M: Lookup server endpoints
-    M->>M: Select relay (if needed)
-    M-->>C: {session_id, candidates[direct, relay]}
-    
-    alt Direct succeeds
-        C->>S: RIFT_HELLO (direct UDP)
-        S-->>C: RIFT_HELLO_ACK
-    else Direct fails, use relay
-        C->>M: POST /v1/leases/request
-        M->>M: Generate lease tokens
-        M-->>C: {client_lease, server_lease}
-        M-->>S: Push server_lease (or S polls)
-        
-        C->>R: Connect + present client_lease
-        R->>R: Validate lease signature
-        S->>R: Connect + present server_lease
-        R->>R: Validate lease signature
-        
-        C->>R: RIFT_HELLO
-        R->>S: Forward (peers matched)
-        S->>R: RIFT_HELLO_ACK
-        R->>C: Forward
-    end
-```
+- [RIFT_SPEC_V1.md](RIFT_SPEC_V1.md) — RIFT protocol specification
+- [WAVRY_ARCHITECTURE.md](WAVRY_ARCHITECTURE.md) — System architecture overview
+- [WAVRY_SECURITY.md](WAVRY_SECURITY.md) — Security model and threat mitigations
+- [WAVRY_RELAY.md](WAVRY_RELAY.md) — Relay node specification
+- [WEB_CLIENT.md](WEB_CLIENT.md) — WebTransport/WebRTC client details

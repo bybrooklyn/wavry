@@ -12,7 +12,7 @@ Wavry is built on the premise that latency is a primary feature, not a secondary
 
 1.  **Input is Sacred**: We process input on high-priority threads that operate independently of video encoding to ensure responsiveness even under heavy system load.
 2.  **Delay-Oriented Control**: Our DELTA congestion control prioritizes queuing delay trends over throughput, maintaining minimal buffers for a near-zero standing queue.
-3.  **Privacy by Design**: Identity is established via Ed25519 keypairs. Authentication is handled through challenge-response signatures. We do not store or process user passwords.
+3.  **Privacy by Design**: Authentication uses email/password with Argon2id hashing and optional TOTP 2FA. Passwords are never stored in plaintext. Session tokens are high-entropy random values with SHA-256 hashes stored server-side.
 4.  **Hardware Native**: We utilize platform-native media APIs (Windows Graphics Capture/Media Foundation, Metal/ScreenCaptureKit, VA-API/PipeWire) to achieve maximum performance.
 5.  **P2P First**: We aggressively prioritize direct connections using STUN for NAT traversal. Encrypted relay fallback is used only as a last resort.
 
@@ -77,9 +77,11 @@ RIFT employs XOR-based parity groups to recover from packet loss:
 
 ## Security
 
-- **Identity**: Users are identified by Ed25519 public keys.
-- **Lease Validation**: Relay access requires a signed PASETO lease token.
-- **Encryption**: Mandatory end-to-end encryption using ChaCha20-Poly1305.
+- **Authentication**: Email/password with Argon2id hashing and optional TOTP 2FA.
+- **Session Management**: High-entropy random tokens (256-bit) with secure hash storage.
+- **Encryption**: Mandatory end-to-end encryption via Noise_XX_25519_ChaChaPoly_BLAKE2s handshake.
+- **Relay Access**: Session-based token validation with rate limiting and IP binding.
+- **Privacy**: Minimal logging; no payload inspection; relay blindness to encrypted content.
 
 ---
 

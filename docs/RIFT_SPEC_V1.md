@@ -91,7 +91,7 @@ Before the RIFT logical handshake occurs, peers MUST establish an encrypted sess
 
 ### 3.1 Handshake Pattern
 
-RIFT uses the **Noise_XX_25519_ChaChaPoly_BLAKE2b** pattern by default:
+RIFT uses the **Noise_XX_25519_ChaChaPoly_BLAKE2s** pattern by default:
 
 - **XX**: Full 3-way handshake with mutual identity exchange
 - **IK**: (Future) 0-RTT resumption for re-connections

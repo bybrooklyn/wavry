@@ -32,6 +32,7 @@ use gstreamer_video as gst_video;
 use tokio::runtime::Builder as RuntimeBuilder;
 use tokio::sync::mpsc;
 use tokio::time::sleep;
+use x11rb::connection::Connection;
 use x11rb::protocol::xproto::{ConnectionExt as X11ConnectionExt, Window};
 use x11rb::protocol::xtest::ConnectionExt as XTestExt;
 
@@ -312,7 +313,7 @@ impl X11Injector {
         let y = Self::clamp_i16(y);
         self.conn
             .xtest_fake_input(
-                x11rb::protocol::xproto::MOTION_NOTIFY,
+                x11rb::protocol::xproto::MOTION_NOTIFY_EVENT,
                 0,
                 0,
                 self.root,
@@ -339,9 +340,9 @@ impl InputInjector for X11Injector {
             None => return Ok(()),
         };
         let event = if pressed {
-            x11rb::protocol::xproto::KEY_PRESS
+            x11rb::protocol::xproto::KEY_PRESS_EVENT
         } else {
-            x11rb::protocol::xproto::KEY_RELEASE
+            x11rb::protocol::xproto::KEY_RELEASE_EVENT
         };
         self.conn
             .xtest_fake_input(event, code, 0, self.root, 0, 0, 0)?;
@@ -351,9 +352,9 @@ impl InputInjector for X11Injector {
 
     fn mouse_button(&mut self, button: u8, pressed: bool) -> Result<()> {
         let event = if pressed {
-            x11rb::protocol::xproto::BUTTON_PRESS
+            x11rb::protocol::xproto::BUTTON_PRESS_EVENT
         } else {
-            x11rb::protocol::xproto::BUTTON_RELEASE
+            x11rb::protocol::xproto::BUTTON_RELEASE_EVENT
         };
         self.conn
             .xtest_fake_input(event, button, 0, self.root, 0, 0, 0)?;
