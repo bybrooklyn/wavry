@@ -106,7 +106,7 @@ impl ReferenceFrameManager {
 
         // Remove oldest references if over limit
         while self.references.len() >= self.max_references {
-            if self.references.first().is_some() {
+            if !self.references.is_empty() {
                 self.references.remove(0);
             }
         }
@@ -296,10 +296,7 @@ impl EncoderPool {
         self.active_encoders.remove(&encoder.id);
 
         let config = encoder.config.clone();
-        let idle_list = self
-            .idle_encoders
-            .entry(config)
-            .or_insert_with(Vec::new);
+        let idle_list = self.idle_encoders.entry(config).or_default();
 
         if idle_list.len() < self.config.max_encoders_per_config {
             idle_list.push(encoder);
