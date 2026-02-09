@@ -194,6 +194,9 @@ See `TERMS.md` for the minimal hosted service policy.
 ## License
 
 Wavry is licensed under the **GNU Affero General Public License v3.0 (AGPL-3.0)**. See [`LICENSE`](LICENSE) for details.
+
+---
+
 ## Web Clients (Hybrid Path)
 
 Web clients are an on-ramp and compatibility layer. They do **not** speak RIFT directly.
