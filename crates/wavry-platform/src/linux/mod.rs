@@ -14,16 +14,8 @@ use ashpd::desktop::{
     PersistMode,
 };
 use evdev::{
-    uinput::VirtualDevice,
-    uinput::VirtualDeviceBuilder,
-    UinputAbsSetup,
-    AbsInfo,
-    AbsoluteAxisType,
-    AttributeSet,
-    EventType,
-    InputEvent,
-    Key,
-    RelativeAxisType,
+    uinput::VirtualDevice, uinput::VirtualDeviceBuilder, AbsInfo, AbsoluteAxisType, AttributeSet,
+    EventType, InputEvent, Key, RelativeAxisType, UinputAbsSetup,
 };
 use gstreamer as gst;
 use gstreamer::prelude::*;
@@ -84,7 +76,10 @@ impl PipewireCapturer {
             Err(err) => {
                 if std::env::var_os("DISPLAY").is_some() {
                     require_elements(&["ximagesrc", "videoconvert", "appsink"])?;
-                    tracing::warn!("PipeWire portal failed, falling back to X11 capture: {}", err);
+                    tracing::warn!(
+                        "PipeWire portal failed, falling back to X11 capture: {}",
+                        err
+                    );
                     let pipeline_str = "ximagesrc use-damage=0 ! videoconvert ! video/x-raw,format=RGBA ! appsink name=sink max-buffers=1 drop=true sync=false".to_string();
                     (pipeline_str, None)
                 } else {
@@ -119,13 +114,12 @@ impl FrameCapturer for PipewireCapturer {
             .pull_sample()
             .map_err(|_| anyhow!("failed to pull sample"))?;
         let buffer = sample.buffer().ok_or_else(|| anyhow!("missing buffer"))?;
-        let map = buffer.map_readable().map_err(|_| anyhow!("buffer map failed"))?;
+        let map = buffer
+            .map_readable()
+            .map_err(|_| anyhow!("buffer map failed"))?;
         let caps = sample.caps().ok_or_else(|| anyhow!("missing caps"))?;
         let info = gst_video::VideoInfo::from_caps(&caps)?;
-        let pts = buffer
-            .pts()
-            .map(|t| t.nseconds() / 1_000)
-            .unwrap_or(0);
+        let pts = buffer.pts().map(|t| t.nseconds() / 1_000).unwrap_or(0);
 
         Ok(RawFrame {
             width: info.width() as u16,
@@ -235,12 +229,13 @@ impl UinputInner {
         self.device.emit(&[event])?;
         Ok(())
     }
-    
+
     /// Emit SYN_REPORT to synchronize input events.
     /// Required for proper input device operation on Linux.
     fn sync(&mut self) -> Result<()> {
         // SYN_REPORT = type 0, code 0, value 0
-        self.device.emit(&[InputEvent::new(EventType::SYNCHRONIZATION, 0, 0)])?;
+        self.device
+            .emit(&[InputEvent::new(EventType::SYNCHRONIZATION, 0, 0)])?;
         Ok(())
     }
 }
@@ -287,7 +282,7 @@ impl InputInjector for UinputInner {
     }
 }
 
-struct X11Injector {
+pub struct X11Injector {
     conn: x11rb::rust_connection::RustConnection,
     root: Window,
 }
@@ -311,16 +306,15 @@ impl X11Injector {
     fn motion_absolute(&self, x: i32, y: i32) -> Result<()> {
         let x = Self::clamp_i16(x);
         let y = Self::clamp_i16(y);
-        self.conn
-            .xtest_fake_input(
-                x11rb::protocol::xproto::MOTION_NOTIFY_EVENT,
-                0,
-                0,
-                self.root,
-                x,
-                y,
-                0,
-            )?;
+        self.conn.xtest_fake_input(
+            x11rb::protocol::xproto::MOTION_NOTIFY_EVENT,
+            0,
+            0,
+            self.root,
+            x,
+            y,
+            0,
+        )?;
         self.conn.flush()?;
         Ok(())
     }
@@ -379,10 +373,9 @@ enum PortalEvent {
     Key { keycode: u32, pressed: bool },
     Button { button: i32, pressed: bool },
     Motion { dx: f64, dy: f64 },
-    Axis { dx: f64, dy: f64 },
 }
 
-struct PortalInjector {
+pub struct PortalInjector {
     tx: mpsc::UnboundedSender<PortalEvent>,
     ready: Arc<AtomicBool>,
     last_abs: Option<(f32, f32)>,
@@ -431,18 +424,25 @@ impl PortalInjector {
                     while let Some(event) = rx.recv().await {
                         match event {
                             PortalEvent::Key { keycode, pressed } => {
-                                let state = if pressed { KeyState::Pressed } else { KeyState::Released };
-                                let _ = proxy.notify_keyboard_keycode(&session, keycode as i32, state).await;
+                                let state = if pressed {
+                                    KeyState::Pressed
+                                } else {
+                                    KeyState::Released
+                                };
+                                let _ = proxy
+                                    .notify_keyboard_keycode(&session, keycode as i32, state)
+                                    .await;
                             }
                             PortalEvent::Button { button, pressed } => {
-                                let state = if pressed { KeyState::Pressed } else { KeyState::Released };
+                                let state = if pressed {
+                                    KeyState::Pressed
+                                } else {
+                                    KeyState::Released
+                                };
                                 let _ = proxy.notify_pointer_button(&session, button, state).await;
                             }
                             PortalEvent::Motion { dx, dy } => {
                                 let _ = proxy.notify_pointer_motion(&session, dx, dy).await;
-                            }
-                            PortalEvent::Axis { dx, dy } => {
-                                let _ = proxy.notify_pointer_axis(&session, dx, dy, true).await;
                             }
                         }
                     }
@@ -501,7 +501,10 @@ impl InputInjector for PortalInjector {
 
     fn mouse_button(&mut self, button: u8, pressed: bool) -> Result<()> {
         let code = Self::pointer_button_code(button);
-        self.send(PortalEvent::Button { button: code, pressed })
+        self.send(PortalEvent::Button {
+            button: code,
+            pressed,
+        })
     }
 
     fn mouse_motion(&mut self, dx: i32, dy: i32) -> Result<()> {
@@ -514,20 +517,20 @@ impl InputInjector for PortalInjector {
 
     fn mouse_absolute(&mut self, x: f32, y: f32) -> Result<()> {
         if let Some((last_x, last_y)) = self.last_abs {
-            // ScreenCaptureKit/Portals don't always support absolute directly, 
+            // ScreenCaptureKit/Portals don't always support absolute directly,
             // so we calculate delta if needed, but portal.notify_pointer_motion
-            // is usually relative. 
+            // is usually relative.
             // Wait, notify_pointer_motion is RELATIVE.
-            // If we want absolute, we need to know screen resolution or 
+            // If we want absolute, we need to know screen resolution or
             // use notify_pointer_motion_absolute if available.
             // Ashpd RemoteDesktop has notify_pointer_motion_absolute.
-            
+
             // For now, if we only have relative, we calculate delta.
             // But we should ideally update the portal loop to use absolute.
             let dx = (x - last_x) as f64;
             let dy = (y - last_y) as f64;
-            
-            // We need to scale these to something sensible for "pixels" 
+
+            // We need to scale these to something sensible for "pixels"
             // since f32 0..1 is too small for raw relative movement.
             // Assuming 1920x1080 for delta calculation if no other info.
             self.send(PortalEvent::Motion {
@@ -626,8 +629,8 @@ fn save_restore_token(token: &str) -> Result<()> {
 }
 
 fn token_path() -> Option<PathBuf> {
-    let base = std::env::var_os("XDG_CONFIG_HOME").map(PathBuf::from).or_else(|| {
-        std::env::var_os("HOME").map(|home| Path::new(&home).join(".config"))
-    })?;
+    let base = std::env::var_os("XDG_CONFIG_HOME")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|home| Path::new(&home).join(".config")))?;
     Some(base.join("wavry").join("portal_restore_token"))
 }

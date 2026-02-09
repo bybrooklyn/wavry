@@ -55,6 +55,11 @@ clap = { version = "4.5", features = ["derive", "env"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 
+# Windows (force unified versions)
+windows = "=0.58.0"
+windows-core = "=0.58.0"
+windows-result = "=0.58.0"
+
 # Networking
 mdns-sd = "0.10"
 socket2 = "0.6"

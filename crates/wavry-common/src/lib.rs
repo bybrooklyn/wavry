@@ -5,8 +5,8 @@
 #![forbid(unsafe_code)]
 
 pub mod error;
-pub mod protocol;
 pub mod helpers;
+pub mod protocol;
 
 pub use error::{Error, Result};
 pub use protocol::*;

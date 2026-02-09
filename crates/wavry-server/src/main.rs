@@ -207,7 +207,10 @@ mod host {
         base: EncodeConfig,
         codec: Codec,
     ) -> Result<()> {
-        if selected_codec == &Some(codec) && current_display_id == &base.display_id && frame_rx.is_some() {
+        if selected_codec == &Some(codec)
+            && current_display_id == &base.display_id
+            && frame_rx.is_some()
+        {
             return Ok(());
         }
 
@@ -236,7 +239,10 @@ mod host {
         *frame_rx = Some(rx);
         *selected_codec = Some(codec);
         *current_display_id = base.display_id;
-        info!("Selected encoder codec: {:?}, display: {:?}", codec, base.display_id);
+        info!(
+            "Selected encoder codec: {:?}, display: {:?}",
+            codec, base.display_id
+        );
         Ok(())
     }
 
@@ -566,7 +572,14 @@ mod host {
             time::interval(Duration::from_secs(PEER_CLEANUP_INTERVAL_SECS));
 
         if args.enable_webrtc && selected_codec.is_none() {
-            ensure_encoder(&mut frame_rx, &mut selected_codec, &mut current_display_id, base_config, Codec::H264).await?;
+            ensure_encoder(
+                &mut frame_rx,
+                &mut selected_codec,
+                &mut current_display_id,
+                base_config,
+                Codec::H264,
+            )
+            .await?;
         }
 
         loop {
@@ -876,9 +889,11 @@ mod host {
                         if !monitors.is_empty() {
                             let list_msg = ProtoMessage {
                                 content: Some(Content::Control(ProtoControl {
-                                    content: Some(rift_core::control_message::Content::MonitorList(
-                                        rift_core::MonitorList { monitors },
-                                    )),
+                                    content: Some(
+                                        rift_core::control_message::Content::MonitorList(
+                                            rift_core::MonitorList { monitors },
+                                        ),
+                                    ),
                                 })),
                             };
                             let _ = send_rift_msg(socket, peer_state, peer, list_msg).await;

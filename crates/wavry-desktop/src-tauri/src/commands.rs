@@ -17,9 +17,7 @@ use wavry_media::{PipewireAudioCapturer, PipewireEncoder};
 use wavry_media::{WindowsAudioCapturer, WindowsEncoder, WindowsProbe};
 
 use serde_json::json;
-use std::sync::atomic::Ordering;
-#[cfg(target_os = "linux")]
-use std::sync::{Arc, Mutex};
+use std::sync::{atomic::Ordering, Mutex};
 #[cfg(target_os = "linux")]
 use tokio::sync::{mpsc, oneshot};
 
@@ -509,13 +507,13 @@ pub async fn connect_via_id(target_username: String) -> Result<String, String> {
 #[tauri::command]
 pub async fn start_host(port: u16, display_id: Option<u32>) -> Result<String, String> {
     use crate::media_utils::choose_rift_codec;
+    use crate::state::SessionState;
     use bytes::Bytes;
     use std::net::UdpSocket;
     use std::sync::atomic::AtomicU32;
     use std::sync::Arc;
     use std::thread;
     use wavry_client::signaling::{SignalMessage, SignalingClient};
-    use crate::state::SessionState;
     use wavry_media::{Codec, EncodeConfig, Resolution};
 
     {

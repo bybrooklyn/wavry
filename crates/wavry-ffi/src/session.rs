@@ -833,7 +833,7 @@ pub async fn run_client(params: ClientSessionParams) -> Result<()> {
     let mut started = false;
     let startup_deadline = Instant::now() + Duration::from_secs(12);
     let mut stats_tick = time::interval(Duration::from_millis(250));
-    
+
     let client_fut = run_rift_client(config, Some(factory), Some(monitor_rx));
     tokio::pin!(client_fut);
 

@@ -114,8 +114,10 @@ impl DeltaCC {
         self.last_d_q_us = d_q;
 
         // 4. Dynamic Slope Noise Floor (Epsilon)
-        let epsilon = if self.rtt_smooth_us > 0.0 {
+        let epsilon = if self.rtt_smooth_us > 0.0 && self.config.alpha != 1.0 {
             self.rtt_smooth_us * 0.05
+        } else if jitter_us > 0 {
+            jitter_us as f64 * 0.5 // Use half the jitter as epsilon
         } else {
             self.config.epsilon_us
         };

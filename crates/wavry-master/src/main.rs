@@ -21,7 +21,6 @@ use tower_http::cors::{AllowOrigin, CorsLayer};
 use tracing::{info, warn};
 use uuid::Uuid;
 
-
 use futures_util::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
 use std::sync::Mutex;
@@ -322,7 +321,10 @@ async fn main() -> anyhow::Result<()> {
         .route("/v1/relays", get(handle_relay_list))
         .route("/v1/feedback", post(handle_feedback))
         .route("/admin/api/sessions/revoke", post(handle_revoke_session))
-        .route("/admin/api/relays/update_state", post(handle_relay_update_state))
+        .route(
+            "/admin/api/relays/update_state",
+            post(handle_relay_update_state),
+        )
         .route("/v1/auth/register", post(handle_register))
         .route("/v1/auth/register/verify", post(handle_verify))
         .route("/v1/auth/login", post(handle_login))

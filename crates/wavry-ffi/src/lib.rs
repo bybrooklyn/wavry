@@ -73,10 +73,6 @@ static INPUT_INJECTOR: Lazy<Arc<Mutex<Option<MacInputInjector>>>> =
 static INPUT_INJECTOR: Lazy<Arc<Mutex<Option<AndroidInputInjector>>>> =
     Lazy::new(|| Arc::new(Mutex::new(None)));
 
-#[cfg(not(any(target_os = "macos", target_os = "android")))]
-static INPUT_INJECTOR: Lazy<Arc<Mutex<Option<MacInputInjector>>>> =
-    Lazy::new(|| Arc::new(Mutex::new(None)));
-
 fn set_last_error(msg: &str) {
     let sanitized = msg.replace('\0', " ");
     let cstr =

@@ -113,6 +113,7 @@ unsafe impl Send for WindowsEncoder {}
 #[cfg(target_os = "windows")]
 unsafe impl Sync for WindowsEncoder {}
 
+#[cfg(target_os = "windows")]
 impl WindowsEncoder {
     pub async fn new(config: EncodeConfig) -> Result<Self> {
         unsafe {
@@ -198,9 +199,9 @@ impl WindowsEncoder {
             output_media_type.SetGUID(&MF_MT_MAJOR_TYPE, &MFMediaType_Video)?;
             output_media_type.SetGUID(&MF_MT_SUBTYPE, &output_subtype)?;
             output_media_type.SetUINT32(&MF_MT_AVG_BITRATE, config.bitrate_kbps * 1000)?;
-            MFSetAttributeRatio(output_media_type.cast()?, &MF_MT_FRAME_RATE, config.fps as u32, 1)?;
+            MFSetAttributeRatio(&output_media_type, &MF_MT_FRAME_RATE, config.fps as u32, 1)?;
             MFSetAttributeSize(
-                output_media_type.cast()?,
+                &output_media_type,
                 &MF_MT_FRAME_SIZE,
                 frame_width,
                 frame_height,
@@ -215,20 +216,14 @@ impl WindowsEncoder {
             input_media_type.SetGUID(&MF_MT_MAJOR_TYPE, &MFMediaType_Video)?;
             input_media_type.SetGUID(&MF_MT_SUBTYPE, &MF_BGR32)?; // B8G8R8A8 in MF is often BGR32
             MFSetAttributeSize(
-                input_media_type.cast()?,
+                &input_media_type,
                 &MF_MT_FRAME_SIZE,
                 item_size.Width as u32,
                 item_size.Height as u32,
             )?;
-            MFSetAttributeRatio(input_media_type.cast()?, &MF_MT_FRAME_RATE, config.fps as u32, 1)?;
-
+            MFSetAttributeRatio(&input_media_type, &MF_MT_FRAME_RATE, config.fps as u32, 1)?;
             transform.SetInputType(0, Some(&input_media_type), 0)?;
-
-            // Enable D3D11 awareness
-            if let Ok(attributes) = transform.GetAttributes() {
-                attributes.SetUINT32(&MF_SA_D3D11_AWARE, 1)?;
-                let _ = attributes.SetUINT32(&MF_LOW_LATENCY, 1);
-            }
+        }
 
             let mut device_manager = None;
             let mut reset_token = 0;
@@ -375,8 +370,8 @@ impl WindowsEncoder {
             output_media_type.SetGUID(&MF_MT_MAJOR_TYPE, &MFMediaType_Video)?;
             output_media_type.SetGUID(&MF_MT_SUBTYPE, &mf_subtype_for_codec(self.config.codec))?;
             output_media_type.SetUINT32(&MF_MT_AVG_BITRATE, self.config.bitrate_kbps * 1000)?;
-            MFSetAttributeRatio(output_media_type.cast()?, &MF_MT_FRAME_RATE, self.config.fps as u32, 1)?;
-            MFSetAttributeSize(output_media_type.cast()?, &MF_MT_FRAME_SIZE, width, height)?;
+            MFSetAttributeRatio(&output_media_type, &MF_MT_FRAME_RATE, self.config.fps as u32, 1)?;
+            MFSetAttributeSize(&output_media_type, &MF_MT_FRAME_SIZE, width, height)?;
             output_media_type
                 .SetUINT32(&MF_MT_INTERLACE_MODE, MFVideoInterlace_Progressive.0 as u32)?;
             self.transform
@@ -385,8 +380,8 @@ impl WindowsEncoder {
             let input_media_type: IMFMediaType = MFCreateMediaType()?;
             input_media_type.SetGUID(&MF_MT_MAJOR_TYPE, &MFMediaType_Video)?;
             input_media_type.SetGUID(&MF_MT_SUBTYPE, &MF_BGR32)?;
-            MFSetAttributeSize(input_media_type.cast()?, &MF_MT_FRAME_SIZE, width, height)?;
-            MFSetAttributeRatio(input_media_type.cast()?, &MF_MT_FRAME_RATE, self.config.fps as u32, 1)?;
+            MFSetAttributeSize(&input_media_type, &MF_MT_FRAME_SIZE, width, height)?;
+            MFSetAttributeRatio(&input_media_type, &MF_MT_FRAME_RATE, self.config.fps as u32, 1)?;
             self.transform.SetInputType(0, Some(&input_media_type), 0)?;
         }
 
@@ -636,6 +631,7 @@ pub struct WindowsAudioCapturer {
 impl WindowsAudioCapturer {
     pub async fn new() -> Result<Self> {
         unsafe {
+            let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
             if let Err(e) = CoInitializeEx(None, COINIT_MULTITHREADED) {
                 if e.code() != RPC_E_CHANGED_MODE {
                     return Err(anyhow!("CoInitializeEx failed: {:?}", e));
@@ -649,8 +645,7 @@ impl WindowsAudioCapturer {
 
             let audio_client: IAudioClient = device.Activate(CLSCTX_ALL, None)?;
 
-            let mut format: *mut WAVEFORMATEX = std::ptr::null_mut();
-            audio_client.GetMixFormat(&mut format)?;
+            let format = audio_client.GetMixFormat()?;
 
             // Note: Loopback requires a specific initialization
             audio_client.Initialize(
@@ -861,7 +856,11 @@ fn pcm_format(format: &WAVEFORMATEX) -> Result<PcmFormat> {
         unsafe {
             let extensible = &*(format as *const _ as *const WAVEFORMATEXTENSIBLE);
             // Use read_unaligned or copy to local to avoid misaligned reference
-            let subformat = std::ptr::read_unaligned(&extensible.SubFormat);
+            let subformat = unsafe {
+                std::ptr::read_unaligned(
+                    std::ptr::addr_of!(extensible.SubFormat)
+                )
+            };
             if subformat == KSDATAFORMAT_SUBTYPE_IEEE_FLOAT {
                 Ok(PcmFormat::F32)
             } else if subformat == KSDATAFORMAT_SUBTYPE_PCM {

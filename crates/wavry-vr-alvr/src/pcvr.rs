@@ -10,8 +10,8 @@ mod linux {
     use super::*;
     use std::env;
     use std::ffi::CString;
-    use std::str::FromStr;
     use std::ptr;
+    use std::str::FromStr;
     use std::sync::atomic::Ordering;
     use std::thread;
     use std::time::{Duration, Instant};
@@ -700,13 +700,9 @@ mod linux {
                     .map_err(|e| VrError::Adapter(format!("Vulkan instance create failed: {e}")))?
             };
 
-            let physical_device = unsafe {
-                xr_instance
-                    .vulkan_graphics_device(system, instance.handle().as_raw() as *const _)
-                    .map_err(|e| {
-                        VrError::Adapter(format!("OpenXR Vulkan graphics device: {e:?}"))
-                    })?
-            };
+            let physical_device = xr_instance
+                .vulkan_graphics_device(system, instance.handle().as_raw() as *const _)
+                .map_err(|e| VrError::Adapter(format!("OpenXR Vulkan graphics device: {e:?}")))?;
             let physical_device = vk::PhysicalDevice::from_raw(physical_device as u64);
 
             let queue_family_index = find_graphics_queue_family(&instance, physical_device)?;
@@ -1152,7 +1148,11 @@ mod linux {
             vk::Format::R8G8B8A8_SRGB.as_raw() as u32,
             vk::Format::B8G8R8A8_SRGB.as_raw() as u32,
         ];
-        if let Some(format) = preferred.iter().copied().find(|&fmt| formats.contains(&fmt)) {
+        if let Some(format) = preferred
+            .iter()
+            .copied()
+            .find(|&fmt| formats.contains(&fmt))
+        {
             let (name, srgb) = describe_vk_swapchain_format(format);
             return (format, name, srgb);
         }
@@ -1184,36 +1184,6 @@ mod linux {
         };
         eprintln!(
             "OpenXR swapchain validation [{}]: runtime='{}' selected={} (0x{:X}) gamma_mode={} available={:?}",
-            backend, runtime_name, selected_name, selected, gamma_mode, available
-        );
-        if selected_srgb {
-            eprintln!(
-                "OpenXR swapchain validation [{}]: selected sRGB fallback; monitor scene gamma for double/under correction.",
-                backend
-            );
-        }
-    }
-
-    fn log_swapchain_validation_i64(
-        instance: &xr::Instance,
-        backend: &str,
-        available: &[i64],
-        selected: i64,
-        selected_name: &str,
-        selected_srgb: bool,
-    ) {
-        let runtime = instance.properties().ok();
-        let runtime_name = runtime
-            .as_ref()
-            .map(|p| p.runtime_name.as_str())
-            .unwrap_or("unknown-runtime");
-        let gamma_mode = if selected_srgb {
-            "sRGB (runtime gamma conversion)"
-        } else {
-            "linear UNORM (passthrough)"
-        };
-        eprintln!(
-            "OpenXR swapchain validation [{}]: runtime='{}' selected={} ({}) gamma_mode={} available={:?}",
             backend, runtime_name, selected_name, selected, gamma_mode, available
         );
         if selected_srgb {
@@ -1346,7 +1316,7 @@ mod linux {
         let gl = unsafe {
             glow::Context::from_loader_function(|s| {
                 let s = CString::new(s).unwrap();
-                unsafe { std::mem::transmute(glx::glXGetProcAddress(s.as_ptr() as *const u8)) }
+                std::mem::transmute(glx::glXGetProcAddress(s.as_ptr() as *const u8))
             })
         };
         unsafe {
@@ -2835,9 +2805,7 @@ mod windows {
 
     fn run(state: Arc<SharedState>) -> VrResult<()> {
         unsafe {
-            CoInitializeEx(None, COINIT_MULTITHREADED)
-                .ok()
-                .map_err(|e| VrError::Adapter(format!("CoInitializeEx: {e:?}")))?;
+            CoInitializeEx(None, COINIT_MULTITHREADED).ok();
         }
 
         let mut device = None;
@@ -3537,8 +3505,10 @@ mod android {
                     VrError::Adapter(format!("OpenXR Vulkan instance extensions: {e:?}"))
                 })?;
             let instance_exts = parse_extension_list(&instance_exts);
-            let instance_ext_ptrs: Vec<*const std::os::raw::c_char> =
-                instance_exts.iter().map(|s| s.as_ptr() as *const std::os::raw::c_char).collect();
+            let instance_ext_ptrs: Vec<*const std::os::raw::c_char> = instance_exts
+                .iter()
+                .map(|s| s.as_ptr() as *const std::os::raw::c_char)
+                .collect();
 
             let app_name = CString::new("Wavry").unwrap();
             let engine_name = CString::new("Wavry").unwrap();
@@ -3554,7 +3524,8 @@ mod android {
             let create_info = vk::InstanceCreateInfo {
                 p_application_info: &app_info,
                 enabled_extension_count: instance_ext_ptrs.len() as u32,
-                pp_enabled_extension_names: instance_ext_ptrs.as_ptr() as *const *const std::os::raw::c_char,
+                pp_enabled_extension_names: instance_ext_ptrs.as_ptr()
+                    as *const *const std::os::raw::c_char,
                 ..Default::default()
             };
 
@@ -3579,8 +3550,10 @@ mod android {
                 .vulkan_legacy_device_extensions(system)
                 .map_err(|e| VrError::Adapter(format!("OpenXR Vulkan device extensions: {e:?}")))?;
             let device_exts = parse_extension_list(&device_exts);
-            let device_ext_ptrs: Vec<*const std::os::raw::c_char> =
-                device_exts.iter().map(|s| s.as_ptr() as *const std::os::raw::c_char).collect();
+            let device_ext_ptrs: Vec<*const std::os::raw::c_char> = device_exts
+                .iter()
+                .map(|s| s.as_ptr() as *const std::os::raw::c_char)
+                .collect();
 
             let priorities = [1.0f32];
             let queue_info = vk::DeviceQueueCreateInfo {
@@ -3594,7 +3567,8 @@ mod android {
                 queue_create_info_count: 1,
                 p_queue_create_infos: &queue_info,
                 enabled_extension_count: device_ext_ptrs.len() as u32,
-                pp_enabled_extension_names: device_ext_ptrs.as_ptr() as *const *const std::os::raw::c_char,
+                pp_enabled_extension_names: device_ext_ptrs.as_ptr()
+                    as *const *const std::os::raw::c_char,
                 ..Default::default()
             };
 

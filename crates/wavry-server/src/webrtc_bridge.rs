@@ -1,13 +1,13 @@
 use anyhow::Result;
-use prost::Message;
-use webrtc::ice_transport::ice_server;
 use futures_util::{SinkExt, StreamExt};
+use prost::Message;
 use std::sync::Arc;
 use tokio::sync::{mpsc, Mutex};
 use tokio_tungstenite::{connect_async, tungstenite::protocol::Message as WsMessage};
 use tracing::{debug, error, info, warn};
 use webrtc::api::media_engine::{MediaEngine, MIME_TYPE_H264};
 use webrtc::api::APIBuilder;
+use webrtc::ice_transport::ice_server;
 use webrtc::media::Sample;
 use webrtc::peer_connection::sdp::session_description::RTCSessionDescription;
 use webrtc::peer_connection::RTCPeerConnection;
@@ -116,7 +116,9 @@ impl WebRtcBridge {
                 ..
             } => {
                 info!("Received WebRTC offer from {}", target_username);
-                let answer_sdp = self.create_answer(sdp, target_username.clone(), tx.clone()).await?;
+                let answer_sdp = self
+                    .create_answer(sdp, target_username.clone(), tx.clone())
+                    .await?;
                 tx.send(SignalMessage::ANSWER {
                     target_username,
                     sdp: answer_sdp,
@@ -201,7 +203,7 @@ impl WebRtcBridge {
         }));
 
         pc.set_remote_description(RTCSessionDescription::offer(offer_sdp).unwrap())
-        .await?;
+            .await?;
 
         let answer = pc.create_answer(None).await?;
         pc.set_local_description(answer.clone()).await?;
