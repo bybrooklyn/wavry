@@ -65,9 +65,9 @@ fn probe_supported_codecs() -> Vec<Codec> {
     }
     #[cfg(target_os = "linux")]
     {
-        return wavry_media::LinuxProbe
+        wavry_media::LinuxProbe
             .supported_decoders()
-            .unwrap_or_else(|_| vec![Codec::H264]);
+            .unwrap_or_else(|_| vec![Codec::H264])
     }
     #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
     {

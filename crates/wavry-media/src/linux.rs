@@ -112,7 +112,7 @@ async fn enumerate_wayland_displays_inner() -> Result<Vec<crate::DisplayInfo>> {
             .unwrap_or_else(|| format!("Display {}", idx));
 
         displays.push(crate::DisplayInfo {
-            id: idx as u32,
+            id: idx,
             name,
             resolution: crate::Resolution {
                 width: clamp_portal_dim(width),
@@ -281,10 +281,8 @@ fn configure_low_latency_encoder(
         set_if_exists(encoder, "rate-control", "cbr");
         set_if_exists(encoder, "max-bframes", 0i32);
         set_if_exists(encoder, "cabac", false);
-    } else if encoder_name.contains("nvh265") {
-        if enable_10bit {
-            set_if_exists(encoder, "profile", "main10");
-        }
+    } else if encoder_name.contains("nvh265") && enable_10bit {
+        set_if_exists(encoder, "profile", "main10");
     }
 
     Ok(())
@@ -802,10 +800,10 @@ fn is_monitor_stream(stream: &Stream) -> bool {
     )
 }
 
-fn select_portal_monitor_stream<'a>(
-    streams: &'a [Stream],
+fn select_portal_monitor_stream(
+    streams: &[Stream],
     display_id: Option<u32>,
-) -> Result<&'a Stream> {
+) -> Result<&Stream> {
     let monitor_streams: Vec<&Stream> = streams
         .iter()
         .filter(|stream| is_monitor_stream(stream))

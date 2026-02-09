@@ -118,7 +118,7 @@ impl FrameCapturer for PipewireCapturer {
             .map_readable()
             .map_err(|_| anyhow!("buffer map failed"))?;
         let caps = sample.caps().ok_or_else(|| anyhow!("missing caps"))?;
-        let info = gst_video::VideoInfo::from_caps(&caps)?;
+        let info = gst_video::VideoInfo::from_caps(caps)?;
         let pts = buffer.pts().map(|t| t.nseconds() / 1_000).unwrap_or(0);
 
         Ok(RawFrame {
@@ -134,6 +134,7 @@ impl FrameCapturer for PipewireCapturer {
     }
 }
 
+#[allow(clippy::large_enum_variant)]
 pub enum UinputInjector {
     Uinput(UinputInner),
     Portal(PortalInjector),
@@ -573,7 +574,7 @@ async fn open_portal_stream_inner() -> Result<(OwnedFd, u32)> {
     let fd = proxy.open_pipe_wire_remote(&session).await?;
     let stream = response
         .streams()
-        .get(0)
+        .first()
         .ok_or_else(|| anyhow!("no screencast streams returned"))?;
     Ok((fd, stream.pipe_wire_node_id()))
 }

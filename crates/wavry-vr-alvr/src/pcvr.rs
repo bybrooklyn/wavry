@@ -149,6 +149,7 @@ mod linux {
             })
         }
 
+        #[allow(clippy::too_many_arguments)]
         fn bindings_for_profile<'a>(
             instance: &'a xr::Instance,
             profile: &'a str,
@@ -830,6 +831,7 @@ mod linux {
             Ok(())
         }
 
+        #[allow(clippy::too_many_arguments)]
         fn upload_rgba_region(
             &mut self,
             image: vk::Image,
@@ -1203,7 +1205,7 @@ mod linux {
     fn eye_layout(cfg: StreamConfig) -> EyeLayout {
         let width = cfg.width as u32;
         let height = cfg.height as u32;
-        let is_sbs = width >= height * 2 && width % 2 == 0;
+        let is_sbs = width >= height * 2 && width.is_multiple_of(2);
         let eye_width = if is_sbs { width / 2 } else { width };
         EyeLayout {
             eye_width,
@@ -1479,7 +1481,7 @@ mod linux {
             let period_ns = frame_state.predicted_display_period.as_nanos();
             if period_ns > 0 {
                 let refresh_hz = 1_000_000_000.0 / period_ns as f32;
-                let send = last_refresh_hz.map_or(true, |prev| (prev - refresh_hz).abs() > 0.1);
+                let send = last_refresh_hz.is_none_or(|prev| (prev - refresh_hz).abs() > 0.1);
                 if send {
                     state.callbacks.on_vr_timing(VrTiming {
                         refresh_hz,
@@ -1544,7 +1546,7 @@ mod linux {
                         .map_err(|e| VrError::Adapter(format!("OpenXR swapchain images: {e:?}")))?;
                     for tex in imgs0.iter().chain(imgs1.iter()) {
                         unsafe {
-                            gl.bind_texture(glow::TEXTURE_2D, std::mem::transmute(*tex));
+                            gl.bind_texture(glow::TEXTURE_2D, std::mem::transmute::<u32, Option<glow::NativeTexture>>(*tex));
                             gl.tex_parameter_i32(
                                 glow::TEXTURE_2D,
                                 glow::TEXTURE_MIN_FILTER,
@@ -1572,105 +1574,108 @@ mod linux {
                 }
             }
 
-            if frame_state.should_render && swapchains.is_some() && swapchain_images.is_some() {
-                let swapchains = swapchains.as_mut().unwrap();
-                let swapchain_images = swapchain_images.as_ref().unwrap();
-                let cfg = state.stream_config.lock().ok().and_then(|c| *c);
-                let layout = cfg.map(eye_layout);
-                let (width, height, is_sbs) = match layout {
-                    Some(layout) => (
-                        layout.eye_width as i32,
-                        layout.eye_height as i32,
-                        layout.is_sbs,
-                    ),
-                    None => (0, 0, false),
-                };
+            if frame_state.should_render {
+                if let (Some(swapchains), Some(swapchain_images)) =
+                    (swapchains.as_mut(), swapchain_images.as_ref())
+                {
+                    let cfg = state.stream_config.lock().ok().and_then(|c| *c);
+                    let layout = cfg.map(eye_layout);
+                    let (width, height, is_sbs) = match layout {
+                        Some(layout) => (
+                            layout.eye_width as i32,
+                            layout.eye_height as i32,
+                            layout.is_sbs,
+                        ),
+                        None => (0, 0, false),
+                    };
 
-                let mut layer_views: [xr::CompositionLayerProjectionView<xr::OpenGL>; VIEW_COUNT] = [
-                    xr::CompositionLayerProjectionView::new(),
-                    xr::CompositionLayerProjectionView::new(),
-                ];
+                    let mut layer_views: [xr::CompositionLayerProjectionView<xr::OpenGL>;
+                        VIEW_COUNT] = [
+                        xr::CompositionLayerProjectionView::new(),
+                        xr::CompositionLayerProjectionView::new(),
+                    ];
 
-                for i in 0..VIEW_COUNT {
-                    let image_index = swapchains[i]
-                        .acquire_image()
-                        .map_err(|e| VrError::Adapter(format!("OpenXR acquire: {e:?}")))?;
-                    swapchains[i]
-                        .wait_image(xr::Duration::from_nanos(5_000_000))
-                        .map_err(|e| VrError::Adapter(format!("OpenXR wait_image: {e:?}")))?;
+                    for i in 0..VIEW_COUNT {
+                        let image_index = swapchains[i]
+                            .acquire_image()
+                            .map_err(|e| VrError::Adapter(format!("OpenXR acquire: {e:?}")))?;
+                        swapchains[i]
+                            .wait_image(xr::Duration::from_nanos(5_000_000))
+                            .map_err(|e| VrError::Adapter(format!("OpenXR wait_image: {e:?}")))?;
 
-                    if let Some(decoded) = last_decoded.as_ref() {
-                        let tex = swapchain_images[i][image_index as usize];
-                        let eye_width = width.max(0) as u32;
-                        let eye_height = height.max(0) as u32;
-                        let sbs_available = is_sbs
-                            && decoded.width >= eye_width * 2
-                            && decoded.height >= eye_height;
-                        let src_offset_x = if sbs_available {
-                            eye_width * i as u32
-                        } else {
-                            0
-                        };
-                        let copy_width = if sbs_available {
-                            eye_width
-                        } else {
-                            decoded.width.min(eye_width)
-                        };
-                        let copy_height = decoded.height.min(eye_height);
-                        unsafe {
-                            gl.bind_texture(glow::TEXTURE_2D, std::mem::transmute(tex));
-                            gl.pixel_store_i32(glow::UNPACK_ROW_LENGTH, decoded.width as i32);
-                            gl.pixel_store_i32(glow::UNPACK_SKIP_PIXELS, src_offset_x as i32);
-                            gl.tex_sub_image_2d(
-                                glow::TEXTURE_2D,
-                                0,
-                                0,
-                                0,
-                                copy_width as i32,
-                                copy_height as i32,
-                                glow::RGBA,
-                                glow::UNSIGNED_BYTE,
-                                glow::PixelUnpackData::Slice(&decoded.data),
-                            );
-                            gl.pixel_store_i32(glow::UNPACK_ROW_LENGTH, 0);
-                            gl.pixel_store_i32(glow::UNPACK_SKIP_PIXELS, 0);
+                        if let Some(decoded) = last_decoded.as_ref() {
+                            let tex = swapchain_images[i][image_index as usize];
+                            let eye_width = width.max(0) as u32;
+                            let eye_height = height.max(0) as u32;
+                            let sbs_available = is_sbs
+                                && decoded.width >= eye_width * 2
+                                && decoded.height >= eye_height;
+                            let src_offset_x = if sbs_available {
+                                eye_width * i as u32
+                            } else {
+                                0
+                            };
+                            let copy_width = if sbs_available {
+                                eye_width
+                            } else {
+                                decoded.width.min(eye_width)
+                            };
+                            let copy_height = decoded.height.min(eye_height);
+                            unsafe {
+                                gl.bind_texture(glow::TEXTURE_2D, std::mem::transmute::<u32, Option<glow::NativeTexture>>(tex));
+                                gl.pixel_store_i32(glow::UNPACK_ROW_LENGTH, decoded.width as i32);
+                                gl.pixel_store_i32(glow::UNPACK_SKIP_PIXELS, src_offset_x as i32);
+                                gl.tex_sub_image_2d(
+                                    glow::TEXTURE_2D,
+                                    0,
+                                    0,
+                                    0,
+                                    copy_width as i32,
+                                    copy_height as i32,
+                                    glow::RGBA,
+                                    glow::UNSIGNED_BYTE,
+                                    glow::PixelUnpackData::Slice(&decoded.data),
+                                );
+                                gl.pixel_store_i32(glow::UNPACK_ROW_LENGTH, 0);
+                                gl.pixel_store_i32(glow::UNPACK_SKIP_PIXELS, 0);
+                            }
+                        }
+
+                        swapchains[i]
+                            .release_image()
+                            .map_err(|e| VrError::Adapter(format!("OpenXR release: {e:?}")))?;
+
+                        if views.len() > i {
+                            let sub_image = unsafe {
+                                xr::SwapchainSubImage::from_raw(xr::sys::SwapchainSubImage {
+                                    swapchain: swapchains[i].as_raw(),
+                                    image_rect: xr::Rect2Di {
+                                        offset: xr::Offset2Di { x: 0, y: 0 },
+                                        extent: xr::Extent2Di { width, height },
+                                    },
+                                    image_array_index: 0,
+                                })
+                            };
+                            layer_views[i] = xr::CompositionLayerProjectionView::new()
+                                .pose(views[i].pose)
+                                .fov(views[i].fov)
+                                .sub_image(sub_image);
                         }
                     }
 
-                    swapchains[i]
-                        .release_image()
-                        .map_err(|e| VrError::Adapter(format!("OpenXR release: {e:?}")))?;
+                    let layer = xr::CompositionLayerProjection::new()
+                        .space(&reference_space)
+                        .views(&layer_views);
+                    let layers: [&xr::CompositionLayerBase<xr::OpenGL>; 1] = [&layer];
 
-                    if views.len() > i {
-                        let sub_image = unsafe {
-                            xr::SwapchainSubImage::from_raw(xr::sys::SwapchainSubImage {
-                                swapchain: swapchains[i].as_raw(),
-                                image_rect: xr::Rect2Di {
-                                    offset: xr::Offset2Di { x: 0, y: 0 },
-                                    extent: xr::Extent2Di { width, height },
-                                },
-                                image_array_index: 0,
-                            })
-                        };
-                        layer_views[i] = xr::CompositionLayerProjectionView::new()
-                            .pose(views[i].pose)
-                            .fov(views[i].fov)
-                            .sub_image(sub_image);
-                    }
+                    frame_stream
+                        .end(
+                            frame_state.predicted_display_time,
+                            xr::EnvironmentBlendMode::OPAQUE,
+                            &layers,
+                        )
+                        .map_err(|e| VrError::Adapter(format!("OpenXR end: {e:?}")))?;
                 }
-
-                let layer = xr::CompositionLayerProjection::new()
-                    .space(&reference_space)
-                    .views(&layer_views);
-                let layers: [&xr::CompositionLayerBase<xr::OpenGL>; 1] = [&layer];
-
-                frame_stream
-                    .end(
-                        frame_state.predicted_display_time,
-                        xr::EnvironmentBlendMode::OPAQUE,
-                        &layers,
-                    )
-                    .map_err(|e| VrError::Adapter(format!("OpenXR end: {e:?}")))?;
             } else {
                 frame_stream
                     .end(
@@ -1847,7 +1852,7 @@ mod linux {
             let period_ns = frame_state.predicted_display_period.as_nanos();
             if period_ns > 0 {
                 let refresh_hz = 1_000_000_000.0 / period_ns as f32;
-                let send = last_refresh_hz.map_or(true, |prev| (prev - refresh_hz).abs() > 0.1);
+                let send = last_refresh_hz.is_none_or(|prev| (prev - refresh_hz).abs() > 0.1);
                 if send {
                     state.callbacks.on_vr_timing(VrTiming {
                         refresh_hz,
@@ -1913,11 +1918,11 @@ mod linux {
 
                     let imgs0: Vec<vk::Image> = imgs0
                         .into_iter()
-                        .map(|img| vk::Image::from_raw(img))
+                        .map(vk::Image::from_raw)
                         .collect();
                     let imgs1: Vec<vk::Image> = imgs1
                         .into_iter()
-                        .map(|img| vk::Image::from_raw(img))
+                        .map(vk::Image::from_raw)
                         .collect();
                     let layouts0 = vec![vk::ImageLayout::UNDEFINED; imgs0.len()];
                     let layouts1 = vec![vk::ImageLayout::UNDEFINED; imgs1.len()];
@@ -1928,100 +1933,104 @@ mod linux {
                 }
             }
 
-            if frame_state.should_render && swapchains.is_some() && swapchain_images.is_some() {
-                let swapchains = swapchains.as_mut().unwrap();
-                let swapchain_images = swapchain_images.as_ref().unwrap();
-                let image_layouts = image_layouts.as_mut().unwrap();
-                let cfg = state.stream_config.lock().ok().and_then(|c| *c);
-                let layout = cfg.map(eye_layout);
-                let (width, height, is_sbs) = match layout {
-                    Some(layout) => (
-                        layout.eye_width as i32,
-                        layout.eye_height as i32,
-                        layout.is_sbs,
-                    ),
-                    None => (0, 0, false),
-                };
+            if frame_state.should_render {
+                if let (Some(swapchains), Some(swapchain_images), Some(image_layouts)) = (
+                    swapchains.as_mut(),
+                    swapchain_images.as_ref(),
+                    image_layouts.as_mut(),
+                ) {
+                    let cfg = state.stream_config.lock().ok().and_then(|c| *c);
+                    let layout = cfg.map(eye_layout);
+                    let (width, height, is_sbs) = match layout {
+                        Some(layout) => (
+                            layout.eye_width as i32,
+                            layout.eye_height as i32,
+                            layout.is_sbs,
+                        ),
+                        None => (0, 0, false),
+                    };
 
-                let mut layer_views: [xr::CompositionLayerProjectionView<xr::Vulkan>; VIEW_COUNT] = [
-                    xr::CompositionLayerProjectionView::new(),
-                    xr::CompositionLayerProjectionView::new(),
-                ];
+                    let mut layer_views: [xr::CompositionLayerProjectionView<xr::Vulkan>;
+                        VIEW_COUNT] = [
+                        xr::CompositionLayerProjectionView::new(),
+                        xr::CompositionLayerProjectionView::new(),
+                    ];
 
-                for i in 0..VIEW_COUNT {
-                    let image_index = swapchains[i]
-                        .acquire_image()
-                        .map_err(|e| VrError::Adapter(format!("OpenXR acquire: {e:?}")))?;
-                    swapchains[i]
-                        .wait_image(xr::Duration::from_nanos(5_000_000))
-                        .map_err(|e| VrError::Adapter(format!("OpenXR wait_image: {e:?}")))?;
+                    for i in 0..VIEW_COUNT {
+                        let image_index = swapchains[i]
+                            .acquire_image()
+                            .map_err(|e| VrError::Adapter(format!("OpenXR acquire: {e:?}")))?;
+                        swapchains[i]
+                            .wait_image(xr::Duration::from_nanos(5_000_000))
+                            .map_err(|e| VrError::Adapter(format!("OpenXR wait_image: {e:?}")))?;
 
-                    if let Some(decoded) = last_decoded.as_ref() {
-                        let image = swapchain_images[i][image_index as usize];
-                        let old_layout = image_layouts[i][image_index as usize];
-                        let eye_width = width.max(0) as u32;
-                        let eye_height = height.max(0) as u32;
-                        let sbs_available = is_sbs
-                            && decoded.width >= eye_width * 2
-                            && decoded.height >= eye_height;
-                        let src_offset_x = if sbs_available {
-                            eye_width * i as u32
-                        } else {
-                            0
-                        };
-                        let copy_width = if sbs_available {
-                            eye_width
-                        } else {
-                            decoded.width.min(eye_width)
-                        };
-                        let copy_height = decoded.height.min(eye_height);
-                        let new_layout = vk_ctx.upload_rgba_region(
-                            image,
-                            old_layout,
-                            decoded.width,
-                            decoded.height,
-                            src_offset_x,
-                            copy_width,
-                            copy_height,
-                            &decoded.data,
-                        )?;
-                        image_layouts[i][image_index as usize] = new_layout;
+                        if let Some(decoded) = last_decoded.as_ref() {
+                            let image = swapchain_images[i][image_index as usize];
+                            let old_layout = image_layouts[i][image_index as usize];
+                            let eye_width = width.max(0) as u32;
+                            let eye_height = height.max(0) as u32;
+                            let sbs_available = is_sbs
+                                && decoded.width >= eye_width * 2
+                                && decoded.height >= eye_height;
+                            let src_offset_x = if sbs_available {
+                                eye_width * i as u32
+                            } else {
+                                0
+                            };
+                            let copy_width = if sbs_available {
+                                eye_width
+                            } else {
+                                decoded.width.min(eye_width)
+                            };
+                            let copy_height = decoded.height.min(eye_height);
+                            let new_layout = vk_ctx.upload_rgba_region(
+                                image,
+                                old_layout,
+                                decoded.width,
+                                decoded.height,
+                                src_offset_x,
+                                copy_width,
+                                copy_height,
+                                &decoded.data,
+                            )?;
+                            image_layouts[i][image_index as usize] = new_layout;
+                        }
+
+                        swapchains[i]
+                            .release_image()
+                            .map_err(|e| VrError::Adapter(format!("OpenXR release: {e:?}")))?;
+
+                        if views.len() > i {
+                            let sub_image = unsafe {
+                                xr::SwapchainSubImage::from_raw(xr::sys::SwapchainSubImage {
+                                    swapchain: swapchains[i].as_raw(),
+                                    image_rect: xr::Rect2Di {
+                                        offset: xr::Offset2Di { x: 0, y: 0 },
+                                        extent: xr::Extent2Di { width, height },
+                                    },
+                                    image_array_index: 0,
+                                })
+                            };
+                            layer_views[i] = xr::CompositionLayerProjectionView::new()
+                                .pose(views[i].pose)
+                                .fov(views[i].fov)
+                                .sub_image(sub_image);
+                        }
                     }
 
-                    swapchains[i]
-                        .release_image()
-                        .map_err(|e| VrError::Adapter(format!("OpenXR release: {e:?}")))?;
+                    let layer = xr::CompositionLayerProjection::new()
+                        .space(&reference_space)
+                        .views(&layer_views);
+                    let layers: [&xr::CompositionLayerBase<xr::Vulkan>; 1] = [&layer];
 
-                    if views.len() > i {
-                        let sub_image = unsafe {
-                            xr::SwapchainSubImage::from_raw(xr::sys::SwapchainSubImage {
-                                swapchain: swapchains[i].as_raw(),
-                                image_rect: xr::Rect2Di {
-                                    offset: xr::Offset2Di { x: 0, y: 0 },
-                                    extent: xr::Extent2Di { width, height },
-                                },
-                                image_array_index: 0,
-                            })
-                        };
-                        layer_views[i] = xr::CompositionLayerProjectionView::new()
-                            .pose(views[i].pose)
-                            .fov(views[i].fov)
-                            .sub_image(sub_image);
-                    }
+                    frame_stream
+                        .end(
+                            frame_state.predicted_display_time,
+                            xr::EnvironmentBlendMode::OPAQUE,
+                            &layers,
+                        )
+                        .map_err(|e| VrError::Adapter(format!("OpenXR end: {e:?}")))?;
                 }
-
-                let layer = xr::CompositionLayerProjection::new()
-                    .space(&reference_space)
-                    .views(&layer_views);
-                let layers: [&xr::CompositionLayerBase<xr::Vulkan>; 1] = [&layer];
-
-                frame_stream
-                    .end(
-                        frame_state.predicted_display_time,
-                        xr::EnvironmentBlendMode::OPAQUE,
-                        &layers,
-                    )
-                    .map_err(|e| VrError::Adapter(format!("OpenXR end: {e:?}")))?;
             } else {
                 frame_stream
                     .end(
@@ -2185,6 +2194,7 @@ mod windows {
             })
         }
 
+        #[allow(clippy::too_many_arguments)]
         fn bindings_for_profile<'a>(
             instance: &'a xr::Instance,
             profile: &'a str,
@@ -2443,7 +2453,7 @@ mod windows {
     fn eye_layout(cfg: StreamConfig) -> EyeLayout {
         let width = cfg.width as u32;
         let height = cfg.height as u32;
-        let is_sbs = width >= height * 2 && width % 2 == 0;
+        let is_sbs = width >= height * 2 && width.is_multiple_of(2);
         let eye_width = if is_sbs { width / 2 } else { width };
         EyeLayout {
             eye_width,
@@ -2982,7 +2992,7 @@ mod windows {
             let period_ns = frame_state.predicted_display_period.as_nanos();
             if period_ns > 0 {
                 let refresh_hz = 1_000_000_000.0 / period_ns as f32;
-                let send = last_refresh_hz.map_or(true, |prev| (prev - refresh_hz).abs() > 0.1);
+                let send = last_refresh_hz.is_none_or(|prev| (prev - refresh_hz).abs() > 0.1);
                 if send {
                     state.callbacks.on_vr_timing(VrTiming {
                         refresh_hz,
@@ -3270,6 +3280,7 @@ mod android {
             })
         }
 
+        #[allow(clippy::too_many_arguments)]
         fn bindings_for_profile<'a>(
             instance: &'a xr::Instance,
             profile: &'a str,
@@ -3760,7 +3771,7 @@ mod android {
 pub(crate) fn spawn_runtime(state: Arc<SharedState>) -> VrResult<JoinHandle<()>> {
     #[cfg(target_os = "linux")]
     {
-        return linux::spawn(state);
+        linux::spawn(state)
     }
     #[cfg(target_os = "windows")]
     {

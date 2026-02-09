@@ -648,11 +648,10 @@ pub async fn start_host(port: u16, display_id: Option<u32>) -> Result<String, St
                 if let Ok(mut sig) = SignalingClient::connect(&signaling_url, &token).await {
                     log::info!("Host registered with signaling gateway");
                     while let Ok(msg) = sig.recv().await {
-                        match msg {
-                            SignalMessage::OFFER_RIFT {
+                        if let SignalMessage::OFFER_RIFT {
                                 target_username,
                                 hello_base64,
-                            } => {
+                            } = msg {
                                 if let Ok(hello) = wavry_client::decode_hello_base64(&hello_base64)
                                 {
                                     let session_id = uuid::Uuid::new_v4().into_bytes();
@@ -700,8 +699,6 @@ pub async fn start_host(port: u16, display_id: Option<u32>) -> Result<String, St
                                         })
                                         .await;
                                 }
-                            }
-                            _ => {}
                         }
                     }
                 }
@@ -789,7 +786,7 @@ pub async fn start_host(port: u16, display_id: Option<u32>) -> Result<String, St
 
                         let chunk = rift_core::VideoChunk {
                             frame_id,
-                            chunk_index: i as u32,
+                            chunk_index: i,
                             chunk_count: total_chunks,
                             timestamp_us: frame.timestamp_us,
                             keyframe: frame.keyframe,
