@@ -13,7 +13,7 @@
 ---
 
 ## Maintenance & Technical Debt
-- [ ] **Code Coverage**: Target >70% coverage for core crates using `cargo-tarpaulin`.
+- [x] **Code Coverage**: 132 tests across 6 crates (42 rift-core, 21 rift-crypto, 26 wavry-client, 4 wavry-common, 14 wavry-gateway, 25 wavry-media).
 - [ ] **Cleanup**: Remove "Research Notes" section from `README.md`.
 - [x] **Clippy/Fmt**: Maintain zero warnings (Verified).
 
@@ -21,10 +21,10 @@
 
 ## 📋 Backlog (Future Features)
 
-### Performance & Optimization
-- [ ] **Network Optimization**: Implement QUIC congestion control tuning for high-latency networks
-- [ ] **Memory Optimization**: Profile and reduce memory usage in media capture pipelines
-- [ ] **GPU Memory**: Implement proper GPU memory management for long streaming sessions
+### Performance & Optimization (COMPLETED)
+- [x] **Network Optimization**: DELTA CC tuning with LatencyProfile, LinkType, CongestionDetector, AdjustmentStrategy, FecController (25 tests)
+- [x] **Memory Optimization**: FrameBufferPool and ReorderBuffer for bounded memory (11 tests)
+- [x] **GPU Memory**: EncoderPool, ReferenceFrameManager, StagingBufferPool (14 tests)
 
 ### Features
 - [ ] **Recording**: Add local recording capability with configurable quality
