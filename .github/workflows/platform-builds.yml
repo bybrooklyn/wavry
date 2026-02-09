@@ -116,7 +116,7 @@ jobs:
           ./scripts/master-relay-smoke.sh
 
   rust-backend:
-    name: Build backend (${{ matrix.os }})
+    name: Build backend (${{ matrix.suffix }})
     needs: pre-build
     if: needs.pre-build.outputs.already_released != 'true'
     runs-on: ${{ matrix.os }}
@@ -171,7 +171,7 @@ jobs:
           path: ci-artifacts/backend/
 
   desktop-tauri:
-    name: Desktop build (${{ matrix.os }})
+    name: Desktop build (${{ matrix.suffix }})
     needs: pre-build
     if: needs.pre-build.outputs.already_released != 'true'
     runs-on: ${{ matrix.os }}
