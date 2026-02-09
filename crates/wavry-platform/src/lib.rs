@@ -12,6 +12,8 @@ pub trait InputInjector: Send {
     fn mouse_button(&mut self, button: u8, pressed: bool) -> Result<()>;
     fn mouse_motion(&mut self, dx: i32, dy: i32) -> Result<()>;
     fn mouse_absolute(&mut self, x: f32, y: f32) -> Result<()>;
+    fn scroll(&mut self, dx: f32, dy: f32) -> Result<()>;
+    fn gamepad(&mut self, gamepad_id: u32, axes: &[(u32, f32)], buttons: &[(u32, bool)]) -> Result<()>;
 }
 
 pub struct UnsupportedCapturer;
@@ -38,6 +40,14 @@ impl InputInjector for UnsupportedInjector {
     }
 
     fn mouse_absolute(&mut self, _x: f32, _y: f32) -> Result<()> {
+        bail!("input injection is not implemented for this platform")
+    }
+
+    fn scroll(&mut self, _dx: f32, _dy: f32) -> Result<()> {
+        bail!("input injection is not implemented for this platform")
+    }
+
+    fn gamepad(&mut self, _gamepad_id: u32, _axes: &[(u32, f32)], _buttons: &[(u32, bool)]) -> Result<()> {
         bail!("input injection is not implemented for this platform")
     }
 }

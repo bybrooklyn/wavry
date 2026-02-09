@@ -39,6 +39,21 @@ impl InputInjector for DummyInjector {
         info!("DummyInjector: Mouse Absolute {}, {}", x, y);
         Ok(())
     }
+
+    fn scroll(&mut self, dx: f32, dy: f32) -> Result<()> {
+        info!("DummyInjector: Scroll dx={}, dy={}", dx, dy);
+        Ok(())
+    }
+
+    fn gamepad(&mut self, gamepad_id: u32, axes: &[(u32, f32)], buttons: &[(u32, bool)]) -> Result<()> {
+        info!(
+            "DummyInjector: Gamepad {} with {} axes and {} buttons",
+            gamepad_id,
+            axes.len(),
+            buttons.len()
+        );
+        Ok(())
+    }
 }
 
 pub struct DummyCapturer;

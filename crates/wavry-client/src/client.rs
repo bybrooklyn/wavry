@@ -1039,6 +1039,21 @@ async fn run_client_inner(
             0
         };
 
+        // Sign feedback with identity key if available
+        let signature = if let Some(identity_key_bytes) = config.identity_key {
+            use rift_crypto::identity::IdentityKeypair;
+            let keypair = IdentityKeypair::from_bytes(&identity_key_bytes);
+            // Create a stable message to sign: session_id + relay_id + quality_score
+            let message = format!(
+                "{}:{}:{}",
+                relay.session_id, relay.relay_id, quality_score
+            );
+            let sig_bytes = keypair.sign(message.as_bytes());
+            hex::encode(sig_bytes)
+        } else {
+            String::new()
+        };
+
         let feedback = wavry_common::protocol::RelayFeedbackRequest {
             session_id: relay.session_id,
             relay_id: relay.relay_id.clone(),
@@ -1048,7 +1063,7 @@ async fn run_client_inner(
             } else {
                 vec![]
             },
-            signature: String::new(), // TODO: Sign feedback with identity key
+            signature,
         };
 
         let client = reqwest::Client::new();

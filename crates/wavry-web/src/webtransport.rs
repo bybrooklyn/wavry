@@ -170,10 +170,9 @@ async fn handle_session(
                 }
                 Some(frame) = rx.recv() => {
                     if let Ok(mut stream) = c2.open_uni().await {
-                        // TODO: Fix write_all trait bound issue
-                        // if let Ok(json) = serde_json::to_vec(&frame) {
-                        //    let _ = stream.write_all(&json).await;
-                        // }
+                        if let Ok(json) = serde_json::to_vec(&frame) {
+                            let _ = stream.write_all(&json).await;
+                        }
                     }
                 }
             }

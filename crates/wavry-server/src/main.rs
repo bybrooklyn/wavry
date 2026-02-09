@@ -1009,12 +1009,14 @@ mod host {
             Event::MouseButton(m) => injector.mouse_button(m.button as u8, m.pressed)?,
             Event::MouseMove(m) => injector.mouse_absolute(m.x, m.y)?,
             Event::Scroll(s) => {
-                // TODO: Add scroll to InputInjector trait
-                debug!("Scroll event received: dx={}, dy={}", s.dx, s.dy);
+                injector.scroll(s.dx, s.dy)?;
+                debug!("Scroll event injected: dx={}, dy={}", s.dx, s.dy);
             }
             Event::Gamepad(g) => {
-                // TODO: Add gamepad to InputInjector trait
-                debug!("Gamepad event received from ID {}", g.gamepad_id);
+                let axes: Vec<(u32, f32)> = g.axes.iter().map(|a| (a.axis, a.value)).collect();
+                let buttons: Vec<(u32, bool)> = g.buttons.iter().map(|b| (b.button, b.pressed)).collect();
+                injector.gamepad(g.gamepad_id, &axes, &buttons)?;
+                debug!("Gamepad event injected for ID {}", g.gamepad_id);
             }
         }
         Ok(())

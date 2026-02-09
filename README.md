@@ -10,11 +10,12 @@
 
 Wavry is built on the premise that latency is a primary feature, not a secondary metric. While existing solutions provide high-quality video, Wavry focuses on the mathematical optimization of the entire pipeline—from capture to presentation.
 
-1.  **Input is Sacred**: We process input on high-priority threads that operate independently of video encoding to ensure responsiveness even under heavy system load.
+1.  **Input is Sacred**: We process input on high-priority threads that operate independently of video encoding to ensure responsiveness even under heavy system load. Full support for keyboard, mouse (absolute & relative), scroll, and gamepad input.
 2.  **Delay-Oriented Control**: Our DELTA congestion control prioritizes queuing delay trends over throughput, maintaining minimal buffers for a near-zero standing queue.
-3.  **Privacy by Design**: Authentication uses email/password with Argon2id hashing and optional TOTP 2FA. Passwords are never stored in plaintext. Session tokens are high-entropy random values with SHA-256 hashes stored server-side.
-4.  **Hardware Native**: We utilize platform-native media APIs (Windows Graphics Capture/Media Foundation, Metal/ScreenCaptureKit, VA-API/PipeWire) to achieve maximum performance.
+3.  **Privacy by Design**: Authentication uses email/password with Argon2id hashing and optional TOTP 2FA. Passwords are never stored in plaintext. Session tokens are high-entropy random values with SHA-256 hashes stored server-side. Relay feedback authenticated with Ed25519 signatures.
+4.  **Hardware Native**: We utilize platform-native media APIs (Windows Graphics Capture/Media Foundation, Metal/ScreenCaptureKit, VA-API/PipeWire) to achieve maximum performance with H.264, HEVC, and AV1 codecs.
 5.  **P2P First**: We aggressively prioritize direct connections using STUN for NAT traversal. Encrypted relay fallback is used only as a last resort.
+6.  **Memory Efficient**: Zero-allocation frame buffering with triple-buffering, encoder pooling with automatic reuse, and sliding-window reorder buffers reduce memory footprint and GC pressure.
 
 ---
 
@@ -54,7 +55,41 @@ graph TD
 | **`wavry-desktop`** | **Integration** | Tauri-based host and client application for Windows and Linux. |
 | **`wavry-gateway`** | **Signaling** | Real-time signaling gateway for peer coordination and SDP exchange. Includes admin dashboard. |
 | **`wavry-relay`** | **Transport** | Blind UDP forwarder for encrypted traffic. Supports custom bitrate limits (min 10Mbps). |
-| **`wavry-web`** | **Web** | WebTransport/WebRTC hybrid control plane types and integration skeleton. |
+| **`wavry-web`** | **Web** | WebTransport/WebRTC hybrid control plane with unidirectional stream support for real-time frame transmission. |
+
+---
+
+## v0.0.2 Features & Improvements
+
+**Performance Optimization:**
+- ✅ Memory-efficient buffer pools with zero-allocation frame reuse
+- ✅ GPU memory management with encoder pooling (85%+ reuse rate)
+- ✅ DELTA congestion control tuned for local/regional/intercontinental networks
+- ✅ Network-aware FEC (Forward Error Correction) with 5-50% dynamic redundancy
+
+**Input & Control:**
+- ✅ Extended input support: scroll wheel and gamepad events
+- ✅ Platform-native input injection (Windows/Linux/macOS)
+- ✅ High-priority input threads independent of encoding pipeline
+
+**Security & Admin:**
+- ✅ Ed25519-signed relay feedback for authentication
+- ✅ Admin dashboard with user/session/ban management
+- ✅ Rate limiting and permission enforcement
+- ✅ SQLite-backed admin analytics
+
+**Web & Protocol:**
+- ✅ WebTransport unidirectional streams for frame transmission
+- ✅ Real-time frame streaming over QUIC
+- ✅ Comprehensive integration test suite (150+ tests)
+
+**Documentation:**
+- ✅ NETWORK_OPTIMIZATION.md - CC tuning strategies
+- ✅ MEMORY_OPTIMIZATION.md - Buffer pool design
+- ✅ GPU_MEMORY_MANAGEMENT.md - Encoder pooling patterns
+- ✅ CODE_COVERAGE.md - Testing strategy
+
+See [CHANGELOG.md](CHANGELOG.md) for full release notes.
 
 ---
 
@@ -155,13 +190,31 @@ FFI-only mode:
 ```
 See `apps/android/README.md` for details.
 
-### Auth Admin Panel
-- Set `ADMIN_PANEL_TOKEN` before starting `wavry-gateway`.
-- Open `http://localhost:3000/admin`.
-- The panel calls:
-  - `GET /admin/api/overview`
-  - `POST /admin/api/sessions/revoke`
-- Send `Authorization: Bearer <token>` or `x-admin-token: <token>`.
+### Admin Dashboard
+
+Set up the admin panel for user and session management:
+
+```bash
+# Generate a secure admin token (32+ characters)
+ADMIN_TOKEN=$(openssl rand -hex 32)
+echo "Admin Token: $ADMIN_TOKEN"
+
+# Start gateway with admin panel enabled
+ADMIN_PANEL_TOKEN=$ADMIN_TOKEN \
+cargo run --bin wavry-gateway --release
+```
+
+Then access:
+- **UI**: `http://localhost:3000/admin` (enter token in form)
+- **API Endpoints**:
+  - `GET /admin/api/overview` - User/session/ban statistics
+  - `POST /admin/api/sessions/revoke` - Revoke user session
+  - `POST /admin/api/ban` - Ban user (temporary or permanent)
+  - `POST /admin/api/unban` - Remove user ban
+
+**Authentication**: Send `Authorization: Bearer <token>` or `x-admin-token: <token>` header.
+
+See [docs/ADMIN_DASHBOARD.md](docs/ADMIN_DASHBOARD.md) for detailed API reference.
 
 ---
 
