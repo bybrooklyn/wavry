@@ -212,6 +212,17 @@ pub mod android;
 #[cfg(target_os = "android")]
 pub use android::{AndroidAudioRenderer, AndroidProbe, AndroidVideoRenderer};
 
+pub mod buffer_pool;
+pub use buffer_pool::{
+    FrameBuffer, FrameBufferPool, FrameBufferPoolConfig, ReorderBuffer, ReorderError,
+};
+
+pub mod encoder_pool;
+pub use encoder_pool::{
+    EncoderConfig, EncoderPool, EncoderPoolConfig, EncoderPoolStats, MemoryPressure,
+    PooledEncoder, ReferenceFrame, ReferenceFrameManager, StagingBuffer, StagingBufferPool,
+};
+
 #[cfg(target_os = "linux")]
 mod linux;
 
