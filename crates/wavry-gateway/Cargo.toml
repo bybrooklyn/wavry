@@ -1,6 +1,6 @@
 [package]
 name = "wavry-gateway"
-version = "0.0.1-unstable"
+version = "0.0.2-canary"
 edition = "2021"
 
 [features]

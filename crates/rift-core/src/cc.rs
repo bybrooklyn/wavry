@@ -272,6 +272,223 @@ impl DeltaCC {
     }
 }
 
+/// Classification of network link types based on baseline latency.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LinkType {
+    /// Local network (<10ms baseline)
+    Local,
+    /// Regional network (10-50ms baseline)
+    Regional,
+    /// Intercontinental network (50-150ms baseline)
+    Intercontinental,
+    /// Satellite or extreme-latency links (150-500ms baseline)
+    Satellite,
+}
+
+impl LinkType {
+    pub fn from_baseline_rtt(baseline_rtt_ms: u64) -> Self {
+        match baseline_rtt_ms {
+            0..=10 => LinkType::Local,
+            11..=50 => LinkType::Regional,
+            51..=150 => LinkType::Intercontinental,
+            _ => LinkType::Satellite,
+        }
+    }
+
+    pub fn adjustment_aggressiveness(&self) -> f32 {
+        match self {
+            LinkType::Local => 0.20,        // ±20% per second
+            LinkType::Regional => 0.10,     // ±10% per second
+            LinkType::Intercontinental => 0.05,  // ±5% per second
+            LinkType::Satellite => 0.03,    // ±3% per second
+        }
+    }
+}
+
+/// Profile of network characteristics determined during connection handshake.
+#[derive(Debug, Clone)]
+pub struct LatencyProfile {
+    pub base_rtt_ms: u64,
+    pub rtt_std_dev: f32,
+    pub percentile_p95_rtt_ms: u64,
+    pub link_type: LinkType,
+}
+
+impl LatencyProfile {
+    /// Estimate profile from a set of RTT samples (typically first 100 from handshake).
+    pub fn estimate_from_samples(rtts: &[u64]) -> Self {
+        if rtts.is_empty() {
+            return Self {
+                base_rtt_ms: 0,
+                rtt_std_dev: 0.0,
+                percentile_p95_rtt_ms: 0,
+                link_type: LinkType::Local,
+            };
+        }
+
+        let base_rtt_ms = *rtts.iter().min().unwrap_or(&0);
+        let avg: f32 = rtts.iter().map(|&x| x as f32).sum::<f32>() / rtts.len() as f32;
+        let variance: f32 = rtts
+            .iter()
+            .map(|&x| {
+                let diff = x as f32 - avg;
+                diff * diff
+            })
+            .sum::<f32>()
+            / rtts.len() as f32;
+        let rtt_std_dev = variance.sqrt();
+
+        let mut sorted = rtts.to_vec();
+        sorted.sort_unstable();
+        let percentile_p95_rtt_ms = sorted[(sorted.len() * 95) / 100];
+
+        let link_type = LinkType::from_baseline_rtt(base_rtt_ms);
+
+        Self {
+            base_rtt_ms,
+            rtt_std_dev,
+            percentile_p95_rtt_ms,
+            link_type,
+        }
+    }
+
+    pub fn target_delay_for_link(&self) -> u64 {
+        // Scale target delay based on baseline RTT
+        match self.link_type {
+            LinkType::Local => 15,
+            LinkType::Regional => 25,
+            LinkType::Intercontinental => 50,
+            LinkType::Satellite => 100,
+        }
+    }
+}
+
+/// Hybrid congestion detection combining delay-slope and loss-rate indicators.
+#[derive(Debug, Clone)]
+pub struct CongestionDetector {
+    pub rising_threshold_ms: f32,
+    pub loss_rate_threshold: f32,
+    pub rtt_filter_window_ms: u64,
+    pub delay_score: f32,      // 0-50 points
+    pub loss_score: f32,       // 0-50 points
+    recent_loss_rate: f32,
+    recent_delay_slope: f32,
+}
+
+impl Default for CongestionDetector {
+    fn default() -> Self {
+        Self {
+            rising_threshold_ms: 1.0,
+            loss_rate_threshold: 0.001,  // 0.1%
+            rtt_filter_window_ms: 500,
+            delay_score: 0.0,
+            loss_score: 0.0,
+            recent_loss_rate: 0.0,
+            recent_delay_slope: 0.0,
+        }
+    }
+}
+
+impl CongestionDetector {
+    pub fn update(&mut self, delay_slope_ms: f32, loss_rate: f32) {
+        self.recent_loss_rate = loss_rate;
+        self.recent_delay_slope = delay_slope_ms;
+
+        // Delay-slope scoring: 0-50 points
+        if delay_slope_ms < 0.0 {
+            self.delay_score = 0.0;  // Improving
+        } else if delay_slope_ms < self.rising_threshold_ms {
+            self.delay_score = (delay_slope_ms / self.rising_threshold_ms * 25.0).min(25.0);
+        } else {
+            self.delay_score = 25.0 + (delay_slope_ms / self.rising_threshold_ms * 25.0).min(25.0);
+        }
+
+        // Loss-rate scoring: 0-50 points
+        if loss_rate < self.loss_rate_threshold {
+            self.loss_score = 0.0;
+        } else {
+            let loss_pct = loss_rate * 100.0;
+            self.loss_score = (loss_pct / 1.0 * 50.0).min(50.0);
+        }
+    }
+
+    pub fn is_congested(&self) -> bool {
+        self.delay_score + self.loss_score > 50.0
+    }
+
+    pub fn congestion_score(&self) -> f32 {
+        (self.delay_score + self.loss_score).min(100.0)
+    }
+}
+
+/// Adaptive bitrate adjustment strategy based on link type.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AdjustmentStrategy {
+    Conservative,  // ±5% per adjustment, for satellite
+    Moderate,      // ±10% per adjustment, for intercontinental
+    Aggressive,    // ±20% per adjustment, for local
+}
+
+impl AdjustmentStrategy {
+    pub fn from_link_type(link_type: LinkType) -> Self {
+        match link_type {
+            LinkType::Local => AdjustmentStrategy::Aggressive,
+            LinkType::Regional => AdjustmentStrategy::Moderate,
+            LinkType::Intercontinental => AdjustmentStrategy::Moderate,
+            LinkType::Satellite => AdjustmentStrategy::Conservative,
+        }
+    }
+
+    pub fn adjust_bitrate(&self, current_kbps: u32, target_adjustment_pct: f32) -> u32 {
+        let max_change = match self {
+            AdjustmentStrategy::Conservative => 5.0,
+            AdjustmentStrategy::Moderate => 10.0,
+            AdjustmentStrategy::Aggressive => 20.0,
+        };
+
+        let clamped = target_adjustment_pct.clamp(-max_change, max_change);
+        ((current_kbps as f32 * (100.0 + clamped)) / 100.0) as u32
+    }
+}
+
+/// Dynamic FEC controller for high-latency networks.
+#[derive(Debug, Clone)]
+pub struct FecController {
+    pub base_redundancy_pct: u32,    // 10-20%
+    pub current_redundancy_pct: u32,
+    pub max_redundancy_pct: u32,
+    min_redundancy_pct: u32,
+}
+
+impl FecController {
+    pub fn new(base_redundancy_pct: u32) -> Self {
+        Self {
+            base_redundancy_pct,
+            current_redundancy_pct: base_redundancy_pct,
+            max_redundancy_pct: 50,
+            min_redundancy_pct: 5,
+        }
+    }
+
+    pub fn update(&mut self, recent_loss_rate: f32, link_stability: f32) {
+        let loss_factor = (recent_loss_rate * 1000.0) as u32;  // Scale up
+        let stability_factor = ((1.0 - link_stability) * 10.0) as u32;
+
+        self.current_redundancy_pct =
+            (self.base_redundancy_pct + loss_factor + stability_factor)
+                .min(self.max_redundancy_pct)
+                .max(self.min_redundancy_pct);
+    }
+
+    pub fn should_increase_redundancy(&self, loss_rate: f32) -> bool {
+        loss_rate > 0.01 && self.current_redundancy_pct < self.max_redundancy_pct
+    }
+
+    pub fn should_decrease_redundancy(&self, loss_rate: f32) -> bool {
+        loss_rate < 0.001 && self.current_redundancy_pct > self.base_redundancy_pct
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -387,5 +604,240 @@ mod tests {
         let high_fec = cc.fec_ratio;
         cc.on_rtt_sample(5000, 0.0, 2000);
         assert!(cc.fec_ratio < high_fec);
+    }
+
+    #[test]
+    fn test_link_type_classification() {
+        assert_eq!(LinkType::from_baseline_rtt(5), LinkType::Local);
+        assert_eq!(LinkType::from_baseline_rtt(10), LinkType::Local);
+        assert_eq!(LinkType::from_baseline_rtt(25), LinkType::Regional);
+        assert_eq!(LinkType::from_baseline_rtt(100), LinkType::Intercontinental);
+        assert_eq!(LinkType::from_baseline_rtt(250), LinkType::Satellite);
+        assert_eq!(LinkType::from_baseline_rtt(500), LinkType::Satellite);
+    }
+
+    #[test]
+    fn test_link_type_adjustment_aggressiveness() {
+        assert_eq!(
+            LinkType::Local.adjustment_aggressiveness(),
+            0.20,
+            "Local should be aggressive"
+        );
+        assert_eq!(
+            LinkType::Regional.adjustment_aggressiveness(),
+            0.10,
+            "Regional should be moderate"
+        );
+        assert_eq!(
+            LinkType::Intercontinental.adjustment_aggressiveness(),
+            0.05,
+            "Intercontinental should be conservative"
+        );
+        assert_eq!(
+            LinkType::Satellite.adjustment_aggressiveness(),
+            0.03,
+            "Satellite should be very conservative"
+        );
+    }
+
+    #[test]
+    fn test_latency_profile_from_samples() {
+        let rtts = vec![10, 12, 15, 11, 14, 13, 16, 12, 10, 15];
+        let profile = LatencyProfile::estimate_from_samples(&rtts);
+
+        assert_eq!(profile.base_rtt_ms, 10);
+        assert!(profile.rtt_std_dev > 0.0);
+        assert!(profile.percentile_p95_rtt_ms >= 10);
+        assert_eq!(profile.link_type, LinkType::Local);
+    }
+
+    #[test]
+    fn test_latency_profile_high_latency_samples() {
+        let rtts = vec![
+            200, 210, 220, 205, 215, 230, 225, 210, 205, 220,
+        ];
+        let profile = LatencyProfile::estimate_from_samples(&rtts);
+
+        assert_eq!(profile.base_rtt_ms, 200);
+        assert_eq!(profile.link_type, LinkType::Satellite);
+        assert!(profile.rtt_std_dev > 0.0);
+    }
+
+    #[test]
+    fn test_latency_profile_empty_samples() {
+        let rtts = vec![];
+        let profile = LatencyProfile::estimate_from_samples(&rtts);
+
+        assert_eq!(profile.base_rtt_ms, 0);
+        assert_eq!(profile.link_type, LinkType::Local);
+    }
+
+    #[test]
+    fn test_latency_profile_target_delay_scaling() {
+        let local_profile = LatencyProfile::estimate_from_samples(&[5, 6, 7]);
+        assert_eq!(local_profile.target_delay_for_link(), 15);
+
+        let regional_profile = LatencyProfile::estimate_from_samples(&[25, 26, 27]);
+        assert_eq!(regional_profile.target_delay_for_link(), 25);
+
+        let intercontinental_profile = LatencyProfile::estimate_from_samples(&[100, 101, 102]);
+        assert_eq!(intercontinental_profile.target_delay_for_link(), 50);
+
+        let satellite_profile = LatencyProfile::estimate_from_samples(&[250, 251, 252]);
+        assert_eq!(satellite_profile.target_delay_for_link(), 100);
+    }
+
+    #[test]
+    fn test_congestion_detector_no_congestion() {
+        let mut detector = CongestionDetector::default();
+        detector.update(-0.5, 0.0);  // Improving delay, no loss
+
+        assert!(!detector.is_congested());
+        assert_eq!(detector.delay_score, 0.0);
+        assert_eq!(detector.loss_score, 0.0);
+    }
+
+    #[test]
+    fn test_congestion_detector_delay_congestion() {
+        let mut detector = CongestionDetector::default();
+        detector.update(2.0, 0.0);  // Rising delay
+
+        assert!(detector.delay_score > 0.0);
+        assert_eq!(detector.loss_score, 0.0);
+    }
+
+    #[test]
+    fn test_congestion_detector_loss_congestion() {
+        let mut detector = CongestionDetector::default();
+        detector.update(0.0, 0.005);  // 0.5% loss
+
+        assert_eq!(detector.delay_score, 0.0);
+        assert!(detector.loss_score > 0.0);
+    }
+
+    #[test]
+    fn test_congestion_detector_hybrid_congestion() {
+        let mut detector = CongestionDetector::default();
+        detector.update(1.5, 0.003);  // Both delay and loss
+
+        assert!(detector.is_congested() || detector.congestion_score() > 0.0);
+    }
+
+    #[test]
+    fn test_adjustment_strategy_from_link_type() {
+        assert_eq!(
+            AdjustmentStrategy::from_link_type(LinkType::Local),
+            AdjustmentStrategy::Aggressive
+        );
+        assert_eq!(
+            AdjustmentStrategy::from_link_type(LinkType::Regional),
+            AdjustmentStrategy::Moderate
+        );
+        assert_eq!(
+            AdjustmentStrategy::from_link_type(LinkType::Satellite),
+            AdjustmentStrategy::Conservative
+        );
+    }
+
+    #[test]
+    fn test_adjustment_strategy_bitrate_increase() {
+        let conservative = AdjustmentStrategy::Conservative;
+        let moderate = AdjustmentStrategy::Moderate;
+        let aggressive = AdjustmentStrategy::Aggressive;
+
+        let base_bitrate = 5000;
+
+        // Conservative: +5%
+        let conservative_result = conservative.adjust_bitrate(base_bitrate, 10.0);
+        assert_eq!(conservative_result, 5250); // 5000 * 1.05
+
+        // Moderate: +10%
+        let moderate_result = moderate.adjust_bitrate(base_bitrate, 10.0);
+        assert_eq!(moderate_result, 5500); // 5000 * 1.10
+
+        // Aggressive: +20%
+        let aggressive_result = aggressive.adjust_bitrate(base_bitrate, 30.0);
+        assert_eq!(aggressive_result, 6000); // 5000 * 1.20
+    }
+
+    #[test]
+    fn test_adjustment_strategy_bitrate_clamping() {
+        let conservative = AdjustmentStrategy::Conservative;
+
+        // Request +50%, but conservative clamps to +5%
+        let result = conservative.adjust_bitrate(5000, 50.0);
+        assert_eq!(result, 5250);
+
+        // Request -20%, but conservative clamps to -5%
+        let result = conservative.adjust_bitrate(5000, -20.0);
+        assert_eq!(result, 4750);
+    }
+
+    #[test]
+    fn test_fec_controller_initialization() {
+        let controller = FecController::new(15);
+
+        assert_eq!(controller.base_redundancy_pct, 15);
+        assert_eq!(controller.current_redundancy_pct, 15);
+        assert_eq!(controller.max_redundancy_pct, 50);
+    }
+
+    #[test]
+    fn test_fec_controller_increase_on_loss() {
+        let mut controller = FecController::new(15);
+
+        controller.update(0.05, 0.8);  // 5% loss, 80% stability
+        assert!(controller.current_redundancy_pct > 15);
+    }
+
+    #[test]
+    fn test_fec_controller_decrease_on_stability() {
+        let mut controller = FecController::new(15);
+
+        // Start high
+        controller.update(0.01, 0.5);
+        let high_redundancy = controller.current_redundancy_pct;
+
+        // Improve to low loss
+        controller.update(0.0, 0.99);
+        assert!(controller.current_redundancy_pct <= high_redundancy);
+    }
+
+    #[test]
+    fn test_fec_controller_bounds() {
+        let mut controller = FecController::new(15);
+
+        // Try to push beyond max
+        controller.update(0.5, 0.0);  // Extreme loss
+        assert!(controller.current_redundancy_pct <= controller.max_redundancy_pct);
+
+        // Test minimum bound with new controller
+        let mut controller2 = FecController::new(15);
+        controller2.update(0.0, 1.0);  // Perfect conditions
+        assert!(controller2.current_redundancy_pct >= controller2.min_redundancy_pct);
+    }
+
+    #[test]
+    fn test_fec_controller_should_increase_redundancy() {
+        let controller = FecController::new(15);
+
+        assert!(controller.should_increase_redundancy(0.02));  // 2% loss
+        assert!(!controller.should_increase_redundancy(0.005)); // 0.5% loss
+    }
+
+    #[test]
+    fn test_fec_controller_should_decrease_redundancy() {
+        let mut controller = FecController::new(15);
+
+        // First increase redundancy
+        controller.update(0.05, 0.5);
+        let increased_redundancy = controller.current_redundancy_pct;
+        assert!(increased_redundancy > 15);
+
+        // Then check if it should decrease with low loss
+        assert!(controller.should_decrease_redundancy(0.0001));  // 0.01% loss
+
+        // Should not decrease with moderate loss
+        assert!(!controller.should_decrease_redundancy(0.005));  // 0.5% loss
     }
 }

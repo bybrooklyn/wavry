@@ -68,3 +68,141 @@ pub enum VrOutbound {
     Timing(rift_core::VrTiming),
     Gamepad(rift_core::InputMessage),
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_client_config_creation() {
+        let config = ClientConfig {
+            connect_addr: Some("192.168.1.1:5000".parse().unwrap()),
+            client_name: "TestClient".to_string(),
+            no_encrypt: false,
+            identity_key: Some([42u8; 32]),
+            relay_info: None,
+            master_url: None,
+            max_resolution: None,
+            gamepad_enabled: true,
+            gamepad_deadzone: 0.15,
+            vr_adapter: None,
+            runtime_stats: None,
+        };
+
+        assert_eq!(config.client_name, "TestClient");
+        assert!(!config.no_encrypt);
+        assert!(config.gamepad_enabled);
+        assert_eq!(config.gamepad_deadzone, 0.15);
+    }
+
+    #[test]
+    fn test_client_config_clone() {
+        let config1 = ClientConfig {
+            connect_addr: Some("127.0.0.1:5000".parse().unwrap()),
+            client_name: "Clone Test".to_string(),
+            no_encrypt: true,
+            identity_key: None,
+            relay_info: None,
+            master_url: Some("http://localhost:8080".to_string()),
+            max_resolution: Some(wavry_media::Resolution {
+                width: 1920,
+                height: 1080,
+            }),
+            gamepad_enabled: false,
+            gamepad_deadzone: 0.0,
+            vr_adapter: None,
+            runtime_stats: None,
+        };
+
+        let config2 = config1.clone();
+
+        assert_eq!(config1.client_name, config2.client_name);
+        assert_eq!(config1.no_encrypt, config2.no_encrypt);
+        assert_eq!(config1.connect_addr, config2.connect_addr);
+    }
+
+    #[test]
+    fn test_relay_info_creation() {
+        let relay = RelayInfo {
+            relay_id: "relay-001".to_string(),
+            addr: "203.0.113.1:9000".parse().unwrap(),
+            token: "secret-token-abc123".to_string(),
+            session_id: uuid::Uuid::new_v4(),
+        };
+
+        assert_eq!(relay.relay_id, "relay-001");
+        assert!(!relay.token.is_empty());
+    }
+
+    #[test]
+    fn test_relay_info_clone() {
+        let relay1 = RelayInfo {
+            relay_id: "relay-002".to_string(),
+            addr: "198.51.100.1:9000".parse().unwrap(),
+            token: "token-xyz".to_string(),
+            session_id: uuid::Uuid::nil(),
+        };
+
+        let relay2 = relay1.clone();
+
+        assert_eq!(relay1.relay_id, relay2.relay_id);
+        assert_eq!(relay1.addr, relay2.addr);
+        assert_eq!(relay1.session_id, relay2.session_id);
+    }
+
+    #[test]
+    fn test_client_runtime_stats_default() {
+        let stats = ClientRuntimeStats::default();
+
+        assert!(!stats.connected.load(std::sync::atomic::Ordering::Relaxed));
+        assert_eq!(
+            stats.frames_decoded.load(std::sync::atomic::Ordering::Relaxed),
+            0
+        );
+        assert!(stats.monitors.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn test_client_runtime_stats_atomic_operations() {
+        let stats = ClientRuntimeStats::default();
+
+        stats
+            .connected
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+        assert!(stats.connected.load(std::sync::atomic::Ordering::Relaxed));
+
+        stats
+            .frames_decoded
+            .store(100, std::sync::atomic::Ordering::Relaxed);
+        assert_eq!(
+            stats.frames_decoded.load(std::sync::atomic::Ordering::Relaxed),
+            100
+        );
+
+        // Test increment
+        stats
+            .frames_decoded
+            .fetch_add(50, std::sync::atomic::Ordering::Relaxed);
+        assert_eq!(
+            stats.frames_decoded.load(std::sync::atomic::Ordering::Relaxed),
+            150
+        );
+    }
+
+    #[test]
+    fn test_crypto_state_debug() {
+        let disabled = CryptoState::Disabled;
+        assert_eq!(format!("{:?}", disabled), "Disabled");
+    }
+
+    #[test]
+    fn test_media_resolution_values() {
+        let res = wavry_media::Resolution {
+            width: 1920,
+            height: 1080,
+        };
+
+        assert_eq!(res.width, 1920);
+        assert_eq!(res.height, 1080);
+    }
+}

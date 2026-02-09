@@ -1,6 +1,6 @@
 [package]
 name = "wavry-platform"
-version = "0.0.1-unstable"
+version = "0.0.2-canary"
 edition.workspace = true
 license.workspace = true
 

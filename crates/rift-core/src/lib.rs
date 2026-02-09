@@ -518,4 +518,113 @@ mod tests {
         assert_eq!(packet.packet_id, decoded.packet_id);
         assert_eq!(packet.session_id, decoded.session_id);
     }
+
+    #[test]
+    fn physical_packet_handshake() {
+        let packet = PhysicalPacket {
+            version: RIFT_VERSION,
+            session_id: Some(99999999999999999),
+            session_alias: None,
+            packet_id: 888888888,
+            payload: Bytes::from(vec![7; 50]),
+        };
+        let encoded = packet.encode();
+        assert!(encoded.len() >= HANDSHAKE_HEADER_SIZE);
+        let decoded = PhysicalPacket::decode(encoded).unwrap();
+        assert_eq!(decoded.session_id, Some(99999999999999999));
+        assert_eq!(decoded.packet_id, 888888888);
+        assert_eq!(decoded.payload.len(), 50);
+    }
+
+    #[test]
+    fn physical_packet_transport() {
+        let packet = PhysicalPacket {
+            version: RIFT_VERSION,
+            session_id: None,
+            session_alias: Some(0x12345678),
+            packet_id: 999,
+            payload: Bytes::from(vec![42; 50]),
+        };
+        let encoded = packet.encode();
+        assert!(encoded.len() >= TRANSPORT_HEADER_SIZE);
+        let decoded = PhysicalPacket::decode(encoded).unwrap();
+        assert_eq!(decoded.session_alias, Some(0x12345678));
+        assert_eq!(decoded.session_id, None);
+    }
+
+    #[test]
+    fn physical_packet_too_short() {
+        let bytes = Bytes::from(vec![1, 2]);
+        assert!(matches!(
+            PhysicalPacket::decode(bytes),
+            Err(RiftError::TooShort(_))
+        ));
+    }
+
+    #[test]
+    fn physical_packet_invalid_magic() {
+        let bytes = Bytes::from(vec![0xFF, 0xFF, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+        assert!(matches!(
+            PhysicalPacket::decode(bytes),
+            Err(RiftError::InvalidMagic(_))
+        ));
+    }
+
+    #[test]
+    fn physical_packet_unsupported_version() {
+        let mut bytes = vec![0x52, 0x49, 0xFF, 0xFF]; // Invalid version
+        bytes.extend_from_slice(&[0; 14]);
+        let bytes = Bytes::from(bytes);
+        assert!(matches!(
+            PhysicalPacket::decode(bytes),
+            Err(RiftError::UnsupportedVersion(_))
+        ));
+    }
+
+    #[test]
+    fn chunk_video_payload_single_chunk() {
+        let payload = vec![1, 2, 3, 4, 5];
+        let chunks = chunk_video_payload(1, 1000, true, &payload, 1000).unwrap();
+        assert_eq!(chunks.len(), 1);
+        assert_eq!(chunks[0].chunk_count, 1);
+        assert_eq!(chunks[0].chunk_index, 0);
+        assert_eq!(chunks[0].keyframe, true);
+    }
+
+    #[test]
+    fn chunk_video_payload_multiple_chunks() {
+        let payload = vec![0; 1000];
+        let chunks = chunk_video_payload(1, 1000, false, &payload, 300).unwrap();
+        assert_eq!(chunks.len(), 4); // 1000 / 300 = 4 (rounded up)
+        for (i, chunk) in chunks.iter().enumerate() {
+            assert_eq!(chunk.chunk_count, 4);
+            assert_eq!(chunk.chunk_index, i as u32);
+            assert_eq!(chunk.frame_id, 1);
+            assert_eq!(chunk.timestamp_us, 1000);
+        }
+    }
+
+    #[test]
+    fn chunk_video_payload_invalid_max_payload() {
+        let payload = vec![1, 2, 3];
+        let result = chunk_video_payload(1, 1000, true, &payload, 0);
+        assert!(matches!(result, Err(ChunkError::InvalidMaxPayload)));
+    }
+
+    #[test]
+    fn fec_builder_new() {
+        let builder = FecBuilder::new(4);
+        assert!(builder.is_ok());
+        let builder = FecBuilder::new(2);
+        assert!(builder.is_ok());
+        let builder = FecBuilder::new(1);
+        assert!(matches!(builder, Err(FecError::InvalidShardCount)));
+    }
+
+    #[test]
+    fn packet_priority_mapping() {
+        assert_eq!(packet_priority(Channel::Control), PacketPriority::Control);
+        assert_eq!(packet_priority(Channel::Input), PacketPriority::Input);
+        assert_eq!(packet_priority(Channel::Media), PacketPriority::Video);
+    }
 }
