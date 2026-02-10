@@ -264,9 +264,17 @@ jobs:
         with:
           key: android-target
 
+      - name: Cache cargo-ndk
+        id: cache-cargo-ndk
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin/cargo-ndk
+          key: cargo-ndk-${{ runner.os }}-3
+
       - name: Install cargo-ndk
+        if: steps.cache-cargo-ndk.outputs.cache-hit != 'true'
         run: cargo install cargo-ndk
-      
+
       - name: Build
         run: ./scripts/dev-android.sh --both --release --no-install --no-ndk-install
       - name: Stage
