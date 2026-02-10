@@ -16,6 +16,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libsqlite3-dev \
     libgstreamer1.0-dev \
     libgstreamer-plugins-base1.0-dev \
+    libgtk-3-dev \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=planner /app/recipe.json recipe.json
