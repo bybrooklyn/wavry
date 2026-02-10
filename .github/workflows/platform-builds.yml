@@ -164,14 +164,9 @@ jobs:
           bins=(wavry-master wavry-gateway wavry-relay wavry-server wavry-client wavry)
           for b in "${bins[@]}"; do
             if [[ -f "target/release/${b}${{ matrix.exe }}" ]]; then
-              cp "target/release/${b}${{ matrix.exe }}" "ci-artifacts/backend/${b}${{ matrix.exe }}"
+              cp "target/release/${b}${{ matrix.exe }}" "ci-artifacts/backend/${b}-${{ matrix.suffix }}${{ matrix.exe }}"
             fi
           done
-          if [[ "${{ runner.os }}" == "Windows" ]]; then
-            cp target/release/wavry_ffi.lib ci-artifacts/backend/ 2>/dev/null || true
-          else
-            cp target/release/libwavry_ffi.a ci-artifacts/backend/ 2>/dev/null || true
-          fi
       - name: Upload
         uses: actions/upload-artifact@v4
         with:
@@ -216,7 +211,12 @@ jobs:
         shell: bash
         run: |
           mkdir -p ci-artifacts/desktop
-          cp target/release/wavry-desktop* ci-artifacts/desktop/ 2>/dev/null || cp target/release/wavry_desktop* ci-artifacts/desktop/ 2>/dev/null || true
+          for name in wavry-desktop wavry_desktop; do
+            if [[ -f "target/release/${name}${{ matrix.exe }}" ]]; then
+              cp "target/release/${name}${{ matrix.exe }}" "ci-artifacts/desktop/wavry-desktop-${{ matrix.suffix }}${{ matrix.exe }}"
+              break
+            fi
+          done
       - name: Upload
         uses: actions/upload-artifact@v4
         with:
@@ -302,11 +302,15 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
       - name: Build
         run: ./scripts/build-macos.sh release
+      - name: Stage
+        run: |
+          mkdir -p ci-artifacts/macos-app
+          cd dist && zip -r "../ci-artifacts/macos-app/Wavry-macos.zip" Wavry.app
       - name: Upload
         uses: actions/upload-artifact@v4
         with:
           name: macos-app-v${{ needs.pre-build.outputs.wavry_version }}
-          path: dist/Wavry.app
+          path: ci-artifacts/macos-app/
 
   release:
     name: Create Release
