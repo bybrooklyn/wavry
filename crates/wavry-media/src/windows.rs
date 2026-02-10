@@ -117,10 +117,8 @@ unsafe impl Sync for WindowsEncoder {}
 impl WindowsEncoder {
     pub async fn new(config: EncodeConfig) -> Result<Self> {
         unsafe {
-            // Initialize Media Foundation
             MFStartup(MF_VERSION, MFSTARTUP_FULL).context("MFStartup failed")?;
 
-            // Initialize D3D11 Device
             let mut device = None;
             let mut context = None;
             D3D11CreateDevice(
@@ -133,28 +131,27 @@ impl WindowsEncoder {
                 Some(&mut device),
                 None,
                 Some(&mut context),
-            ).context("D3D11CreateDevice failed")?;
+            )
+            .context("D3D11CreateDevice failed")?;
+
             let device = device.ok_or_else(|| anyhow!("Failed to create D3D11 device"))?;
             let context = context.ok_or_else(|| anyhow!("Failed to create D3D11 context"))?;
 
-            // Get Target for capture
             let interop: IGraphicsCaptureItemInterop =
                 windows::core::factory::<GraphicsCaptureItem, IGraphicsCaptureItemInterop>()?;
+
             let capture_item: GraphicsCaptureItem = if let Some(id) = config.display_id {
                 interop.CreateForMonitor(HMONITOR(id as _))?
             } else {
-                let hwnd = GetDesktopWindow();
-                interop.CreateForWindow(hwnd)?
+                interop.CreateForWindow(GetDesktopWindow())?
             };
 
             let item_size = capture_item.Size()?;
             let frame_width = item_size.Width.max(1) as u32;
             let frame_height = item_size.Height.max(1) as u32;
 
-            // Setup WinRT Device
             let winrt_device = create_direct3d_device(&device)?;
 
-            // Setup Frame Pool
             let frame_pool = Direct3D11CaptureFramePool::CreateFreeThreaded(
                 &winrt_device,
                 DirectXPixelFormat::B8G8R8A8UIntNormalized,
@@ -165,71 +162,67 @@ impl WindowsEncoder {
             let capture_session = frame_pool.CreateCaptureSession(&capture_item)?;
             capture_session.StartCapture()?;
 
-            // Initialize Media Foundation Encoder (MFT)
             let mut activate_list: *mut Option<IMFActivate> = std::ptr::null_mut();
             let mut count = 0;
 
-            let mft_category = MFT_CATEGORY_VIDEO_ENCODER;
             let output_subtype = mf_subtype_for_codec(config.codec);
+
             let output_type = MFT_REGISTER_TYPE_INFO {
                 guidMajorType: MFMediaType_Video,
                 guidSubtype: output_subtype,
             };
 
             MFTEnumEx(
-                mft_category,
+                MFT_CATEGORY_VIDEO_ENCODER,
                 MFT_ENUM_FLAG(MFT_ENUM_FLAG_HARDWARE.0 as i32 | MFT_ENUM_FLAG_SORTANDFILTER.0 as i32),
                 None,
                 Some(&output_type),
                 &mut activate_list,
                 &mut count,
-            ).context("MFTEnumEx failed")?;
+            )
+            .context("MFTEnumEx failed")?;
 
             if count == 0 {
-                return Err(anyhow!("No hardware encoders found for {:?}", config.codec));
+                return Err(anyhow!("No hardware encoders found"));
             }
 
             let activate = std::slice::from_raw_parts(activate_list, count as usize)[0]
                 .as_ref()
                 .unwrap();
+
             let transform: IMFTransform = activate.ActivateObject()?;
 
-            // Set Output Type
             let output_media_type: IMFMediaType = MFCreateMediaType()?;
             output_media_type.SetGUID(&MF_MT_MAJOR_TYPE, &MFMediaType_Video)?;
             output_media_type.SetGUID(&MF_MT_SUBTYPE, &output_subtype)?;
             output_media_type.SetUINT32(&MF_MT_AVG_BITRATE, config.bitrate_kbps * 1000)?;
             MFSetAttributeRatio(&output_media_type, &MF_MT_FRAME_RATE, config.fps as u32, 1)?;
+            MFSetAttributeSize(&output_media_type, &MF_MT_FRAME_SIZE, frame_width, frame_height)?;
+            output_media_type.SetUINT32(
+                &MF_MT_INTERLACE_MODE,
+                MFVideoInterlace_Progressive.0 as u32,
+            )?;
+
+            transform.SetOutputType(0, Some(&output_media_type), 0)?;
+
+            let input_media_type: IMFMediaType = MFCreateMediaType()?;
+            input_media_type.SetGUID(&MF_MT_MAJOR_TYPE, &MFMediaType_Video)?;
+            input_media_type.SetGUID(&MF_MT_SUBTYPE, &MF_BGR32)?;
             MFSetAttributeSize(
-                &output_media_type,
+                &input_media_type,
                 &MF_MT_FRAME_SIZE,
                 frame_width,
                 frame_height,
             )?;
-            output_media_type
-                .SetUINT32(&MF_MT_INTERLACE_MODE, MFVideoInterlace_Progressive.0 as u32)?;
-
-            transform.SetOutputType(0, Some(&output_media_type), 0)?;
-
-            // Set Input Type
-            let input_media_type: IMFMediaType = MFCreateMediaType()?;
-            input_media_type.SetGUID(&MF_MT_MAJOR_TYPE, &MFMediaType_Video)?;
-            input_media_type.SetGUID(&MF_MT_SUBTYPE, &MF_BGR32)?; // B8G8R8A8 in MF is often BGR32
-            MFSetAttributeSize(
-                &input_media_type,
-                &MF_MT_FRAME_SIZE,
-                item_size.Width as u32,
-                item_size.Height as u32,
-            )?;
             MFSetAttributeRatio(&input_media_type, &MF_MT_FRAME_RATE, config.fps as u32, 1)?;
             transform.SetInputType(0, Some(&input_media_type), 0)?;
-        }
 
             let mut device_manager = None;
             let mut reset_token = 0;
             MFCreateDXGIDeviceManager(&mut reset_token, &mut device_manager)?;
             let device_manager =
                 device_manager.ok_or_else(|| anyhow!("Failed to create MF device manager"))?;
+
             device_manager.ResetDevice(&device, reset_token)?;
 
             transform.ProcessMessage(
@@ -251,141 +244,6 @@ impl WindowsEncoder {
                 frame_height,
             })
         }
-    }
-
-    pub fn next_frame(&mut self) -> Result<EncodedFrame> {
-        unsafe {
-            if let Ok(frame) = self.frame_pool.TryGetNextFrame() {
-                let size = frame.ContentSize()?;
-                let new_width = size.Width.max(1) as u32;
-                let new_height = size.Height.max(1) as u32;
-                if new_width != self.frame_width || new_height != self.frame_height {
-                    self.reconfigure_frame_pool(new_width, new_height)?;
-                    return Err(anyhow!("Capture size changed, reconfigured"));
-                }
-                let timestamp = frame.SystemRelativeTime()?.Duration as u64 / 10;
-                let surface = frame.Surface()?;
-                let access: IDirect3DDxgiInterfaceAccess = surface.cast()?;
-                let texture: ID3D11Texture2D = access.GetInterface()?;
-
-                // Wrap D3D11 texture in an MF Sample
-                let buffer = MFCreateDXGISurfaceBuffer(&ID3D11Resource::IID, &texture, 0, false)?;
-
-                let sample = MFCreateSample()?;
-                sample.AddBuffer(&buffer)?;
-                sample.SetSampleTime(timestamp as i64 * 10)?;
-                sample.SetSampleDuration(166666)?; // 60fps approx in 100ns units
-
-                // Pass to MFT
-                self.transform.ProcessInput(0, Some(&sample), 0)?;
-
-                // Drain Output
-                let mut output_data_buffer = MFT_OUTPUT_DATA_BUFFER {
-                    dwStreamID: 0,
-                    pSample: ManuallyDrop::new(None),
-                    dwStatus: 0,
-                    pEvents: ManuallyDrop::new(None),
-                };
-
-                // For hardware encoders, we usually need to provide a sample with a buffer
-                // unless it supports MF_TRANSFORM_OUTPUT_CAN_PROVIDE_SAMPLES
-                let output_sample = MFCreateSample()?;
-                let output_buffer = MFCreateMemoryBuffer(1024 * 1024)?; // 1MB buffer
-                output_sample.AddBuffer(&output_buffer)?;
-                output_data_buffer.pSample = ManuallyDrop::new(Some(output_sample));
-
-                let mut status = 0;
-                match self.transform.ProcessOutput(
-                    0,
-                    std::slice::from_mut(&mut output_data_buffer),
-                    &mut status,
-                ) {
-                    Ok(_) => {
-                        let sample = (*output_data_buffer.pSample).as_ref().unwrap();
-                        let total_length = sample.GetTotalLength()?;
-                        let mut data = vec![0u8; total_length as usize];
-
-                        let buffer = sample.ConvertToContiguousBuffer()?;
-                        let mut ptr = std::ptr::null_mut();
-                        let mut current_length = 0;
-                        buffer.Lock(&mut ptr, None, Some(&mut current_length))?;
-                        std::ptr::copy_nonoverlapping(
-                            ptr,
-                            data.as_mut_ptr(),
-                            current_length as usize,
-                        );
-                        buffer.Unlock()?;
-
-                        let is_keyframe =
-                            sample.GetUINT32(&MFSampleExtension_CleanPoint).unwrap_or(0) != 0;
-
-                        Ok(EncodedFrame {
-                            timestamp_us: timestamp,
-                            keyframe: is_keyframe,
-                            data,
-                        })
-                    }
-                    Err(e) if e.code() == MF_E_TRANSFORM_NEED_MORE_INPUT => {
-                        Err(anyhow!("Need more input"))
-                    }
-                    Err(e) => Err(anyhow!("MFT ProcessOutput failed: {:?}", e)),
-                }
-            } else {
-                Err(anyhow!("No frame available"))
-            }
-        }
-    }
-    pub fn set_bitrate(&mut self, bitrate_kbps: u32) -> Result<()> {
-        unsafe {
-            let media_type: IMFMediaType = MFCreateMediaType()?;
-            media_type.SetGUID(&MF_MT_MAJOR_TYPE, &MFMediaType_Video)?;
-            let subtype = mf_subtype_for_codec(self.config.codec);
-            media_type.SetGUID(&MF_MT_SUBTYPE, &subtype)?;
-            media_type.SetUINT32(&MF_MT_AVG_BITRATE, bitrate_kbps * 1000)?;
-            self.transform.SetOutputType(0, Some(&media_type), 0)?;
-            Ok(())
-        }
-    }
-
-    fn reconfigure_frame_pool(&mut self, width: u32, height: u32) -> Result<()> {
-        let winrt_device = create_direct3d_device(&self.device)?;
-        let new_size = SizeInt32 {
-            Width: width as i32,
-            Height: height as i32,
-        };
-        unsafe {
-            self.frame_pool.Recreate(
-                &winrt_device,
-                DirectXPixelFormat::B8G8R8A8UIntNormalized,
-                2,
-                new_size,
-            )?;
-
-            self.config.resolution.width = width as u16;
-            self.config.resolution.height = height as u16;
-            self.frame_width = width;
-            self.frame_height = height;
-
-            let output_media_type: IMFMediaType = MFCreateMediaType()?;
-            output_media_type.SetGUID(&MF_MT_MAJOR_TYPE, &MFMediaType_Video)?;
-            output_media_type.SetGUID(&MF_MT_SUBTYPE, &mf_subtype_for_codec(self.config.codec))?;
-            output_media_type.SetUINT32(&MF_MT_AVG_BITRATE, self.config.bitrate_kbps * 1000)?;
-            MFSetAttributeRatio(&output_media_type, &MF_MT_FRAME_RATE, self.config.fps as u32, 1)?;
-            MFSetAttributeSize(&output_media_type, &MF_MT_FRAME_SIZE, width, height)?;
-            output_media_type
-                .SetUINT32(&MF_MT_INTERLACE_MODE, MFVideoInterlace_Progressive.0 as u32)?;
-            self.transform
-                .SetOutputType(0, Some(&output_media_type), 0)?;
-
-            let input_media_type: IMFMediaType = MFCreateMediaType()?;
-            input_media_type.SetGUID(&MF_MT_MAJOR_TYPE, &MFMediaType_Video)?;
-            input_media_type.SetGUID(&MF_MT_SUBTYPE, &MF_BGR32)?;
-            MFSetAttributeSize(&input_media_type, &MF_MT_FRAME_SIZE, width, height)?;
-            MFSetAttributeRatio(&input_media_type, &MF_MT_FRAME_RATE, self.config.fps as u32, 1)?;
-            self.transform.SetInputType(0, Some(&input_media_type), 0)?;
-        }
-
-        Ok(())
     }
 }
 
