@@ -9,6 +9,15 @@ RUN cargo chef prepare --recipe-path recipe.json
 # 2. Cacher stage: build dependencies
 FROM lukemathwalker/cargo-chef:latest-rust-1-bookworm AS cacher
 WORKDIR /app
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    pkg-config \
+    protobuf-compiler \
+    libsqlite3-dev \
+    libgstreamer1.0-dev \
+    libgstreamer-plugins-base1.0-dev \
+    && rm -rf /var/lib/apt/lists/*
+
 COPY --from=planner /app/recipe.json recipe.json
 RUN cargo chef cook --release --recipe-path recipe.json
 
