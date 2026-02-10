@@ -1,21 +1,22 @@
 // Windows implementation for wavry-media
 // Using Windows.Graphics.Capture (WGC) for high-performance screen capture.
 
-use crate::{
-    Codec, EncodeConfig, EncodedFrame, Renderer,
-};
+use crate::{Codec, EncodeConfig, EncodedFrame, Renderer};
 use anyhow::{anyhow, Context, Result};
 use libloading::Library;
+#[cfg(feature = "opus-support")]
 use opus::{Application, Channels, Encoder as OpusEncoder};
 use std::collections::VecDeque;
 use std::ffi::c_void;
 use std::time::Instant;
 
-use crate::audio::{
-    opus_frame_duration_us, AUDIO_MAX_BUFFER_SAMPLES, OPUS_BITRATE_BPS, OPUS_CHANNELS,
-    OPUS_FRAME_SAMPLES, OPUS_MAX_PACKET_BYTES, OPUS_SAMPLE_RATE,
-};
 use crate::audio::renderer::f32_to_i16;
+#[cfg(feature = "opus-support")]
+use crate::audio::OPUS_BITRATE_BPS;
+use crate::audio::{
+    opus_frame_duration_us, AUDIO_MAX_BUFFER_SAMPLES, OPUS_CHANNELS, OPUS_FRAME_SAMPLES,
+    OPUS_MAX_PACKET_BYTES, OPUS_SAMPLE_RATE,
+};
 
 #[cfg(target_os = "windows")]
 use windows::{
@@ -126,7 +127,7 @@ impl WindowsEncoder {
             D3D11CreateDevice(
                 None,
                 D3D_DRIVER_TYPE_HARDWARE,
-                None,
+                HMODULE::default(),
                 D3D11_CREATE_DEVICE_BGRA_SUPPORT,
                 None,
                 D3D11_SDK_VERSION,
@@ -176,7 +177,9 @@ impl WindowsEncoder {
 
             MFTEnumEx(
                 MFT_CATEGORY_VIDEO_ENCODER,
-                MFT_ENUM_FLAG(MFT_ENUM_FLAG_HARDWARE.0 as i32 | MFT_ENUM_FLAG_SORTANDFILTER.0 as i32),
+                MFT_ENUM_FLAG(
+                    (MFT_ENUM_FLAG_HARDWARE.0 as u32 | MFT_ENUM_FLAG_SORTANDFILTER.0 as u32) as i32,
+                ),
                 None,
                 Some(&output_type),
                 &mut activate_list,
@@ -199,11 +202,14 @@ impl WindowsEncoder {
             output_media_type.SetGUID(&MF_MT_SUBTYPE, &output_subtype)?;
             output_media_type.SetUINT32(&MF_MT_AVG_BITRATE, config.bitrate_kbps * 1000)?;
             MFSetAttributeRatio(&output_media_type, &MF_MT_FRAME_RATE, config.fps as u32, 1)?;
-            MFSetAttributeSize(&output_media_type, &MF_MT_FRAME_SIZE, frame_width, frame_height)?;
-            output_media_type.SetUINT32(
-                &MF_MT_INTERLACE_MODE,
-                MFVideoInterlace_Progressive.0 as u32,
+            MFSetAttributeSize(
+                &output_media_type,
+                &MF_MT_FRAME_SIZE,
+                frame_width,
+                frame_height,
             )?;
+            output_media_type
+                .SetUINT32(&MF_MT_INTERLACE_MODE, MFVideoInterlace_Progressive.0 as u32)?;
 
             transform.SetOutputType(0, Some(&output_media_type), 0)?;
 
@@ -301,7 +307,7 @@ impl WindowsRenderer {
             D3D11CreateDeviceAndSwapChain(
                 None,
                 D3D_DRIVER_TYPE_HARDWARE,
-                None,
+                HMODULE::default(),
                 D3D11_CREATE_DEVICE_BGRA_SUPPORT,
                 None,
                 D3D11_SDK_VERSION,
@@ -327,12 +333,15 @@ impl WindowsRenderer {
 
             MFTEnumEx(
                 MFT_CATEGORY_VIDEO_DECODER,
-                MFT_ENUM_FLAG(MFT_ENUM_FLAG_HARDWARE.0 as i32 | MFT_ENUM_FLAG_SORTANDFILTER.0 as i32),
+                MFT_ENUM_FLAG(
+                    (MFT_ENUM_FLAG_HARDWARE.0 as u32 | MFT_ENUM_FLAG_SORTANDFILTER.0 as u32) as i32,
+                ),
                 Some(&input_type),
                 None,
                 &mut activate_list,
                 &mut count,
-            ).context("MFTEnumEx failed")?;
+            )
+            .context("MFTEnumEx failed")?;
 
             if count == 0 {
                 return Err(anyhow!("No hardware decoders found for {:?}", codec));
@@ -477,6 +486,7 @@ pub struct WindowsAudioCapturer {
     audio_client: IAudioClient,
     capture_client: IAudioCaptureClient,
     format: *mut WAVEFORMATEX,
+    #[cfg(feature = "opus-support")]
     encoder: OpusEncoder,
     pcm: VecDeque<i16>,
     next_timestamp_us: Option<u64>,
@@ -493,7 +503,6 @@ pub struct WindowsAudioCapturer {
 impl WindowsAudioCapturer {
     pub async fn new() -> Result<Self> {
         unsafe {
-            let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
             match CoInitializeEx(None, COINIT_MULTITHREADED).ok() {
                 Err(e) if e.code() != RPC_E_CHANGED_MODE => {
                     return Err(anyhow!("CoInitializeEx failed: {:?}", e));
@@ -502,7 +511,8 @@ impl WindowsAudioCapturer {
             }
 
             let enumerator: IMMDeviceEnumerator =
-                CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL).context("CoCreateInstance failed")?;
+                CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL)
+                    .context("CoCreateInstance failed")?;
 
             let device = enumerator.GetDefaultAudioEndpoint(eRender, eConsole)?;
 
@@ -530,12 +540,14 @@ impl WindowsAudioCapturer {
             let input_sample_rate = (*format).nSamplesPerSec;
             let input_channels = (*format).nChannels as usize;
 
+            #[cfg(feature = "opus-support")]
             let encoder = create_opus_encoder()?;
 
             Ok(Self {
                 audio_client,
                 capture_client,
                 format,
+                #[cfg(feature = "opus-support")]
                 encoder,
                 pcm: VecDeque::with_capacity(AUDIO_MAX_BUFFER_SAMPLES),
                 next_timestamp_us: None,
@@ -559,13 +571,21 @@ impl WindowsAudioCapturer {
             return Err(anyhow!("Not enough audio samples"));
         }
 
-        let frame: Vec<i16> = self.pcm.drain(..frame_len).collect();
-        let mut out = vec![0u8; OPUS_MAX_PACKET_BYTES];
-        let encoded = self
-            .encoder
-            .encode(&frame, &mut out)
-            .map_err(|e| anyhow!("Opus encode failed: {}", e))?;
-        out.truncate(encoded);
+        let _frame: Vec<i16> = self.pcm.drain(..frame_len).collect();
+        let mut _out = vec![0u8; OPUS_MAX_PACKET_BYTES];
+
+        #[cfg(feature = "opus-support")]
+        {
+            let encoded = self
+                .encoder
+                .encode(&_frame, &mut _out)
+                .map_err(|e| anyhow!("Opus encode failed: {}", e))?;
+            _out.truncate(encoded);
+        }
+        #[cfg(not(feature = "opus-support"))]
+        {
+            return Err(anyhow!("Opus support not enabled"));
+        }
 
         let timestamp_us = self
             .next_timestamp_us
@@ -575,7 +595,7 @@ impl WindowsAudioCapturer {
         Ok(EncodedFrame {
             timestamp_us,
             keyframe: true,
-            data: out,
+            data: _out,
         })
     }
 
@@ -644,7 +664,7 @@ impl WindowsAudioCapturer {
             ) {
                 Ok(_) => {
                     if frames_available == 0 {
-                        self.capture_client.ReleaseBuffer(0)?;
+                        let _ = self.capture_client.ReleaseBuffer(0);
                         return Err(anyhow!("No audio frames available"));
                     }
 
@@ -660,7 +680,7 @@ impl WindowsAudioCapturer {
                         self.push_resampled_samples(&samples)?;
                     }
 
-                    self.capture_client.ReleaseBuffer(frames_available)?;
+                    let _ = self.capture_client.ReleaseBuffer(frames_available);
                     if self.next_timestamp_us.is_none() || self.pcm.is_empty() {
                         self.next_timestamp_us = Some(self.start_time.elapsed().as_micros() as u64);
                     }
@@ -687,6 +707,7 @@ impl WindowsAudioCapturer {
     }
 }
 
+#[cfg(feature = "opus-support")]
 fn create_opus_encoder() -> Result<OpusEncoder> {
     let mut encoder = OpusEncoder::new(OPUS_SAMPLE_RATE, Channels::Stereo, Application::Audio)
         .map_err(|e| anyhow!("Opus encoder init failed: {}", e))?;
@@ -719,9 +740,7 @@ fn pcm_format(format: &WAVEFORMATEX) -> Result<PcmFormat> {
         unsafe {
             let extensible = &*(format as *const _ as *const WAVEFORMATEXTENSIBLE);
             // Use read_unaligned or copy to local to avoid misaligned reference
-            let subformat = std::ptr::read_unaligned(
-                std::ptr::addr_of!(extensible.SubFormat)
-            );
+            let subformat = std::ptr::read_unaligned(std::ptr::addr_of!(extensible.SubFormat));
             if subformat == KSDATAFORMAT_SUBTYPE_IEEE_FLOAT {
                 Ok(PcmFormat::F32)
             } else if subformat == KSDATAFORMAT_SUBTYPE_PCM {
@@ -1064,7 +1083,7 @@ impl crate::InputInjector for WindowsInputInjector {
                         time: 0,
                         dwExtraInfo: 0,
                     };
-                    SendInput(&[input], std::mem::size_of::<INPUT>() as i32);
+                    let _ = SendInput(&[input], std::mem::size_of::<INPUT>() as i32);
                 }
                 crate::InputEvent::MouseDown { button } => {
                     let mut input = INPUT::default();
@@ -1082,7 +1101,7 @@ impl crate::InputInjector for WindowsInputInjector {
                         time: 0,
                         dwExtraInfo: 0,
                     };
-                    SendInput(&[input], std::mem::size_of::<INPUT>() as i32);
+                    let _ = SendInput(&[input], std::mem::size_of::<INPUT>() as i32);
                 }
                 crate::InputEvent::MouseUp { button } => {
                     let mut input = INPUT::default();
@@ -1100,7 +1119,7 @@ impl crate::InputInjector for WindowsInputInjector {
                         time: 0,
                         dwExtraInfo: 0,
                     };
-                    SendInput(&[input], std::mem::size_of::<INPUT>() as i32);
+                    let _ = SendInput(&[input], std::mem::size_of::<INPUT>() as i32);
                 }
                 crate::InputEvent::KeyDown { key_code } => {
                     let mut input = INPUT::default();
@@ -1112,7 +1131,7 @@ impl crate::InputInjector for WindowsInputInjector {
                         time: 0,
                         dwExtraInfo: 0,
                     };
-                    SendInput(&[input], std::mem::size_of::<INPUT>() as i32);
+                    let _ = SendInput(&[input], std::mem::size_of::<INPUT>() as i32);
                 }
                 crate::InputEvent::KeyUp { key_code } => {
                     let mut input = INPUT::default();
@@ -1124,7 +1143,7 @@ impl crate::InputInjector for WindowsInputInjector {
                         time: 0,
                         dwExtraInfo: 0,
                     };
-                    SendInput(&[input], std::mem::size_of::<INPUT>() as i32);
+                    let _ = SendInput(&[input], std::mem::size_of::<INPUT>() as i32);
                 }
                 crate::InputEvent::Scroll { dx, dy } => {
                     if dy != 0.0 {
@@ -1138,7 +1157,7 @@ impl crate::InputInjector for WindowsInputInjector {
                             time: 0,
                             dwExtraInfo: 0,
                         };
-                        SendInput(&[input], std::mem::size_of::<INPUT>() as i32);
+                        let _ = SendInput(&[input], std::mem::size_of::<INPUT>() as i32);
                     }
                     if dx != 0.0 {
                         let mut input = INPUT::default();
@@ -1151,7 +1170,7 @@ impl crate::InputInjector for WindowsInputInjector {
                             time: 0,
                             dwExtraInfo: 0,
                         };
-                        SendInput(&[input], std::mem::size_of::<INPUT>() as i32);
+                        let _ = SendInput(&[input], std::mem::size_of::<INPUT>() as i32);
                     }
                 }
                 crate::InputEvent::Gamepad {
@@ -1245,13 +1264,12 @@ impl crate::CapabilityProbe for WindowsProbe {
                 true.into()
             }
 
-            EnumDisplayMonitors(
-                None,
+            let _ = EnumDisplayMonitors(
+                Some(HDC::default()),
                 None,
                 Some(enum_monitor_callback),
                 LPARAM(&mut displays as *mut _ as isize),
-            )
-            .ok()?;
+            );
 
             Ok(displays)
         }
@@ -1279,12 +1297,22 @@ fn supported_mft_codecs(category: GUID) -> Result<Vec<Codec>> {
                 guidSubtype: subtype,
             };
             let is_decoder = category == MFT_CATEGORY_VIDEO_DECODER;
-            let input_type = if is_decoder { Some(&type_info as *const _) } else { None };
-            let output_type = if is_decoder { None } else { Some(&type_info as *const _) };
-            
+            let input_type = if is_decoder {
+                Some(&type_info as *const _)
+            } else {
+                None
+            };
+            let output_type = if is_decoder {
+                None
+            } else {
+                Some(&type_info as *const _)
+            };
+
             let _ = MFTEnumEx(
                 category,
-                MFT_ENUM_FLAG((MFT_ENUM_FLAG_HARDWARE.0 as u32 | MFT_ENUM_FLAG_SORTANDFILTER.0 as u32) as i32),
+                MFT_ENUM_FLAG(
+                    (MFT_ENUM_FLAG_HARDWARE.0 as u32 | MFT_ENUM_FLAG_SORTANDFILTER.0 as u32) as i32,
+                ),
                 input_type,
                 output_type,
                 &mut activate_list,

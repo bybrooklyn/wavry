@@ -230,7 +230,10 @@ mod tests {
         assert!(!b64.is_empty(), "Base64 string should not be empty");
 
         // Verify it's valid base64
-        assert!(general_purpose::STANDARD.decode(&b64).is_ok(), "Should be valid base64");
+        assert!(
+            general_purpose::STANDARD.decode(&b64).is_ok(),
+            "Should be valid base64"
+        );
     }
 
     #[test]
@@ -249,15 +252,8 @@ mod tests {
     #[test]
     fn test_create_hello_ack_base64_accepted() {
         let session_id = [42u8; 16];
-        let result = create_hello_ack_base64(
-            true,
-            session_id,
-            999,
-            None,
-            1920,
-            1080,
-            RiftCodec::H264,
-        );
+        let result =
+            create_hello_ack_base64(true, session_id, 999, None, 1920, 1080, RiftCodec::H264);
         assert!(result.is_ok());
 
         let b64 = result.unwrap();
@@ -289,7 +285,7 @@ mod tests {
         let decoded = decode_hello_base64(&b64).unwrap();
 
         assert_eq!(decoded.client_name, original_name);
-        assert_eq!(decoded.public_addr, public_addr.unwrap());
+        assert_eq!(decoded.public_addr, "203.0.113.1:5000");
         assert!(decoded.supported_codecs.contains(&(RiftCodec::H264 as i32)));
     }
 
@@ -318,10 +314,10 @@ mod tests {
 
         let decoded = decode_hello_ack_base64(&b64).unwrap();
 
-        assert_eq!(decoded.accepted, true);
+        assert!(decoded.accepted);
         assert_eq!(decoded.session_id, session_id.to_vec());
         assert_eq!(decoded.session_alias, session_alias);
-        assert_eq!(decoded.public_addr, public_addr.unwrap());
+        assert_eq!(decoded.public_addr, "198.51.100.1:5000");
         assert_eq!(decoded.stream_resolution.unwrap().width, 1920);
         assert_eq!(decoded.stream_resolution.unwrap().height, 1080);
     }
@@ -347,16 +343,8 @@ mod tests {
 
     #[test]
     fn test_hello_ack_message_contains_expected_fields() {
-        let b64 = create_hello_ack_base64(
-            true,
-            [1u8; 16],
-            1,
-            None,
-            3840,
-            2160,
-            RiftCodec::Hevc,
-        )
-        .unwrap();
+        let b64 =
+            create_hello_ack_base64(true, [1u8; 16], 1, None, 3840, 2160, RiftCodec::Hevc).unwrap();
         let ack = decode_hello_ack_base64(&b64).unwrap();
 
         assert_eq!(ack.fps, 60);

@@ -1,8 +1,6 @@
 use crate::InputInjector;
 use anyhow::Result;
-use windows::Win32::Foundation::HWND;
 use windows::Win32::UI::Input::KeyboardAndMouse::*;
-use windows::Win32::UI::WindowsAndMessaging::{GetSystemMetrics, SM_CXSCREEN, SM_CYSCREEN};
 
 pub struct WindowsInjector;
 
@@ -14,7 +12,7 @@ impl WindowsInjector {
 
 impl InputInjector for WindowsInjector {
     fn key(&mut self, keycode: u32, pressed: bool) -> Result<()> {
-        let mut input = INPUT {
+        let input = INPUT {
             r#type: INPUT_KEYBOARD,
             Anonymous: INPUT_0 {
                 ki: KEYBDINPUT {
@@ -158,7 +156,12 @@ impl InputInjector for WindowsInjector {
         Ok(())
     }
 
-    fn gamepad(&mut self, _gamepad_id: u32, _axes: &[(u32, f32)], _buttons: &[(u32, bool)]) -> Result<()> {
+    fn gamepad(
+        &mut self,
+        _gamepad_id: u32,
+        _axes: &[(u32, f32)],
+        _buttons: &[(u32, bool)],
+    ) -> Result<()> {
         // Gamepad support on Windows would require XInput or Raw Input API
         // For now, we provide a stub that doesn't error but doesn't do anything
         // Future implementation: use XInput to inject gamepad input

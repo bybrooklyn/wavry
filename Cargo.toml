@@ -20,6 +20,7 @@ members = [
   "crates/wavry-desktop/src-tauri", "crates/wavry-ffi", "crates/wavry-gateway",
   "crates/wavry-vr",
   "crates/wavry-vr-alvr",
+  "crates/wavry-vr-openxr",
   "crates/wavry-web",
 ]
 resolver = "2"
@@ -56,9 +57,9 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 
 # Windows (force unified versions)
-windows = "=0.58.0"
-windows-core = "=0.58.0"
-windows-result = "=0.58.0"
+windows = "0.62.2"
+windows-core = "0.62.2"
+windows-result = "0.4.1"
 
 # Networking
 mdns-sd = "0.10"
@@ -80,6 +81,7 @@ reqwest = { version = "0.12", default-features = false, features = ["json", "rus
 sqlx = { version = "0.8", features = ["runtime-tokio", "tls-rustls", "postgres", "uuid", "chrono", "json"] }
 
 # Utils
+arboard = "3.4"
 bitflags = { version = "2.6", features = ["serde"] }
 uuid = { version = "1", features = ["v4", "serde"] }
 chrono = { version = "0.4", features = ["serde"] }

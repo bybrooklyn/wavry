@@ -45,7 +45,12 @@ impl InputInjector for DummyInjector {
         Ok(())
     }
 
-    fn gamepad(&mut self, gamepad_id: u32, axes: &[(u32, f32)], buttons: &[(u32, bool)]) -> Result<()> {
+    fn gamepad(
+        &mut self,
+        gamepad_id: u32,
+        axes: &[(u32, f32)],
+        buttons: &[(u32, bool)],
+    ) -> Result<()> {
         info!(
             "DummyInjector: Gamepad {} with {} axes and {} buttons",
             gamepad_id,

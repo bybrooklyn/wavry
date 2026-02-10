@@ -818,6 +818,7 @@ pub async fn run_client(params: ClientSessionParams) -> Result<()> {
         gamepad_deadzone: 0.1,
         vr_adapter: None,
         runtime_stats: Some(runtime_stats.clone()),
+        recorder_config: None,
     };
 
     // Factory

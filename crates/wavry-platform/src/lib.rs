@@ -1,4 +1,4 @@
-#![forbid(unsafe_code)]
+#![allow(unsafe_code)]
 
 use anyhow::{bail, Result};
 use wavry_media::RawFrame;
@@ -13,7 +13,17 @@ pub trait InputInjector: Send {
     fn mouse_motion(&mut self, dx: i32, dy: i32) -> Result<()>;
     fn mouse_absolute(&mut self, x: f32, y: f32) -> Result<()>;
     fn scroll(&mut self, dx: f32, dy: f32) -> Result<()>;
-    fn gamepad(&mut self, gamepad_id: u32, axes: &[(u32, f32)], buttons: &[(u32, bool)]) -> Result<()>;
+    fn gamepad(
+        &mut self,
+        gamepad_id: u32,
+        axes: &[(u32, f32)],
+        buttons: &[(u32, bool)],
+    ) -> Result<()>;
+}
+
+pub trait Clipboard: Send {
+    fn get_text(&mut self) -> Result<Option<String>>;
+    fn set_text(&mut self, text: String) -> Result<()>;
 }
 
 pub struct UnsupportedCapturer;
@@ -47,7 +57,12 @@ impl InputInjector for UnsupportedInjector {
         bail!("input injection is not implemented for this platform")
     }
 
-    fn gamepad(&mut self, _gamepad_id: u32, _axes: &[(u32, f32)], _buttons: &[(u32, bool)]) -> Result<()> {
+    fn gamepad(
+        &mut self,
+        _gamepad_id: u32,
+        _axes: &[(u32, f32)],
+        _buttons: &[(u32, bool)],
+    ) -> Result<()> {
         bail!("input injection is not implemented for this platform")
     }
 }
@@ -57,6 +72,9 @@ mod linux;
 
 #[cfg(target_os = "linux")]
 pub use linux::{PipewireCapturer, UinputInjector};
+
+mod clipboard;
+pub use clipboard::ArboardClipboard;
 
 #[cfg(target_os = "windows")]
 mod windows_input_injector;

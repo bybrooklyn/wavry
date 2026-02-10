@@ -470,7 +470,8 @@ fn create_compression_session(
         }
 
         // Set keyframe interval (in frames)
-        let keyframe_frames = ((config.keyframe_interval_ms as f64 / 1000.0) * config.fps as f64) as i32;
+        let keyframe_frames =
+            ((config.keyframe_interval_ms as f64 / 1000.0) * config.fps as f64) as i32;
         let keyframe_num = CFNumberCreate(
             std::ptr::null(),
             K_CFNUMBER_INT32_TYPE,
@@ -663,7 +664,8 @@ impl MacScreenEncoder {
 
             // Use 10-bit pixel format if requested
             if config.enable_10bit {
-                stream_config.setPixelFormat(K_CVPIXEL_FORMAT_TYPE_420Y_PB_CR10_BI_PLANAR_VIDEO_RANGE);
+                stream_config
+                    .setPixelFormat(K_CVPIXEL_FORMAT_TYPE_420Y_PB_CR10_BI_PLANAR_VIDEO_RANGE);
             } else {
                 stream_config.setPixelFormat(0x42475241); // 'BGRA'
             }

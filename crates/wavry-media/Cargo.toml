@@ -16,6 +16,7 @@ log = "0.4"
 tracing = "0.1"
 serde = { workspace = true, features = ["derive"] }
 cpal = "0.15.3"
+mp4 = "0.14"
 opus = { version = "0.3", optional = true }
 
 [target.'cfg(target_os = "android")'.dependencies]
@@ -60,6 +61,8 @@ features = [
     "Win32_UI_WindowsAndMessaging",
     "Win32_Foundation",
     "Win32_System_Com",
+    "Win32_System_Com_StructuredStorage",
+    "Win32_System_Variant",
     "Win32_System_LibraryLoader",
     "Win32_Media_Audio",
     "Win32_Media_KernelStreaming",

@@ -205,7 +205,12 @@ impl InputInjector for UinputInjector {
         }
     }
 
-    fn gamepad(&mut self, gamepad_id: u32, axes: &[(u32, f32)], buttons: &[(u32, bool)]) -> Result<()> {
+    fn gamepad(
+        &mut self,
+        gamepad_id: u32,
+        axes: &[(u32, f32)],
+        buttons: &[(u32, bool)],
+    ) -> Result<()> {
         match self {
             UinputInjector::Uinput(inner) => inner.gamepad(gamepad_id, axes, buttons),
             UinputInjector::Portal(portal) => portal.gamepad(gamepad_id, axes, buttons),
@@ -302,11 +307,19 @@ impl InputInjector for UinputInner {
         let mut events = Vec::new();
         if dy.abs() > 0.001 {
             let wheel_delta = (dy * 120.0) as i32;
-            events.push(InputEvent::new(EventType::RELATIVE, RelativeAxisType::REL_WHEEL.0, wheel_delta));
+            events.push(InputEvent::new(
+                EventType::RELATIVE,
+                RelativeAxisType::REL_WHEEL.0,
+                wheel_delta,
+            ));
         }
         if dx.abs() > 0.001 {
             let hwheel_delta = (dx * 120.0) as i32;
-            events.push(InputEvent::new(EventType::RELATIVE, RelativeAxisType::REL_HWHEEL.0, hwheel_delta));
+            events.push(InputEvent::new(
+                EventType::RELATIVE,
+                RelativeAxisType::REL_HWHEEL.0,
+                hwheel_delta,
+            ));
         }
         if !events.is_empty() {
             self.device.emit(&events)?;
@@ -315,7 +328,12 @@ impl InputInjector for UinputInner {
         Ok(())
     }
 
-    fn gamepad(&mut self, _gamepad_id: u32, _axes: &[(u32, f32)], _buttons: &[(u32, bool)]) -> Result<()> {
+    fn gamepad(
+        &mut self,
+        _gamepad_id: u32,
+        _axes: &[(u32, f32)],
+        _buttons: &[(u32, bool)],
+    ) -> Result<()> {
         // Gamepad support via uinput would require additional device capabilities
         // For now, provide a stub implementation
         Ok(())
@@ -411,24 +429,93 @@ impl InputInjector for X11Injector {
     fn scroll(&mut self, dx: f32, dy: f32) -> Result<()> {
         // X11 scroll simulation via button events (4 = wheel up, 5 = wheel down, 6/7 = horizontal)
         if dy > 0.001 {
-            self.conn.xtest_fake_input(x11rb::protocol::xproto::BUTTON_PRESS_EVENT, 4, 0, self.root, 0, 0, 0)?;
-            self.conn.xtest_fake_input(x11rb::protocol::xproto::BUTTON_RELEASE_EVENT, 4, 0, self.root, 0, 0, 0)?;
+            self.conn.xtest_fake_input(
+                x11rb::protocol::xproto::BUTTON_PRESS_EVENT,
+                4,
+                0,
+                self.root,
+                0,
+                0,
+                0,
+            )?;
+            self.conn.xtest_fake_input(
+                x11rb::protocol::xproto::BUTTON_RELEASE_EVENT,
+                4,
+                0,
+                self.root,
+                0,
+                0,
+                0,
+            )?;
         } else if dy < -0.001 {
-            self.conn.xtest_fake_input(x11rb::protocol::xproto::BUTTON_PRESS_EVENT, 5, 0, self.root, 0, 0, 0)?;
-            self.conn.xtest_fake_input(x11rb::protocol::xproto::BUTTON_RELEASE_EVENT, 5, 0, self.root, 0, 0, 0)?;
+            self.conn.xtest_fake_input(
+                x11rb::protocol::xproto::BUTTON_PRESS_EVENT,
+                5,
+                0,
+                self.root,
+                0,
+                0,
+                0,
+            )?;
+            self.conn.xtest_fake_input(
+                x11rb::protocol::xproto::BUTTON_RELEASE_EVENT,
+                5,
+                0,
+                self.root,
+                0,
+                0,
+                0,
+            )?;
         }
         if dx > 0.001 {
-            self.conn.xtest_fake_input(x11rb::protocol::xproto::BUTTON_PRESS_EVENT, 6, 0, self.root, 0, 0, 0)?;
-            self.conn.xtest_fake_input(x11rb::protocol::xproto::BUTTON_RELEASE_EVENT, 6, 0, self.root, 0, 0, 0)?;
+            self.conn.xtest_fake_input(
+                x11rb::protocol::xproto::BUTTON_PRESS_EVENT,
+                6,
+                0,
+                self.root,
+                0,
+                0,
+                0,
+            )?;
+            self.conn.xtest_fake_input(
+                x11rb::protocol::xproto::BUTTON_RELEASE_EVENT,
+                6,
+                0,
+                self.root,
+                0,
+                0,
+                0,
+            )?;
         } else if dx < -0.001 {
-            self.conn.xtest_fake_input(x11rb::protocol::xproto::BUTTON_PRESS_EVENT, 7, 0, self.root, 0, 0, 0)?;
-            self.conn.xtest_fake_input(x11rb::protocol::xproto::BUTTON_RELEASE_EVENT, 7, 0, self.root, 0, 0, 0)?;
+            self.conn.xtest_fake_input(
+                x11rb::protocol::xproto::BUTTON_PRESS_EVENT,
+                7,
+                0,
+                self.root,
+                0,
+                0,
+                0,
+            )?;
+            self.conn.xtest_fake_input(
+                x11rb::protocol::xproto::BUTTON_RELEASE_EVENT,
+                7,
+                0,
+                self.root,
+                0,
+                0,
+                0,
+            )?;
         }
         self.conn.flush()?;
         Ok(())
     }
 
-    fn gamepad(&mut self, _gamepad_id: u32, _axes: &[(u32, f32)], _buttons: &[(u32, bool)]) -> Result<()> {
+    fn gamepad(
+        &mut self,
+        _gamepad_id: u32,
+        _axes: &[(u32, f32)],
+        _buttons: &[(u32, bool)],
+    ) -> Result<()> {
         // Gamepad support on X11 would require additional event support (not standard)
         // For now, provide a stub implementation
         Ok(())
@@ -611,23 +698,52 @@ impl InputInjector for PortalInjector {
     fn scroll(&mut self, dx: f32, dy: f32) -> Result<()> {
         // Portal-based scroll: simulate via button 4/5 (vertical) and 6/7 (horizontal)
         if dy > 0.001 {
-            self.send(PortalEvent::Button { button: 4, pressed: true })?;
-            self.send(PortalEvent::Button { button: 4, pressed: false })?;
+            self.send(PortalEvent::Button {
+                button: 4,
+                pressed: true,
+            })?;
+            self.send(PortalEvent::Button {
+                button: 4,
+                pressed: false,
+            })?;
         } else if dy < -0.001 {
-            self.send(PortalEvent::Button { button: 5, pressed: true })?;
-            self.send(PortalEvent::Button { button: 5, pressed: false })?;
+            self.send(PortalEvent::Button {
+                button: 5,
+                pressed: true,
+            })?;
+            self.send(PortalEvent::Button {
+                button: 5,
+                pressed: false,
+            })?;
         }
         if dx > 0.001 {
-            self.send(PortalEvent::Button { button: 6, pressed: true })?;
-            self.send(PortalEvent::Button { button: 6, pressed: false })?;
+            self.send(PortalEvent::Button {
+                button: 6,
+                pressed: true,
+            })?;
+            self.send(PortalEvent::Button {
+                button: 6,
+                pressed: false,
+            })?;
         } else if dx < -0.001 {
-            self.send(PortalEvent::Button { button: 7, pressed: true })?;
-            self.send(PortalEvent::Button { button: 7, pressed: false })?;
+            self.send(PortalEvent::Button {
+                button: 7,
+                pressed: true,
+            })?;
+            self.send(PortalEvent::Button {
+                button: 7,
+                pressed: false,
+            })?;
         }
         Ok(())
     }
 
-    fn gamepad(&mut self, _gamepad_id: u32, _axes: &[(u32, f32)], _buttons: &[(u32, bool)]) -> Result<()> {
+    fn gamepad(
+        &mut self,
+        _gamepad_id: u32,
+        _axes: &[(u32, f32)],
+        _buttons: &[(u32, bool)],
+    ) -> Result<()> {
         // Gamepad support on Portal is not standardized yet
         // For now, provide a stub implementation
         Ok(())

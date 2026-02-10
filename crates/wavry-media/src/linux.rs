@@ -800,10 +800,7 @@ fn is_monitor_stream(stream: &Stream) -> bool {
     )
 }
 
-fn select_portal_monitor_stream(
-    streams: &[Stream],
-    display_id: Option<u32>,
-) -> Result<&Stream> {
+fn select_portal_monitor_stream(streams: &[Stream], display_id: Option<u32>) -> Result<&Stream> {
     let monitor_streams: Vec<&Stream> = streams
         .iter()
         .filter(|stream| is_monitor_stream(stream))

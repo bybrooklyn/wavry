@@ -123,6 +123,11 @@ All infrastructure and core functionality is complete. Next phase focuses on new
 - [ ] **Enable Gradle build cache** - Add `org.gradle.caching=true` to `gradle.properties`
 - [ ] **Remove `--no-daemon` from Gradle** - `dev-android.sh` disables daemon, paying full JVM startup cost every build
 
+### Windows Platform Stabilization (v0.0.2+)
+- [x] **Workspace-wide `windows` crate upgrade** - Upgrade from `windows` 0.58 to 0.62+ and refactor media/server/client modules to match new API.
+- [x] **Architectural Refactor: `wavry-vr-openxr`** - Separate OpenXR implementation from `wavry-vr-alvr` into its own crate for better dependency isolation and modularity.
+- [x] **Remove `openxr` 0.16 patch** - Successfully upgraded to upstream `openxr` 0.21.1 and isolated it in its own crate.
+
 ### Outstanding Items (Optional, not blocking)
 - [ ] **Hardware AV1 Validation**: Run benchmarks on M4 MacBook Air ↔ RTX 3070 Ti
   - Use HWTODO.md procedures
@@ -147,14 +152,16 @@ All infrastructure and core functionality is complete. Next phase focuses on new
 - [x] Design document created (docs/RECORDING_DESIGN.md)
 - [x] Architecture finalized (MP4 muxing, video/audio tracks)
 - [x] Integration points identified (server/client)
-- [ ] Implementation ready to start
+- [x] Implementation completed
+  - [x] Core RecorderConfig + Quality structs
+  - [x] VideoRecorder implementation (MP4 muxing with audio)
+  - [x] Server-side integration (wavry-server)
+  - [x] Audio track + synchronization
+  - [x] Client-side integration (wavry-client)
 
 **Next Steps**:
-1. Implement RecorderConfig + VideoRecorder
-2. MP4 muxing with single video track
-3. Audio track + synchronization
-4. Server/client integration
-5. Quality presets & testing
+1. Final quality presets & performance testing
+2. Automated file rotation on size limits (optional polish)
 
 ### Other v0.0.3 Candidates
 - **Clipboard Sync** (Low complexity, medium impact, 4-6 hours)

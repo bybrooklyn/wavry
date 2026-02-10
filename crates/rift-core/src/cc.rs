@@ -297,10 +297,10 @@ impl LinkType {
 
     pub fn adjustment_aggressiveness(&self) -> f32 {
         match self {
-            LinkType::Local => 0.20,        // ±20% per second
-            LinkType::Regional => 0.10,     // ±10% per second
-            LinkType::Intercontinental => 0.05,  // ±5% per second
-            LinkType::Satellite => 0.03,    // ±3% per second
+            LinkType::Local => 0.20,            // ±20% per second
+            LinkType::Regional => 0.10,         // ±10% per second
+            LinkType::Intercontinental => 0.05, // ±5% per second
+            LinkType::Satellite => 0.03,        // ±3% per second
         }
     }
 }
@@ -369,8 +369,8 @@ pub struct CongestionDetector {
     pub rising_threshold_ms: f32,
     pub loss_rate_threshold: f32,
     pub rtt_filter_window_ms: u64,
-    pub delay_score: f32,      // 0-50 points
-    pub loss_score: f32,       // 0-50 points
+    pub delay_score: f32, // 0-50 points
+    pub loss_score: f32,  // 0-50 points
     recent_loss_rate: f32,
     recent_delay_slope: f32,
 }
@@ -379,7 +379,7 @@ impl Default for CongestionDetector {
     fn default() -> Self {
         Self {
             rising_threshold_ms: 1.0,
-            loss_rate_threshold: 0.001,  // 0.1%
+            loss_rate_threshold: 0.001, // 0.1%
             rtt_filter_window_ms: 500,
             delay_score: 0.0,
             loss_score: 0.0,
@@ -396,7 +396,7 @@ impl CongestionDetector {
 
         // Delay-slope scoring: 0-50 points
         if delay_slope_ms < 0.0 {
-            self.delay_score = 0.0;  // Improving
+            self.delay_score = 0.0; // Improving
         } else if delay_slope_ms < self.rising_threshold_ms {
             self.delay_score = (delay_slope_ms / self.rising_threshold_ms * 25.0).min(25.0);
         } else {
@@ -424,9 +424,9 @@ impl CongestionDetector {
 /// Adaptive bitrate adjustment strategy based on link type.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AdjustmentStrategy {
-    Conservative,  // ±5% per adjustment, for satellite
-    Moderate,      // ±10% per adjustment, for intercontinental
-    Aggressive,    // ±20% per adjustment, for local
+    Conservative, // ±5% per adjustment, for satellite
+    Moderate,     // ±10% per adjustment, for intercontinental
+    Aggressive,   // ±20% per adjustment, for local
 }
 
 impl AdjustmentStrategy {
@@ -454,7 +454,7 @@ impl AdjustmentStrategy {
 /// Dynamic FEC controller for high-latency networks.
 #[derive(Debug, Clone)]
 pub struct FecController {
-    pub base_redundancy_pct: u32,    // 10-20%
+    pub base_redundancy_pct: u32, // 10-20%
     pub current_redundancy_pct: u32,
     pub max_redundancy_pct: u32,
     min_redundancy_pct: u32,
@@ -471,13 +471,12 @@ impl FecController {
     }
 
     pub fn update(&mut self, recent_loss_rate: f32, link_stability: f32) {
-        let loss_factor = (recent_loss_rate * 1000.0) as u32;  // Scale up
+        let loss_factor = (recent_loss_rate * 1000.0) as u32; // Scale up
         let stability_factor = ((1.0 - link_stability) * 10.0) as u32;
 
-        self.current_redundancy_pct =
-            (self.base_redundancy_pct + loss_factor + stability_factor)
-                .min(self.max_redundancy_pct)
-                .max(self.min_redundancy_pct);
+        self.current_redundancy_pct = (self.base_redundancy_pct + loss_factor + stability_factor)
+            .min(self.max_redundancy_pct)
+            .max(self.min_redundancy_pct);
     }
 
     pub fn should_increase_redundancy(&self, loss_rate: f32) -> bool {
@@ -653,9 +652,7 @@ mod tests {
 
     #[test]
     fn test_latency_profile_high_latency_samples() {
-        let rtts = vec![
-            200, 210, 220, 205, 215, 230, 225, 210, 205, 220,
-        ];
+        let rtts = vec![200, 210, 220, 205, 215, 230, 225, 210, 205, 220];
         let profile = LatencyProfile::estimate_from_samples(&rtts);
 
         assert_eq!(profile.base_rtt_ms, 200);
@@ -690,7 +687,7 @@ mod tests {
     #[test]
     fn test_congestion_detector_no_congestion() {
         let mut detector = CongestionDetector::default();
-        detector.update(-0.5, 0.0);  // Improving delay, no loss
+        detector.update(-0.5, 0.0); // Improving delay, no loss
 
         assert!(!detector.is_congested());
         assert_eq!(detector.delay_score, 0.0);
@@ -700,7 +697,7 @@ mod tests {
     #[test]
     fn test_congestion_detector_delay_congestion() {
         let mut detector = CongestionDetector::default();
-        detector.update(2.0, 0.0);  // Rising delay
+        detector.update(2.0, 0.0); // Rising delay
 
         assert!(detector.delay_score > 0.0);
         assert_eq!(detector.loss_score, 0.0);
@@ -709,7 +706,7 @@ mod tests {
     #[test]
     fn test_congestion_detector_loss_congestion() {
         let mut detector = CongestionDetector::default();
-        detector.update(0.0, 0.005);  // 0.5% loss
+        detector.update(0.0, 0.005); // 0.5% loss
 
         assert_eq!(detector.delay_score, 0.0);
         assert!(detector.loss_score > 0.0);
@@ -718,7 +715,7 @@ mod tests {
     #[test]
     fn test_congestion_detector_hybrid_congestion() {
         let mut detector = CongestionDetector::default();
-        detector.update(1.5, 0.003);  // Both delay and loss
+        detector.update(1.5, 0.003); // Both delay and loss
 
         assert!(detector.is_congested() || detector.congestion_score() > 0.0);
     }
@@ -786,7 +783,7 @@ mod tests {
     fn test_fec_controller_increase_on_loss() {
         let mut controller = FecController::new(15);
 
-        controller.update(0.05, 0.8);  // 5% loss, 80% stability
+        controller.update(0.05, 0.8); // 5% loss, 80% stability
         assert!(controller.current_redundancy_pct > 15);
     }
 
@@ -808,12 +805,12 @@ mod tests {
         let mut controller = FecController::new(15);
 
         // Try to push beyond max
-        controller.update(0.5, 0.0);  // Extreme loss
+        controller.update(0.5, 0.0); // Extreme loss
         assert!(controller.current_redundancy_pct <= controller.max_redundancy_pct);
 
         // Test minimum bound with new controller
         let mut controller2 = FecController::new(15);
-        controller2.update(0.0, 1.0);  // Perfect conditions
+        controller2.update(0.0, 1.0); // Perfect conditions
         assert!(controller2.current_redundancy_pct >= controller2.min_redundancy_pct);
     }
 
@@ -821,7 +818,7 @@ mod tests {
     fn test_fec_controller_should_increase_redundancy() {
         let controller = FecController::new(15);
 
-        assert!(controller.should_increase_redundancy(0.02));  // 2% loss
+        assert!(controller.should_increase_redundancy(0.02)); // 2% loss
         assert!(!controller.should_increase_redundancy(0.005)); // 0.5% loss
     }
 
@@ -835,9 +832,9 @@ mod tests {
         assert!(increased_redundancy > 15);
 
         // Then check if it should decrease with low loss
-        assert!(controller.should_decrease_redundancy(0.0001));  // 0.01% loss
+        assert!(controller.should_decrease_redundancy(0.0001)); // 0.01% loss
 
         // Should not decrease with moderate loss
-        assert!(!controller.should_decrease_redundancy(0.005));  // 0.5% loss
+        assert!(!controller.should_decrease_redundancy(0.005)); // 0.5% loss
     }
 }

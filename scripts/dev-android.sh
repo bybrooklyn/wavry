@@ -312,7 +312,7 @@ echo "Using ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT"
 echo "[2/2] Building Android app (${GRADLE_TASKS[*]})..."
 (
   cd "$ANDROID_APP_DIR"
-  "$GRADLE_CMD" --no-daemon "${GRADLE_TASKS[@]}"
+  "$GRADLE_CMD" "${GRADLE_TASKS[@]}"
 )
 
 echo "Android build complete."

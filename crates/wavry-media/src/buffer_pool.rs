@@ -24,7 +24,7 @@ impl Default for FrameBufferPoolConfig {
     fn default() -> Self {
         Self {
             max_pool_size: 3,
-            buffer_size_bytes: 1920 * 1080 * 4,  // 1080p RGBA
+            buffer_size_bytes: 1920 * 1080 * 4, // 1080p RGBA
             track_stats: true,
         }
     }
@@ -80,7 +80,7 @@ impl FrameBuffer {
 pub struct FrameBufferPool {
     config: FrameBufferPoolConfig,
     available: VecDeque<FrameBuffer>,
-    in_use: Vec<u64>,  // Track which buffer IDs are in use
+    in_use: Vec<u64>, // Track which buffer IDs are in use
     next_buffer_id: u64,
     stats: Arc<Mutex<FrameBufferPoolStats>>,
 }
@@ -145,10 +145,7 @@ impl FrameBufferPool {
 
     /// Get current statistics about pool usage.
     pub fn stats(&self) -> FrameBufferPoolStats {
-        self.stats
-            .lock()
-            .map(|s| s.clone())
-            .unwrap_or_default()
+        self.stats.lock().map(|s| s.clone()).unwrap_or_default()
     }
 
     /// Calculate total memory usage of the pool.
@@ -422,7 +419,7 @@ mod tests {
         let mut buf = ReorderBuffer::new(10);
 
         buf.insert(5, vec![5]).unwrap();
-        buf.window_start = 10;  // Simulate sliding window forward
+        buf.window_start = 10; // Simulate sliding window forward
 
         let result = buf.insert(5, vec![5]);
         assert_eq!(result, Err(ReorderError::PacketTooOld));
@@ -434,7 +431,7 @@ mod tests {
 
         buf.insert(0, vec![0]).unwrap();
         buf.insert(5, vec![5]).unwrap();
-        buf.insert(15, vec![15]).unwrap();  // Should slide window
+        buf.insert(15, vec![15]).unwrap(); // Should slide window
 
         assert!(buf.window_start() >= 5);
     }
@@ -472,6 +469,6 @@ mod tests {
 
         assert_eq!(buf.get(0), Some(vec![42]));
         assert_eq!(buf.get(1), Some(vec![99]));
-        assert_eq!(buf.get(1), None);  // Already removed
+        assert_eq!(buf.get(1), None); // Already removed
     }
 }

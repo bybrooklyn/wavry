@@ -219,9 +219,12 @@ pub use buffer_pool::{
 
 pub mod encoder_pool;
 pub use encoder_pool::{
-    EncoderConfig, EncoderPool, EncoderPoolConfig, EncoderPoolStats, MemoryPressure,
-    PooledEncoder, ReferenceFrame, ReferenceFrameManager, StagingBuffer, StagingBufferPool,
+    EncoderConfig, EncoderPool, EncoderPoolConfig, EncoderPoolStats, MemoryPressure, PooledEncoder,
+    ReferenceFrame, ReferenceFrameManager, StagingBuffer, StagingBufferPool,
 };
+
+pub mod recorder;
+pub use recorder::{Quality, RecorderConfig, VideoRecorder};
 
 #[cfg(target_os = "linux")]
 mod linux;

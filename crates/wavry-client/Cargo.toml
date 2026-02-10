@@ -16,6 +16,7 @@ wavry-common = { path = "../../crates/wavry-common" }
 rift-core = { path = "../../crates/rift-core" }
 rift-crypto = { path = "../../crates/rift-crypto" }
 wavry-media = { path = "../../crates/wavry-media" }
+wavry-platform = { path = "../../crates/wavry-platform" }
 wavry-vr = { path = "../../crates/wavry-vr" }
 wavry-vr-alvr = { path = "../../crates/wavry-vr-alvr", features = ["alvr"] }
 rand.workspace = true

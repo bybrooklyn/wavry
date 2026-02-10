@@ -31,6 +31,10 @@ pub const TRANSPORT_HEADER_SIZE: usize = 18;
 
 pub const RIFT_MAGIC: [u8; 2] = [0x52, 0x49]; // 'RI'
 
+/// Maximum clipboard text size accepted from the network (1 MiB).
+/// Prevents memory exhaustion from malformed or malicious ClipboardMessage payloads.
+pub const MAX_CLIPBOARD_TEXT_BYTES: usize = 1024 * 1024;
+
 #[derive(Debug, thiserror::Error)]
 pub enum RiftError {
     #[error("packet too short: {0}")]
@@ -563,7 +567,9 @@ mod tests {
 
     #[test]
     fn physical_packet_invalid_magic() {
-        let bytes = Bytes::from(vec![0xFF, 0xFF, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+        let bytes = Bytes::from(vec![
+            0xFF, 0xFF, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        ]);
         assert!(matches!(
             PhysicalPacket::decode(bytes),
             Err(RiftError::InvalidMagic(_))
@@ -588,7 +594,7 @@ mod tests {
         assert_eq!(chunks.len(), 1);
         assert_eq!(chunks[0].chunk_count, 1);
         assert_eq!(chunks[0].chunk_index, 0);
-        assert_eq!(chunks[0].keyframe, true);
+        assert!(chunks[0].keyframe);
     }
 
     #[test]

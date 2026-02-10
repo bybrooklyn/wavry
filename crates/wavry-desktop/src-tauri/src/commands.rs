@@ -17,7 +17,7 @@ use wavry_media::{PipewireAudioCapturer, PipewireEncoder};
 use wavry_media::{WindowsAudioCapturer, WindowsEncoder, WindowsProbe};
 
 use serde_json::json;
-use std::sync::{atomic::Ordering, Mutex};
+use std::sync::atomic::Ordering;
 #[cfg(target_os = "linux")]
 use tokio::sync::{mpsc, oneshot};
 
@@ -275,6 +275,7 @@ pub async fn start_session(
         gamepad_deadzone: gamepad_deadzone.unwrap_or(0.1).clamp(0.0, 0.95),
         vr_adapter: None,
         runtime_stats: None,
+        recorder_config: None,
     };
 
     spawn_client_session(config)?;
@@ -471,6 +472,7 @@ pub async fn connect_via_id(target_username: String) -> Result<String, String> {
                         gamepad_deadzone: 0.1,
                         vr_adapter: None,
                         runtime_stats: None,
+                        recorder_config: None,
                     };
 
                     spawn_client_session(config)?;
@@ -649,56 +651,56 @@ pub async fn start_host(port: u16, display_id: Option<u32>) -> Result<String, St
                     log::info!("Host registered with signaling gateway");
                     while let Ok(msg) = sig.recv().await {
                         if let SignalMessage::OFFER_RIFT {
-                                target_username,
-                                hello_base64,
-                            } = msg {
-                                if let Ok(hello) = wavry_client::decode_hello_base64(&hello_base64)
-                                {
-                                    let session_id = uuid::Uuid::new_v4().into_bytes();
-                                    let session_alias = 1;
+                            target_username,
+                            hello_base64,
+                        } = msg
+                        {
+                            if let Ok(hello) = wavry_client::decode_hello_base64(&hello_base64) {
+                                let session_id = uuid::Uuid::new_v4().into_bytes();
+                                let session_alias = 1;
 
-                                    let udp = std::net::UdpSocket::bind("0.0.0.0:0").ok();
-                                    let my_public_addr = if let Some(ref s) = udp {
-                                        let tokio_u =
-                                            tokio::net::UdpSocket::from_std(s.try_clone().unwrap())
-                                                .ok();
-                                        if let Some(tu) = tokio_u {
-                                            wavry_client::discover_public_addr(&tu)
-                                                .await
-                                                .ok()
-                                                .map(|a: SocketAddr| a.to_string())
-                                        } else {
-                                            None
-                                        }
+                                let udp = std::net::UdpSocket::bind("0.0.0.0:0").ok();
+                                let my_public_addr = if let Some(ref s) = udp {
+                                    let tokio_u =
+                                        tokio::net::UdpSocket::from_std(s.try_clone().unwrap())
+                                            .ok();
+                                    if let Some(tu) = tokio_u {
+                                        wavry_client::discover_public_addr(&tu)
+                                            .await
+                                            .ok()
+                                            .map(|a: SocketAddr| a.to_string())
                                     } else {
                                         None
-                                    };
+                                    }
+                                } else {
+                                    None
+                                };
 
-                                    let (w, h) = if let Some(res) = hello.max_resolution {
-                                        (res.width, res.height)
-                                    } else {
-                                        (1920, 1080)
-                                    };
+                                let (w, h) = if let Some(res) = hello.max_resolution {
+                                    (res.width, res.height)
+                                } else {
+                                    (1920, 1080)
+                                };
 
-                                    let selected_codec = choose_rift_codec(&hello);
-                                    let ack_b64 = wavry_client::create_hello_ack_base64(
-                                        true,
-                                        session_id,
-                                        session_alias,
-                                        my_public_addr,
-                                        w,
-                                        h,
-                                        selected_codec,
-                                    )
-                                    .unwrap_or_default();
+                                let selected_codec = choose_rift_codec(&hello);
+                                let ack_b64 = wavry_client::create_hello_ack_base64(
+                                    true,
+                                    session_id,
+                                    session_alias,
+                                    my_public_addr,
+                                    w,
+                                    h,
+                                    selected_codec,
+                                )
+                                .unwrap_or_default();
 
-                                    let _ = sig
-                                        .send(SignalMessage::ANSWER_RIFT {
-                                            target_username,
-                                            ack_base64: ack_b64,
-                                        })
-                                        .await;
-                                }
+                                let _ = sig
+                                    .send(SignalMessage::ANSWER_RIFT {
+                                        target_username,
+                                        ack_base64: ack_b64,
+                                    })
+                                    .await;
+                            }
                         }
                     }
                 }

@@ -30,7 +30,10 @@ mod tests {
         let token2 = "token_two";
         let hash1 = hash_token(token1);
         let hash2 = hash_token(token2);
-        assert_ne!(hash1, hash2, "Different tokens should produce different hashes");
+        assert_ne!(
+            hash1, hash2,
+            "Different tokens should produce different hashes"
+        );
     }
 
     #[test]
@@ -38,7 +41,11 @@ mod tests {
         let token = "plaintext_token";
         let hash = hash_token(token);
         assert_ne!(hash, token, "Hash should not equal original token");
-        assert_ne!(hash.len(), token.len(), "Hash length should differ from token");
+        assert_ne!(
+            hash.len(),
+            token.len(),
+            "Hash length should differ from token"
+        );
     }
 
     #[test]
@@ -61,7 +68,10 @@ mod tests {
     fn test_hash_token_special_characters() {
         let token = "!@#$%^&*()_+-=[]{}|;':\",./<>?";
         let hash = hash_token(token);
-        assert!(!hash.is_empty(), "Hash of special chars should not be empty");
+        assert!(
+            !hash.is_empty(),
+            "Hash of special chars should not be empty"
+        );
     }
 
     #[test]
@@ -151,5 +161,4 @@ mod tests {
 
         assert!(ban_req.duration_hours.is_none());
     }
-
 }

@@ -39,6 +39,7 @@ use wavry_media::DummyRenderer as LinuxFallbackRenderer;
 #[cfg(target_os = "linux")]
 use wavry_media::GstVideoRenderer as VideoRenderer;
 use wavry_media::{Codec, DecodeConfig, Renderer, Resolution as MediaResolution};
+use wavry_platform::{ArboardClipboard, Clipboard};
 use wavry_vr::types::{
     EncoderControl as VrEncoderControl, HandPose as VrHandPose, NetworkStats as VrNetworkStats,
     Pose as VrPose, StreamConfig as VrStreamConfig, VideoCodec as VrVideoCodec,
@@ -520,6 +521,19 @@ async fn run_client_inner(
     let mut frames = FrameAssembler::new(FRAME_TIMEOUT_US);
     let mut fec_cache = FecCache::new();
 
+    let mut clipboard = ArboardClipboard::new().ok();
+    let mut last_clipboard_text = clipboard.as_mut().and_then(|c| c.get_text().ok()).flatten();
+    let mut clipboard_poll_interval = time::interval(Duration::from_millis(500));
+
+    let mut recorder = if let Some(config) = config.recorder_config {
+        Some(wavry_media::VideoRecorder::new(config)?)
+    } else {
+        None
+    };
+
+    let mut stream_codec: Option<Codec> = None;
+    let mut stream_resolution: Option<MediaResolution> = None;
+
     loop {
         tokio::select! {
             _ = async {
@@ -662,10 +676,40 @@ async fn run_client_inner(
                 }
             }
 
+            // Clipboard polling
+            _ = clipboard_poll_interval.tick() => {
+                if let Some(ref mut c) = clipboard {
+                    if let Ok(Some(current_text)) = c.get_text() {
+                        if Some(current_text.clone()) != last_clipboard_text {
+                            last_clipboard_text = Some(current_text.clone());
+                            if let Some(alias) = session_alias {
+                                let msg = ProtoMessage {
+                                    content: Some(rift_core::message::Content::Control(ProtoControl {
+                                        content: Some(rift_core::control_message::Content::Clipboard(
+                                            rift_core::ClipboardMessage { text: current_text }
+                                        )),
+                                    })),
+                                };
+                                if let Err(e) = send_rift_msg(&socket, &mut crypto, connect_addr, msg, Some(alias), next_packet_id(), relay_info).await {
+                                    debug!("clipboard send error: {}", e);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
             // Jitter buffer drain
             _ = jitter_interval.tick() => {
                 while let Some(ready) = jitter_buffer.pop_ready(now_us()) {
                     let mut rendered = false;
+
+                    if let Some(ref mut rec) = recorder {
+                        if let (Some(codec), Some(res)) = (stream_codec, stream_resolution) {
+                            let _ = rec.write_frame(&ready.data, ready.keyframe, codec, res, 60);
+                        }
+                    }
+
                     if let Some(adapter) = vr_adapter.as_ref() {
                         if let Ok(mut adapter) = adapter.lock() {
                             let frame = VrVideoFrame {
@@ -785,18 +829,24 @@ async fn run_client_inner(
                                         stats.connected.store(true, Ordering::Relaxed);
                                     }
 
+                                    let negotiated_codec = match ack.selected_codec {
+                                        c if c == RiftCodec::Av1 as i32 => Codec::Av1,
+                                        c if c == RiftCodec::Hevc as i32 => Codec::Hevc,
+                                        _ => Codec::H264,
+                                    };
+                                    stream_codec = Some(negotiated_codec);
+
                                     if let Some(res) = ack.stream_resolution {
+                                        let negotiated_res = MediaResolution {
+                                            width: res.width as u16,
+                                            height: res.height as u16,
+                                        };
+                                        stream_resolution = Some(negotiated_res);
+
                                         if vr_adapter.is_none() {
                                             let config = DecodeConfig {
-                                                codec: match ack.selected_codec {
-                                                    c if c == RiftCodec::Av1 as i32 => Codec::Av1,
-                                                    c if c == RiftCodec::Hevc as i32 => Codec::Hevc,
-                                                    _ => Codec::H264,
-                                                },
-                                                resolution: MediaResolution {
-                                                    width: res.width as u16,
-                                                    height: res.height as u16,
-                                                },
+                                                codec: negotiated_codec,
+                                                resolution: negotiated_res,
                                                 enable_10bit: false,
                                                 enable_hdr: false,
                                             };
@@ -925,6 +975,17 @@ async fn run_client_inner(
                                         }
                                     }
                                 }
+                                rift_core::control_message::Content::Clipboard(clip) => {
+                                    if clip.text.len() > rift_core::MAX_CLIPBOARD_TEXT_BYTES {
+                                        warn!("Received clipboard message exceeds size limit ({} bytes), ignoring", clip.text.len());
+                                    } else {
+                                        debug!("Received clipboard update from host");
+                                        if let Some(ref mut c) = clipboard {
+                                            let _ = c.set_text(clip.text.clone());
+                                            last_clipboard_text = Some(clip.text);
+                                        }
+                                    }
+                                }
                                 _ => {}
                             }
                         }
@@ -955,6 +1016,11 @@ async fn run_client_inner(
                             }
                             Some(rift_core::media_message::Content::Audio(packet)) => {
                                 fec_cache.insert(phys.packet_id, plaintext.clone());
+
+                                if let Some(ref mut rec) = recorder {
+                                    let _ = rec.write_audio(&packet.payload, packet.timestamp_us);
+                                }
+
                                 if let Some(ar) = audio_renderer.as_mut() {
                                     if let Err(e) = ar.render(&packet.payload, packet.timestamp_us) {
                                         if !audio_disabled {
@@ -975,6 +1041,12 @@ async fn run_client_inner(
                                                         jitter_buffer.update(arrival_jitter.jitter_us_f64());
                                                         jitter_buffer.push(frame, now_us());
                                                         while let Some(ready) = jitter_buffer.pop_ready(now_us()) {
+                                                            if let Some(ref mut rec) = recorder {
+                                                                if let (Some(codec), Some(res)) = (stream_codec, stream_resolution) {
+                                                                    let _ = rec.write_frame(&ready.data, ready.keyframe, codec, res, 60);
+                                                                }
+                                                            }
+
                                                             if let Some(adapter) = vr_adapter.as_ref() {
                                                                 if let Ok(mut adapter) = adapter.lock() {
                                                                     let frame = VrVideoFrame {
@@ -992,6 +1064,10 @@ async fn run_client_inner(
                                                     }
                                                 }
                                                 Some(rift_core::media_message::Content::Audio(packet)) => {
+                                                    if let Some(ref mut rec) = recorder {
+                                                        let _ = rec.write_audio(&packet.payload, packet.timestamp_us);
+                                                    }
+
                                                     if let Some(ar) = audio_renderer.as_mut() {
                                                         if let Err(e) = ar.render(&packet.payload, packet.timestamp_us) {
                                                             if !audio_disabled {
@@ -1044,10 +1120,7 @@ async fn run_client_inner(
             use rift_crypto::identity::IdentityKeypair;
             let keypair = IdentityKeypair::from_bytes(&identity_key_bytes);
             // Create a stable message to sign: session_id + relay_id + quality_score
-            let message = format!(
-                "{}:{}:{}",
-                relay.session_id, relay.relay_id, quality_score
-            );
+            let message = format!("{}:{}:{}", relay.session_id, relay.relay_id, quality_score);
             let sig_bytes = keypair.sign(message.as_bytes());
             hex::encode(sig_bytes)
         } else {
@@ -1076,6 +1149,10 @@ async fn run_client_inner(
             "sent session feedback to master for relay {}: score={}",
             relay.relay_id, quality_score
         );
+    }
+
+    if let Some(mut rec) = recorder {
+        let _ = rec.finalize();
     }
 
     Ok(())

@@ -529,7 +529,7 @@ impl MacAudioCapturer {
     pub async fn new() -> Result<Self> {
         let (tx, rx) = mpsc::channel(32);
         let content = get_shareable_content().await?.0;
-        
+
         #[cfg(feature = "opus-support")]
         let output_handler = {
             let encoder = create_opus_encoder()?;

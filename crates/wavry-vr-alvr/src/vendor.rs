@@ -6,38 +6,19 @@
 //! This module intentionally keeps transport out of ALVR. It uses the adapter
 //! traits in `wavry-vr` and connects to the VR runtime backends.
 
-use std::sync::{
-    atomic::{AtomicBool, Ordering},
-    Arc, Mutex,
-};
+use std::sync::atomic::Ordering;
+use std::sync::Arc;
 use std::thread::JoinHandle;
 
 use glam::{Quat, Vec3};
 use wavry_vr::types::{EncoderControl, NetworkStats, Pose, StreamConfig, VideoFrame};
 use wavry_vr::{VrAdapter, VrAdapterCallbacks, VrError, VrResult};
+use wavry_vr_openxr::{spawn_runtime, SharedState};
 
 // Minimal ALVR primitives (vendored) for compatibility with ALVR types.
 #[allow(dead_code)]
 #[path = "../../../third_party/alvr/alvr/common/src/primitives.rs"]
 mod alvr_primitives;
-
-#[path = "pcvr.rs"]
-mod pcvr;
-
-pub(crate) struct SharedState {
-    #[cfg_attr(not(any(target_os = "linux", target_os = "windows")), allow(dead_code))]
-    pub(crate) callbacks: Arc<dyn VrAdapterCallbacks>,
-    pub(crate) latest_frame: Mutex<Option<VideoFrame>>,
-    pub(crate) stream_config: Mutex<Option<StreamConfig>>,
-    pub(crate) stop: AtomicBool,
-}
-
-impl SharedState {
-    #[cfg_attr(not(any(target_os = "linux", target_os = "windows")), allow(dead_code))]
-    pub(crate) fn take_latest_frame(&self) -> Option<VideoFrame> {
-        self.latest_frame.lock().ok()?.take()
-    }
-}
 
 pub struct AlvrAdapter {
     state: Option<Arc<SharedState>>,
@@ -61,13 +42,8 @@ impl Default for AlvrAdapter {
 
 impl VrAdapter for AlvrAdapter {
     fn start(&mut self, cb: Arc<dyn VrAdapterCallbacks>) -> VrResult<()> {
-        let state = Arc::new(SharedState {
-            callbacks: cb,
-            latest_frame: Mutex::new(None),
-            stream_config: Mutex::new(None),
-            stop: AtomicBool::new(false),
-        });
-        let runtime = pcvr::spawn_runtime(state.clone())?;
+        let state = Arc::new(SharedState::new(cb));
+        let runtime = spawn_runtime(state.clone())?;
         self.state = Some(state);
         self.runtime = Some(runtime);
         Ok(())

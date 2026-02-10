@@ -6,12 +6,9 @@ use opus::{Channels, Decoder as OpusDecoder};
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 
-use super::{
-    AUDIO_MAX_BUFFER_SAMPLES, OPUS_CHANNELS, OPUS_FRAME_SAMPLES,
-    OPUS_SAMPLE_RATE,
-};
 #[cfg(feature = "opus-support")]
 use super::OPUS_MAX_FRAME_SAMPLES;
+use super::{AUDIO_MAX_BUFFER_SAMPLES, OPUS_CHANNELS, OPUS_FRAME_SAMPLES, OPUS_SAMPLE_RATE};
 use crate::Renderer;
 
 pub struct CpalAudioRenderer {

@@ -72,6 +72,8 @@ apps/android/app/src/main/cpp/prebuilt/
 
 # AI Context
 .gemini/
+session-*.md
+*.ses
 
 # Local Certificates
 certs/

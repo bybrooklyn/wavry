@@ -23,6 +23,7 @@ pub struct ClientConfig {
     pub gamepad_deadzone: f32,
     pub vr_adapter: Option<Arc<Mutex<dyn VrAdapter>>>,
     pub runtime_stats: Option<Arc<ClientRuntimeStats>>,
+    pub recorder_config: Option<wavry_media::RecorderConfig>,
 }
 
 #[derive(Debug, Clone)]
@@ -87,6 +88,7 @@ mod tests {
             gamepad_deadzone: 0.15,
             vr_adapter: None,
             runtime_stats: None,
+            recorder_config: None,
         };
 
         assert_eq!(config.client_name, "TestClient");
@@ -112,6 +114,7 @@ mod tests {
             gamepad_deadzone: 0.0,
             vr_adapter: None,
             runtime_stats: None,
+            recorder_config: None,
         };
 
         let config2 = config1.clone();
@@ -156,7 +159,9 @@ mod tests {
 
         assert!(!stats.connected.load(std::sync::atomic::Ordering::Relaxed));
         assert_eq!(
-            stats.frames_decoded.load(std::sync::atomic::Ordering::Relaxed),
+            stats
+                .frames_decoded
+                .load(std::sync::atomic::Ordering::Relaxed),
             0
         );
         assert!(stats.monitors.lock().unwrap().is_empty());
@@ -175,7 +180,9 @@ mod tests {
             .frames_decoded
             .store(100, std::sync::atomic::Ordering::Relaxed);
         assert_eq!(
-            stats.frames_decoded.load(std::sync::atomic::Ordering::Relaxed),
+            stats
+                .frames_decoded
+                .load(std::sync::atomic::Ordering::Relaxed),
             100
         );
 
@@ -184,7 +191,9 @@ mod tests {
             .frames_decoded
             .fetch_add(50, std::sync::atomic::Ordering::Relaxed);
         assert_eq!(
-            stats.frames_decoded.load(std::sync::atomic::Ordering::Relaxed),
+            stats
+                .frames_decoded
+                .load(std::sync::atomic::Ordering::Relaxed),
             150
         );
     }

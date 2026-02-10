@@ -10,10 +10,7 @@
 //! - Rate limiting
 
 use sqlx::sqlite::{SqlitePool, SqlitePoolOptions};
-use wavry_gateway::{
-    db,
-    security,
-};
+use wavry_gateway::{db, security};
 
 async fn setup_test_db() -> SqlitePool {
     // Create in-memory SQLite database for tests
@@ -139,9 +136,7 @@ async fn test_count_users_and_sessions() {
     let pool = setup_test_db().await;
 
     // Initially empty
-    let count = db::count_users(&pool)
-        .await
-        .expect("Failed to count users");
+    let count = db::count_users(&pool).await.expect("Failed to count users");
     assert_eq!(count, 0);
 
     let sessions = db::count_sessions(&pool)
@@ -161,9 +156,7 @@ async fn test_count_users_and_sessions() {
     .await
     .expect("Failed to create user");
 
-    let count = db::count_users(&pool)
-        .await
-        .expect("Failed to count users");
+    let count = db::count_users(&pool).await.expect("Failed to count users");
     assert_eq!(count, 1);
 
     // Create a session
@@ -368,7 +361,7 @@ async fn test_token_hashing() {
 
     assert_eq!(hash1, hash2, "Token hash should be consistent");
     assert_ne!(hash1, token, "Hash should not equal plaintext token");
-    assert!(hash1.len() > 0);
+    assert!(!hash1.is_empty());
 }
 
 #[tokio::test]

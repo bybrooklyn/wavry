@@ -1,20 +1,17 @@
 [package]
-name = "wavry-vr-alvr"
-version = "0.0.2-canary"
+name = "wavry-vr-openxr"
+version = "0.0.1-canary"
 edition = "2021"
 license = "AGPL-3.0-only"
 
-[features]
-# Enables building against the vendored ALVR source.
-alvr = []
-
 [dependencies]
 wavry-vr = { path = "../wavry-vr" }
-wavry-vr-openxr = { path = "../wavry-vr-openxr" }
 thiserror.workspace = true
 glam = { version = "0.27", features = ["serde"] }
 serde = { workspace = true }
+openxr = "0.21"
 log = "0.4"
+bytes = "1.7"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 gstreamer = "0.22"
@@ -30,11 +27,13 @@ ndk-context = "0.1"
 ash = "0.37"
 
 [target.'cfg(target_os = "windows")'.dependencies.windows]
-workspace = true
+version = "0.62.2"
 features = [
     "Win32_Foundation",
+    "Win32_Graphics_Direct3D",
     "Win32_Graphics_Direct3D11",
     "Win32_Graphics_Dxgi",
+    "Win32_Graphics_Dxgi_Common",
     "Win32_Media_MediaFoundation",
     "Win32_System_Com",
     "Win32_System_WinRT",

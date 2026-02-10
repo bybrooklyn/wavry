@@ -261,9 +261,10 @@ abi_to_target_triple() {
 echo "Building wavry-ffi for Android ABIs: ${ABIS[*]} (${PROFILE})"
 echo "Using ANDROID_NDK_HOME=$ANDROID_NDK_HOME"
 
+pids=()
 for abi in "${ABIS[@]}"; do
   target_triple="$(abi_to_target_triple "$abi")"
-  echo "-> Building ABI ${abi} (${target_triple})"
+  echo "-> Starting build for ABI ${abi} (${target_triple})..."
 
   CARGO_ARGS=(ndk -t "$abi" build -p wavry-ffi --no-default-features)
   if [[ "$PROFILE" == "release" ]]; then
@@ -273,20 +274,32 @@ for abi in "${ABIS[@]}"; do
   (
     cd "$REPO_ROOT"
     cargo "${CARGO_ARGS[@]}"
-  )
+  ) &
+  pids+=($!)
+done
 
+echo "Waiting for all ABI builds to complete..."
+for pid in "${pids[@]}"; do
+  if ! wait "$pid"; then
+    echo "Error: ABI build failed (PID: $pid)" >&2
+    exit 1
+  fi
+done
+
+for abi in "${ABIS[@]}"; do
+  target_triple="$(abi_to_target_triple "$abi")"
   source_lib="$REPO_ROOT/target/$target_triple/$profile_dir/libwavry_ffi.a"
   dest_dir="$OUT_DIR/$abi"
   dest_lib="$dest_dir/libwavry_ffi.a"
   mkdir -p "$dest_dir"
 
   if [[ ! -f "$source_lib" ]]; then
-    echo "Expected output missing: $source_lib" >&2
+    echo "Expected output missing for ABI ${abi}: $source_lib" >&2
     exit 1
   fi
 
   cp "$source_lib" "$dest_lib"
-  echo "Built: $dest_lib"
+  echo "Copied: $dest_lib"
 done
 
 echo "Android FFI build complete."

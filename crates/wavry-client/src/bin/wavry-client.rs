@@ -20,6 +20,12 @@ struct Args {
     /// Enable PCVR adapter (Linux/Windows only)
     #[arg(long, default_value_t = false)]
     vr: bool,
+    /// Enable local recording to MP4
+    #[arg(long, default_value_t = false)]
+    record: bool,
+    /// Directory to store recordings
+    #[arg(long, default_value = "recordings")]
+    record_dir: String,
 }
 
 fn main() -> anyhow::Result<()> {
@@ -42,6 +48,16 @@ fn main() -> anyhow::Result<()> {
         None
     };
 
+    let recorder_config = if args.record {
+        Some(wavry_media::RecorderConfig {
+            enabled: true,
+            output_dir: std::path::PathBuf::from(args.record_dir),
+            ..Default::default()
+        })
+    } else {
+        None
+    };
+
     let config = ClientConfig {
         connect_addr: args.connect,
         client_name: args.name,
@@ -54,6 +70,7 @@ fn main() -> anyhow::Result<()> {
         gamepad_deadzone: 0.1,
         vr_adapter,
         runtime_stats: None,
+        recorder_config,
     };
 
     tokio::runtime::Builder::new_multi_thread()

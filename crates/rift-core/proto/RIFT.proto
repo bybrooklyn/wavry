@@ -141,6 +141,10 @@ message SelectMonitor {
     uint32 monitor_id = 1;
 }
 
+message ClipboardMessage {
+    string text = 1;
+}
+
 message ControlMessage {
     oneof content {
         Hello hello = 1;
@@ -157,6 +161,7 @@ message ControlMessage {
         PoseUpdate pose_update = 12;
         VrTiming vr_timing = 13;
         HandPoseUpdate hand_pose_update = 14;
+        ClipboardMessage clipboard = 15;
     }
 }
 

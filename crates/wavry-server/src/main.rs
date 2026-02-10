@@ -18,6 +18,7 @@ mod host {
         Message as ProtoMessage, PhysicalPacket, Resolution as ProtoResolution, Role, RIFT_VERSION,
     };
     use rift_crypto::connection::SecureServer;
+    use std::path::PathBuf;
     #[cfg(not(target_os = "linux"))]
     use wavry_media::DummyEncoder as VideoEncoder;
     #[cfg(target_os = "linux")]
@@ -29,7 +30,8 @@ mod host {
     #[cfg(target_os = "windows")]
     use wavry_media::WindowsProbe;
     use wavry_media::{
-        CapabilityProbe, Codec, EncodeConfig, EncodedFrame, Resolution as MediaResolution,
+        CapabilityProbe, Codec, EncodeConfig, EncodedFrame, Quality, RecorderConfig,
+        Resolution as MediaResolution, VideoRecorder,
     };
 
     use bytes::Bytes;
@@ -38,9 +40,9 @@ mod host {
     use tracing::{debug, error, info, warn};
     #[cfg(not(target_os = "linux"))]
     use wavry_platform::DummyInjector as InjectorImpl;
-    use wavry_platform::InputInjector;
     #[cfg(target_os = "linux")]
     use wavry_platform::UinputInjector as InjectorImpl;
+    use wavry_platform::{ArboardClipboard, Clipboard, InputInjector};
 
     use crate::webrtc_bridge::WebRtcBridge;
 
@@ -124,6 +126,18 @@ mod host {
         /// Enable WebRTC bridge for web clients
         #[arg(long, env = "WAVRY_ENABLE_WEBRTC", default_value_t = false)]
         enable_webrtc: bool,
+
+        /// Enable local recording to MP4
+        #[arg(long, env = "WAVRY_RECORD", default_value_t = false)]
+        record: bool,
+
+        /// Directory to store recordings
+        #[arg(long, env = "WAVRY_RECORD_DIR", default_value = "recordings")]
+        record_dir: String,
+
+        /// Recording quality (high, standard, low)
+        #[arg(long, env = "WAVRY_RECORD_QUALITY", default_value = "standard")]
+        record_quality: String,
     }
 
     #[derive(Clone, Copy, Debug)]
@@ -523,6 +537,8 @@ mod host {
         };
 
         let mut injector = InjectorImpl::new()?;
+        let mut clipboard = ArboardClipboard::new().ok();
+        let mut last_clipboard_text = clipboard.as_mut().and_then(|c| c.get_text().ok()).flatten();
 
         let (webrtc_input_tx, mut webrtc_input_rx) =
             mpsc::unbounded_channel::<rift_core::input_message::Event>();
@@ -559,6 +575,22 @@ mod host {
             enable_hdr: false,
         };
 
+        let mut recorder = if args.record {
+            let quality = match args.record_quality.to_lowercase().as_str() {
+                "high" => Quality::High,
+                "low" => Quality::Low,
+                _ => Quality::Standard,
+            };
+            Some(VideoRecorder::new(RecorderConfig {
+                enabled: true,
+                output_dir: PathBuf::from(args.record_dir),
+                quality,
+                ..Default::default()
+            })?)
+        } else {
+            None
+        };
+
         let mut buf = vec![0u8; 64 * 1024];
         let mut peers: HashMap<SocketAddr, PeerState> = HashMap::new();
         let mut active_peer: Option<SocketAddr> = None;
@@ -570,6 +602,7 @@ mod host {
         let no_encrypt = args.no_encrypt;
         let mut peer_cleanup_interval =
             time::interval(Duration::from_secs(PEER_CLEANUP_INTERVAL_SECS));
+        let mut clipboard_poll_interval = time::interval(Duration::from_millis(500));
 
         if args.enable_webrtc && selected_codec.is_none() {
             ensure_encoder(
@@ -596,6 +629,27 @@ mod host {
                         runtime.peer_idle_timeout,
                     );
                 }
+                _ = clipboard_poll_interval.tick() => {
+                    if let Some(ref mut c) = clipboard {
+                        if let Ok(Some(current_text)) = c.get_text() {
+                            if Some(current_text.clone()) != last_clipboard_text {
+                                last_clipboard_text = Some(current_text.clone());
+                                if let Some(peer) = active_peer {
+                                    if let Some(peer_state) = peers.get_mut(&peer) {
+                                        let msg = ProtoMessage {
+                                            content: Some(rift_core::message::Content::Control(ProtoControl {
+                                                content: Some(rift_core::control_message::Content::Clipboard(
+                                                    rift_core::ClipboardMessage { text: current_text }
+                                                )),
+                                            })),
+                                        };
+                                        let _ = send_rift_msg(&socket, peer_state, peer, msg).await;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
                 Some(frame) = async {
                     if let Some(rx) = frame_rx.as_mut() {
                         rx.recv().await
@@ -603,6 +657,12 @@ mod host {
                         None
                     }
                 } => {
+                    if let Some(ref mut rec) = recorder {
+                        if let Some(codec) = selected_codec {
+                            let _ = rec.write_frame(&frame.data, frame.keyframe, codec, base_config.resolution, base_config.fps);
+                        }
+                    }
+
                     if let Some(ref bridge) = webrtc_bridge {
                         let _ = bridge.push_frame(frame.clone()).await;
                     }
@@ -646,6 +706,8 @@ mod host {
                         runtime,
                         &local_supported,
                         &mut base_config,
+                        &mut clipboard,
+                        &mut last_clipboard_text,
                     )
                     .await
                     {
@@ -677,6 +739,8 @@ mod host {
         runtime: HostRuntimeConfig,
         local_supported: &[Codec],
         base_config: &mut EncodeConfig,
+        clipboard: &mut Option<ArboardClipboard>,
+        last_clipboard_text: &mut Option<String>,
     ) -> Result<Option<Codec>> {
         peer_state.last_seen = time::Instant::now();
         let phys = PhysicalPacket::decode(Bytes::copy_from_slice(raw))
@@ -696,6 +760,8 @@ mod host {
                     runtime,
                     local_supported,
                     base_config,
+                    clipboard,
+                    last_clipboard_text,
                 )
                 .await
             }
@@ -763,6 +829,8 @@ mod host {
                     runtime,
                     local_supported,
                     base_config,
+                    clipboard,
+                    last_clipboard_text,
                 )
                 .await
             }
@@ -780,6 +848,8 @@ mod host {
         runtime: HostRuntimeConfig,
         local_supported: &[Codec],
         base_config: &mut EncodeConfig,
+        clipboard: &mut Option<ArboardClipboard>,
+        last_clipboard_text: &mut Option<String>,
     ) -> Result<Option<Codec>> {
         use rift_core::message::Content;
 
@@ -986,6 +1056,17 @@ mod host {
                         base_config.display_id = Some(select.monitor_id);
                         return Ok(Some(base_config.codec));
                     }
+                    rift_core::control_message::Content::Clipboard(clip) => {
+                        if clip.text.len() > rift_core::MAX_CLIPBOARD_TEXT_BYTES {
+                            warn!("Received clipboard message exceeds size limit ({} bytes), ignoring", clip.text.len());
+                        } else {
+                            debug!("Received clipboard update from client");
+                            if let Some(ref mut c) = clipboard {
+                                let _ = c.set_text(clip.text.clone());
+                                *last_clipboard_text = Some(clip.text);
+                            }
+                        }
+                    }
                     _ => {}
                 }
             }
@@ -1014,7 +1095,8 @@ mod host {
             }
             Event::Gamepad(g) => {
                 let axes: Vec<(u32, f32)> = g.axes.iter().map(|a| (a.axis, a.value)).collect();
-                let buttons: Vec<(u32, bool)> = g.buttons.iter().map(|b| (b.button, b.pressed)).collect();
+                let buttons: Vec<(u32, bool)> =
+                    g.buttons.iter().map(|b| (b.button, b.pressed)).collect();
                 injector.gamepad(g.gamepad_id, &axes, &buttons)?;
                 debug!("Gamepad event injected for ID {}", g.gamepad_id);
             }

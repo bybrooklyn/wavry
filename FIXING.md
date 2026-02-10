@@ -1,73 +1,107 @@
-# Windows CI Build Fixes Needed
+# Engineering Handover & Cleanup Plan
 
-## Root Cause
+**Date:** 2026-02-10
+**Context:** Massive architectural refactor (Windows 0.62.2 upgrade), VR subsystem isolation, and v0.0.3 feature implementation (Recording, Clipboard).
 
-Upgrading `openxr` from 0.16 to 0.21 pulled in a second `windows` crate version (0.54 or 0.62), conflicting with the workspace-pinned `windows = "=0.58.0"`. This causes `windows is ambiguous` errors and ~70 compilation failures in `wavry-vr-alvr`'s Windows module.
+---
 
-## Errors (from CI run 21848405504)
+## 🚨 Executive Summary
 
-### 1. `windows` crate ambiguity (7 occurrences)
-- `error[E0659]: windows is ambiguous` — two versions of the `windows` crate in scope via `openxr` 0.21 vs workspace `=0.58.0`
+We have successfully executed a high-risk upgrade of the Windows stack and refactored the VR architecture to prevent dependency hell. Simultaneously, we implemented two major features for v0.0.3. The codebase is compiling, but specific cleanup and verification tasks remain to ensure production stability.
 
-### 2. Unresolved imports from `windows` crate
-- `windows::core::ComInterface`
-- `windows::Win32::Foundation::E_FAIL`
-- `windows::Win32::Graphics::Direct3D11::*`
-- `windows::Win32::Graphics::Dxgi::*`
-- `windows::Win32::Media::MediaFoundation::*`
-- `windows::Win32::System::Com::CoInitializeEx`
-- `windows::Win32::System::Com::CoTaskMemFree`
-- `windows::Win32::System::Com::CoUninitialize`
-- `windows::Win32::System::Com::COINIT_MULTITHREADED`
-- `windows::Win32::System::WinRT::Direct3D11::IDirect3DDxgiInterfaceAccess`
+### 🏆 Key Achievements
+1.  **Windows Crate Upgrade (0.58.0 → 0.62.2):** Unified the entire workspace to the latest `windows` crate. This involved heavy refactoring of `wavry-media` (Direct3D/MediaFoundation), `wavry-platform` (Input Injection), and VR subsystems.
+2.  **VR Architecture Decoupling:** Created `crates/wavry-vr-openxr`. This crate now encapsulates **all** OpenXR dependencies and unsafe Windows/Linux/Android interop. `wavry-vr-alvr` is now a pure logic adapter, depending on this new crate. **This permanently fixes the "ambiguous windows crate" CI errors.**
+3.  **Local Recording:** Implemented `VideoRecorder` in `wavry-media` using the `mp4` crate. Fully integrated into `wavry-server` (host-side) and `wavry-client` (client-side) with AAC audio muxing.
+4.  **Clipboard Synchronization:** Added `ClipboardMessage` to RIFT protocol. Implemented `ArboardClipboard` in `wavry-platform` and integrated bi-directional syncing in `wavry-server` and `wavry-client`.
+5.  **CI/CD Optimization:** Parallelized Android ABI builds and added aggressive caching (NDK, Rust, Gradle), significantly reducing build times.
 
-### 3. Missing types/values (cascading from import failures)
-- `DXGI_FORMAT_B8G8R8A8_UNORM` (5 occurrences)
-- `DXGI_FORMAT_R8G8B8A8_UNORM` (2 occurrences)
-- `DXGI_FORMAT_B8G8R8A8_UNORM_SRGB` (2 occurrences)
-- `DXGI_FORMAT_R8G8B8A8_UNORM_SRGB` (2 occurrences)
-- `IMFTransform` (2 occurrences)
-- `ID3D11Device`
-- `ID3D11Texture2D` (4 occurrences)
-- `IMFActivate`
-- `IMFMediaType` (2 occurrences)
-- `D3D11_BOX`
-- `MFT_REGISTER_TYPE_INFO`
-- `MFT_OUTPUT_DATA_BUFFER`
-- `SessionCreateInfo` in `xr::d3d`
+---
 
-### 4. Missing functions
-- `MFStartup`
-- `MFTEnumEx`
-- `MFCreateMediaType` (2 occurrences)
-- `MFCreateDXGIDeviceManager`
-- `MFCreateMemoryBuffer`
-- `MFCreateSample`
-- `D3D11CreateDevice`
+## 🛠️ Immediate Action Items (The "Fix It" List)
 
-### 5. Missing constants
-- `MF_VERSION`, `MFSTARTUP_FULL`
-- `MFVideoFormat_AV1`, `MFVideoFormat_HEVC`, `MFVideoFormat_H264`, `MFVideoFormat_RGB32`
-- `MFMediaType_Video` (3 occurrences)
-- `MF_MT_MAJOR_TYPE`, `MF_MT_SUBTYPE`
-- `MF_SA_D3D11_AWARE`
-- `MFT_MESSAGE_SET_D3D_MANAGER`
-- `MF_E_TRANSFORM_NEED_MORE_INPUT`
-- `MFT_CATEGORY_VIDEO_DECODER`
-- `MFT_ENUM_FLAG_HARDWARE`, `MFT_ENUM_FLAG_SORTANDFILTER`
-- `D3D_DRIVER_TYPE_HARDWARE`, `D3D11_CREATE_DEVICE_BGRA_SUPPORT`, `D3D11_SDK_VERSION`
+### 1. 🧹 Code Cleanup & Warnings
+The refactor left some debris. Run `cargo check --workspace --all-targets` and address the following:
 
-### 6. Type annotation errors (7 occurrences)
-- `error[E0282]: type annotations needed` — cascading from ambiguous `windows` crate
+*   **`wavry-media` (macOS/Audio):**
+    *   The `MacAudioCapturer` struct has unused fields `tx` and `frame_duration_us` in `AudioContext`.
+    *   **Action:** If these are truly dead, remove them. If they are needed for logic that was commented out, uncomment or implement it.
+*   **`wavry-media` (Windows):**
+    *   Unused imports in `src/windows.rs` (e.g., `OPUS_BITRATE_BPS` if `opus-support` is off, `Ordering`).
+*   **`wavry-desktop`:**
+    *   Unused `Mutex` import in `commands.rs`.
+*   **General:**
+    *   Run `cargo fmt --all` to ensure the new files (`recorder.rs`, `wavry-vr-openxr/*`) match style guidelines.
+    *   Run `cargo clippy --workspace --all-targets -- -D warnings` to enforce strict quality.
 
-### 7. Type mismatches (3 occurrences)
-- `error[E0308]: mismatched types` (2)
-- `error[E0271]: type mismatch resolving <D3D11 as Graphics>::Format == i64`
+### 2. 📋 Clipboard Synchronization Verification
+We implemented the plumbing, but it needs runtime verification.
 
-## Fix Strategy
+*   **Logic Check:** In `wavry-client/src/client.rs` and `wavry-server/src/main.rs`, we added polling loops.
+    *   *Risk:* Infinite loop of clipboard updates if `set_text` triggers a change that `get_text` picks up immediately as "new".
+    *   *Fix:* Ensure `last_clipboard_text` is updated *immediately* after `set_text` to prevent echoing the same text back to the network. (This was implemented, but double-check the logic flow).
+*   **Security:** Ensure `ClipboardMessage` size is capped in `RIFT.proto` or the handler to prevent memory exhaustion attacks (e.g., trying to paste 100MB of text).
 
-**Option A (Recommended):** Revert `openxr` back to 0.16 and instead patch the specific `LARGE_INTEGER` bug with a `[patch.crates-io]` section or by forking.
+### 3. 📹 Recording Feature Polish
+*   **AV1 Limitation:** The `mp4` crate (v0.14.0) **does not support AV1**.
+    *   *Current Behavior:* The code errors out/logs a warning if AV1 is selected.
+    *   *Action:* Verify the fallback logic. If a user selects AV1 for streaming + Recording enabled, does the stream fail? Or does it just disable recording? It *should* ideally fallback to HEVC/H264 for the recording track (transcoding) or disable recording gracefully.
+*   **Audio Sync:** Verify that `timestamp_us` conversion to MP4 timescales (48kHz for Audio, 1000 for Video) results in synchronized playback. Drifting is common in V1 implementations.
 
-**Option B:** Find the exact `openxr` version that uses `windows = "0.58"` and pin to that.
+### 4. 🤖 Android CI & Gradle
+*   **Gradle Wrapper:** The CI still downloads Gradle manually in some paths.
+    *   *Task:* Run `gradle wrapper` inside `apps/android` locally and commit the `gradlew` and `gradle/wrapper/*` files. This allows the CI (and `dev-android.sh`) to use a deterministic Gradle version without downloading the distribution zip every time.
 
-**Option C:** Update the workspace `windows` version to match what `openxr` 0.21 expects, then fix all downstream breakage.
+---
+
+## 🏗️ Architecture Notes for Future Devs
+
+### The `wavry-vr-openxr` Crate
+**DO NOT** move OpenXR logic back into `wavry-vr-alvr`.
+*   **Why?** `openxr` (the crate) has strict dependencies on specific `windows` crate versions. The rest of the Wavry workspace needs to move fast (e.g., `windows` 0.62+).
+*   **Rule:** If you need to touch OpenXR code, do it in `wavry-vr-openxr`. Expose a clean, high-level Rust trait/struct to the rest of the workspace.
+
+### Windows API (0.62.2)
+We are now on `windows` 0.62.2.
+*   **Constructors:** Many structs (like `MFT_ENUM_FLAG`) are now tuple structs wrapping primitives. Use `MFT_ENUM_FLAG(value)` instead of casting.
+*   **Integers:** DirectX constants often use `u32` vs `i32` differently than 0.58. Be prepared for explicit casts (`.try_into().unwrap()` or `as i32`).
+*   **Com Interfaces:** `cast()` and `Activate()` signatures have changed. Look at `wavry-media/src/windows.rs` for examples of the new patterns.
+
+---
+
+## 🧪 Testing Strategy
+
+Before shipping v0.0.3:
+
+1.  **Unit Tests:**
+    ```bash
+    cargo test --workspace
+    ```
+2.  **Windows Build (Cross-compile check):**
+    ```bash
+    cargo check --workspace --target x86_64-pc-windows-msvc
+    ```
+    *(Note: We fixed the compilation errors, but runtime testing on actual Windows hardware is required for Input Injection and DXGI Capture).*
+3.  **Linux Build:**
+    ```bash
+    cargo check --workspace --target x86_64-unknown-linux-gnu
+    ```
+4.  **End-to-End Recording:**
+    *   Start Server: `cargo run --bin wavry-server -- --record`
+    *   Connect Client.
+    *   Perform actions.
+    *   Stop.
+    *   Check `recordings/` folder for valid `.mp4`.
+
+---
+
+## 📦 Dependency Tracking
+
+| Crate | Old Version | New Version | Reason |
+|-------|-------------|-------------|--------|
+| `windows` | 0.58.0 | **0.62.2** | Modern API features, unifying deps |
+| `openxr` | 0.16.0 | **0.21.1** | Support for newer runtimes |
+| `mp4` | N/A | **0.14.0** | New Recording feature |
+| `arboard` | N/A | **3.4.0** | New Clipboard feature |
+
+*End of Report.*

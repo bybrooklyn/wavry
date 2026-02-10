@@ -37,7 +37,7 @@ pub struct EncoderPoolStats {
 /// Represents a single encoder configuration that can be pooled.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct EncoderConfig {
-    pub codec: u32,  // Codec type (H.264, HEVC, AV1)
+    pub codec: u32, // Codec type (H.264, HEVC, AV1)
     pub width: u32,
     pub height: u32,
     pub bitrate_kbps: u32,
@@ -216,10 +216,10 @@ impl StagingBufferPool {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MemoryPressure {
-    Critical,  // >100% of max
-    High,      // >75% of max
-    Medium,    // >50% of max
-    Low,       // <50% of max
+    Critical, // >100% of max
+    High,     // >75% of max
+    Medium,   // >50% of max
+    Low,      // <50% of max
 }
 
 /// Pool of reusable encoders for adaptive bitrate scenarios.
@@ -259,7 +259,11 @@ impl EncoderPool {
 
         // Create new if under limit
         let active_count = self.active_encoders.len();
-        let idle_count = self.idle_encoders.get(&config).map(|v| v.len()).unwrap_or(0);
+        let idle_count = self
+            .idle_encoders
+            .get(&config)
+            .map(|v| v.len())
+            .unwrap_or(0);
 
         if active_count + idle_count < self.config.max_encoders_per_config {
             let encoder = PooledEncoder::new(self.next_encoder_id, config);
@@ -315,10 +319,7 @@ impl EncoderPool {
     }
 
     pub fn stats(&self) -> EncoderPoolStats {
-        self.stats
-            .lock()
-            .map(|s| s.clone())
-            .unwrap_or_default()
+        self.stats.lock().map(|s| s.clone()).unwrap_or_default()
     }
 
     pub fn active_count(&self) -> usize {
@@ -390,15 +391,18 @@ mod tests {
     fn test_reference_frame_manager_keyframe() {
         let mut manager = ReferenceFrameManager::new(3);
 
-        manager.update(0, true, 10);   // Keyframe
-        manager.update(1, false, 5);   // B-frame reference
-        manager.update(2, false, 5);   // B-frame reference
+        manager.update(0, true, 10); // Keyframe
+        manager.update(1, false, 5); // B-frame reference
+        manager.update(2, false, 5); // B-frame reference
 
         assert_eq!(manager.reference_count(), 3);
 
         // New keyframe should keep only keyframes
         manager.update(3, true, 10);
-        assert!(manager.references.iter().all(|rf| rf.is_keyframe || rf.frame_id == 3));
+        assert!(manager
+            .references
+            .iter()
+            .all(|rf| rf.is_keyframe || rf.frame_id == 3));
     }
 
     #[test]
@@ -456,7 +460,7 @@ mod tests {
         pool.use_buffer(id1);
         // id1 is used above, just not afterwards
 
-        pool.current_frame_id = 20;  // Advance beyond timeout
+        pool.current_frame_id = 20; // Advance beyond timeout
         pool.advance_frame();
 
         assert!(pool.buffers.is_empty());
