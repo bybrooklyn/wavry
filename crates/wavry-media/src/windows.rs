@@ -26,7 +26,6 @@ use windows::{
     Win32::System::Com::*, Win32::System::WinRT::Direct3D11::IDirect3DDxgiInterfaceAccess,
     Win32::System::WinRT::Graphics::Capture::IGraphicsCaptureItemInterop,
     Win32::UI::Input::KeyboardAndMouse::*, Win32::UI::WindowsAndMessaging::GetDesktopWindow,
-    Graphics::SizeInt32,
 };
 
 #[cfg(target_os = "windows")]
@@ -490,10 +489,11 @@ impl WindowsAudioCapturer {
     pub async fn new() -> Result<Self> {
         unsafe {
             let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
-            if let Err(e) = CoInitializeEx(None, COINIT_MULTITHREADED) {
-                if e.code() != RPC_E_CHANGED_MODE {
+            match CoInitializeEx(None, COINIT_MULTITHREADED).ok() {
+                Err(e) if e.code() != RPC_E_CHANGED_MODE => {
                     return Err(anyhow!("CoInitializeEx failed: {:?}", e));
                 }
+                _ => {}
             }
 
             let enumerator: IMMDeviceEnumerator =
@@ -714,11 +714,9 @@ fn pcm_format(format: &WAVEFORMATEX) -> Result<PcmFormat> {
         unsafe {
             let extensible = &*(format as *const _ as *const WAVEFORMATEXTENSIBLE);
             // Use read_unaligned or copy to local to avoid misaligned reference
-            let subformat = unsafe {
-                std::ptr::read_unaligned(
-                    std::ptr::addr_of!(extensible.SubFormat)
-                )
-            };
+            let subformat = std::ptr::read_unaligned(
+                std::ptr::addr_of!(extensible.SubFormat)
+            );
             if subformat == KSDATAFORMAT_SUBTYPE_IEEE_FLOAT {
                 Ok(PcmFormat::F32)
             } else if subformat == KSDATAFORMAT_SUBTYPE_PCM {
