@@ -336,6 +336,15 @@ jobs:
         run: |
           cd artifacts
           find . -type f -exec sha256sum {} + > ../SHA256SUMS.txt
+      - name: Delete existing release assets
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="v${{ needs.pre-build.outputs.wavry_version }}"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release view "$TAG" --json assets --jq '.assets[].name' \
+              | xargs -I{} gh release delete-asset "$TAG" "{}" --yes 2>/dev/null || true
+          fi
       - name: GH Release
         uses: softprops/action-gh-release@v2
         with:
