@@ -317,7 +317,6 @@ jobs:
     needs: [pre-build, rust-tests, smoke-tests, rust-backend, desktop-tauri, android, macos-swift]
     if: |
       always() &&
-      needs.pre-build.outputs.already_released != 'true' &&
       (needs.rust-tests.result == 'success' || needs.rust-tests.result == 'skipped') &&
       (needs.smoke-tests.result == 'success' || needs.smoke-tests.result == 'skipped') &&
       (needs.rust-backend.result == 'success' || needs.rust-backend.result == 'skipped') &&
@@ -343,6 +342,7 @@ jobs:
           tag_name: v${{ needs.pre-build.outputs.wavry_version }}
           name: Wavry v${{ needs.pre-build.outputs.wavry_version }}
           generate_release_notes: true
+          allow_updates: true
           prerelease: ${{ contains(needs.pre-build.outputs.wavry_version, 'canary') || contains(needs.pre-build.outputs.wavry_version, 'beta') || contains(needs.pre-build.outputs.wavry_version, 'unstable') }}
           body: |
             Wavry Core: v${{ needs.pre-build.outputs.wavry_version }}
