@@ -10,7 +10,7 @@ use std::time::Duration;
 
 use wavry_vr::{VrError, VrResult};
 
-use crate::common::{to_pose, HandTrackingState, InputActions};
+use crate::common::{HandTrackingState, InputActions};
 use crate::SharedState;
 
 struct VulkanContext {
@@ -210,7 +210,7 @@ fn run(state: Arc<SharedState>) -> VrResult<()> {
         queue_index: 0,
     };
 
-    let (session, mut frame_waiter, mut frame_stream) = unsafe {
+    let (session, _frame_waiter, _frame_stream) = unsafe {
         instance
             .create_session::<xr::Vulkan>(system, &create_info)
             .map_err(|e| VrError::Adapter(format!("OpenXR create_session: {e:?}")))?
@@ -218,10 +218,10 @@ fn run(state: Arc<SharedState>) -> VrResult<()> {
 
     wavry_vr::set_pcvr_status("PCVR: Quest OpenXR active".to_string());
 
-    let mut input_actions = InputActions::new(&instance, &session).ok();
-    let hand_tracking = HandTrackingState::new(&session).ok();
+    let _input_actions = InputActions::new(&instance, &session).ok();
+    let _hand_tracking = HandTrackingState::new(&session).ok();
 
-    let reference_space = session
+    let _reference_space = session
         .create_reference_space(xr::ReferenceSpaceType::LOCAL, xr::Posef::IDENTITY)
         .map_err(|e| VrError::Adapter(format!("OpenXR reference space: {e:?}")))?;
 

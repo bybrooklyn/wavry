@@ -513,7 +513,7 @@ pub async fn start_host(port: u16, display_id: Option<u32>) -> Result<String, St
     use bytes::Bytes;
     use std::net::UdpSocket;
     use std::sync::atomic::AtomicU32;
-    use std::sync::Arc;
+    use std::sync::{Arc, Mutex};
     use std::thread;
     use wavry_client::signaling::{SignalMessage, SignalingClient};
     use wavry_media::{Codec, EncodeConfig, Resolution};
