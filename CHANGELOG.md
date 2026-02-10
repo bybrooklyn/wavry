@@ -2,7 +2,23 @@
 
 All notable changes to the Wavry project.
 
-## [Unreleased] - 2026-02-09
+## [Unreleased] - 2026-02-10
+
+### Fixed
+- **GitHub Actions Workflows**: Fixed critical build pipeline issues:
+  - Removed `already_released` gate preventing tests/builds from running on main branch
+  - All test and build jobs now run on every push to main (not skipped after initial release)
+  - Release job still prevents duplicate releases for same version
+- **Docker Build System**: Fixed multi-platform Docker builds for gateway and relay:
+  - Added missing system dependencies to cacher stage (pkg-config, protobuf-compiler, libgstreamer1.0-dev, libgstreamer-plugins-base1.0-dev, libgtk-3-dev)
+  - Cacher stage now has all dependencies needed for cargo-chef to compile workspace
+  - Fixes gdk-3.0.pc not found errors in Docker builds
+- **GitHub API Rate Limiting**: Added authentication token to arduino/setup-protoc action:
+  - Prevents "API rate limit exceeded" errors from unauthenticated requests
+  - Enables higher rate limit (10,000 req/hour vs 60 req/hour)
+- **Code Cleanup**: Removed redundant comments from Windows encoder, improved formatting
+
+## [2026-02-09]
 
 ### Fixed
 - **Windows API Issues**: Fixed Media Foundation API misuse (cast(), GetMixFormat, CoInitializeEx), packed struct unaligned references
