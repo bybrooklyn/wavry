@@ -13,7 +13,7 @@ wavry-vr = { path = "../wavry-vr" }
 thiserror.workspace = true
 glam = { version = "0.27", features = ["serde"] }
 serde = { workspace = true }
-openxr = "0.16"
+openxr = "0.21"
 log = "0.4"
 
 [target.'cfg(target_os = "linux")'.dependencies]

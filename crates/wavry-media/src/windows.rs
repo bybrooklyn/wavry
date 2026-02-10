@@ -50,6 +50,7 @@ fn pack_u64(hi: u32, lo: u32) -> u64 {
 }
 
 #[cfg(target_os = "windows")]
+#[allow(non_snake_case)]
 unsafe fn MFSetAttributeSize(
     attributes: &IMFAttributes,
     guid: &GUID,
@@ -63,6 +64,7 @@ unsafe fn MFSetAttributeSize(
 }
 
 #[cfg(target_os = "windows")]
+#[allow(non_snake_case)]
 unsafe fn MFSetAttributeRatio(
     attributes: &IMFAttributes,
     guid: &GUID,
@@ -95,6 +97,7 @@ fn create_direct3d_device(device: &ID3D11Device) -> Result<IDirect3DDevice> {
 }
 
 /// Windows screen encoder using Media Foundation
+#[allow(dead_code)]
 pub struct WindowsEncoder {
     config: EncodeConfig,
     device: ID3D11Device,
@@ -247,6 +250,7 @@ impl WindowsEncoder {
 }
 
 /// Windows video renderer using D3D11
+#[allow(dead_code)]
 pub struct WindowsRenderer {
     device: ID3D11Device,
     context: ID3D11DeviceContext,
@@ -468,6 +472,7 @@ impl Renderer for WindowsAudioRenderer {
 }
 
 /// Windows audio capturer
+#[allow(dead_code)]
 pub struct WindowsAudioCapturer {
     audio_client: IAudioClient,
     capture_client: IAudioCaptureClient,
@@ -783,6 +788,7 @@ const XUSB_GAMEPAD_Y: u16 = 0x8000;
 
 #[repr(C)]
 #[derive(Clone, Copy, Default)]
+#[allow(non_snake_case)]
 struct XusbReport {
     wButtons: u16,
     bLeftTrigger: u8,

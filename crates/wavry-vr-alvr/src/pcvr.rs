@@ -701,8 +701,10 @@ mod linux {
                     .map_err(|e| VrError::Adapter(format!("Vulkan instance create failed: {e}")))?
             };
 
-            let physical_device = xr_instance
-                .vulkan_graphics_device(system, instance.handle().as_raw() as *const _)
+            let physical_device = unsafe {
+                xr_instance
+                    .vulkan_graphics_device(system, instance.handle().as_raw() as *const _)
+            }
                 .map_err(|e| VrError::Adapter(format!("OpenXR Vulkan graphics device: {e:?}")))?;
             let physical_device = vk::PhysicalDevice::from_raw(physical_device as u64);
 
@@ -1325,7 +1327,7 @@ mod linux {
             gl.pixel_store_i32(glow::UNPACK_ALIGNMENT, 1);
         }
 
-        let entry = xr::Entry::load()
+        let entry = unsafe { xr::Entry::load() }
             .map_err(|e| VrError::Adapter(format!("OpenXR load failed: {e:?}")))?;
         let available_exts = entry
             .enumerate_extensions()
@@ -1346,6 +1348,7 @@ mod linux {
             application_version: 1,
             engine_name: "Wavry",
             engine_version: 1,
+            api_version: xr::Version::new(1, 0, 0),
         };
         let instance = entry
             .create_instance(&app_info, &exts, &[])
@@ -1690,7 +1693,7 @@ mod linux {
 
     // Wayland path: OpenXR + Vulkan (GLX is X11-only).
     fn run_vulkan(state: Arc<SharedState>) -> VrResult<()> {
-        let entry = xr::Entry::load()
+        let entry = unsafe { xr::Entry::load() }
             .map_err(|e| VrError::Adapter(format!("OpenXR load failed: {e:?}")))?;
         let available_exts = entry
             .enumerate_extensions()
@@ -1714,6 +1717,7 @@ mod linux {
             application_version: 1,
             engine_name: "Wavry",
             engine_version: 1,
+            api_version: xr::Version::new(1, 0, 0),
         };
         let instance = entry
             .create_instance(&app_info, &exts, &[])
@@ -2838,7 +2842,7 @@ mod windows {
         let context =
             context.ok_or_else(|| VrError::Adapter("D3D11 context missing".to_string()))?;
 
-        let entry = xr::Entry::load()
+        let entry = unsafe { xr::Entry::load() }
             .map_err(|e| VrError::Adapter(format!("OpenXR load failed: {e:?}")))?;
         let available_exts = entry
             .enumerate_extensions()
@@ -2859,6 +2863,7 @@ mod windows {
             application_version: 1,
             engine_name: "Wavry",
             engine_version: 1,
+            api_version: xr::Version::new(1, 0, 0),
         };
         let instance = entry
             .create_instance(&app_info, &exts, &[])
@@ -3668,6 +3673,7 @@ mod android {
             application_version: 1,
             engine_name: "Wavry",
             engine_version: 1,
+            api_version: xr::Version::new(1, 0, 0),
         };
 
         let instance = entry

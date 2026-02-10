@@ -115,6 +115,14 @@
 ### Current Status: v0.0.2-canary Ready
 All infrastructure and core functionality is complete. Next phase focuses on new features for v0.0.3.
 
+### Android CI Build Speed Improvements
+- [ ] **Add Rust cache to Android CI job** - Add `Swatinem/rust-cache@v2` (only platform job missing it; rebuilds entire dep tree from scratch every run)
+- [ ] **Cache Android NDK/SDK** - NDK 26.3 (~1.4GB) is downloaded fresh every build via `sdkmanager`
+- [ ] **Add `gradlew` wrapper to repo** - Gradle 8.7 (~100MB) is downloaded from scratch each run
+- [ ] **Parallelize ABI builds** - `build-android-ffi.sh` builds arm64-v8a then x86_64 sequentially; use matrix strategy or parallel `cargo ndk`
+- [ ] **Enable Gradle build cache** - Add `org.gradle.caching=true` to `gradle.properties`
+- [ ] **Remove `--no-daemon` from Gradle** - `dev-android.sh` disables daemon, paying full JVM startup cost every build
+
 ### Outstanding Items (Optional, not blocking)
 - [ ] **Hardware AV1 Validation**: Run benchmarks on M4 MacBook Air ↔ RTX 3070 Ti
   - Use HWTODO.md procedures
