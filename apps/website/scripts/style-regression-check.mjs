@@ -14,6 +14,15 @@ const TIMEOUT_MS = 30_000;
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const projectRoot = path.resolve(scriptDir, '..');
 
+function normalizeBasePath(input) {
+  const withLeadingSlash = input.startsWith('/') ? input : `/${input}`;
+  return withLeadingSlash.endsWith('/') ? withLeadingSlash : `${withLeadingSlash}/`;
+}
+
+const BASE_PATH = normalizeBasePath(process.env.STYLE_CHECK_BASE_PATH ?? '/wavry/');
+const ROOT_URL = new URL(BASE_PATH, BASE_URL).toString();
+const OVERVIEW_DOC_URL = new URL(`${BASE_PATH}docs/overview`, BASE_URL).toString();
+
 function startServer() {
   const child = spawn(
     'bun',
@@ -35,7 +44,7 @@ async function waitForServer() {
   const started = Date.now();
   while (Date.now() - started < TIMEOUT_MS) {
     try {
-      const response = await fetch(BASE_URL);
+      const response = await fetch(ROOT_URL);
       if (response.ok) {
         return;
       }
@@ -45,7 +54,7 @@ async function waitForServer() {
     await delay(500);
   }
 
-  throw new Error(`Timed out waiting for ${BASE_URL}`);
+  throw new Error(`Timed out waiting for ${ROOT_URL}`);
 }
 
 function assert(condition, message) {
@@ -95,7 +104,7 @@ async function runChecks() {
 
   try {
     const desktop = await browser.newPage({viewport: {width: 1366, height: 900}});
-    await desktop.goto(BASE_URL, {waitUntil: 'networkidle'});
+    await desktop.goto(ROOT_URL, {waitUntil: 'networkidle'});
 
     const desktopMetrics = await getLayoutMetrics(desktop);
     assert(
@@ -117,7 +126,7 @@ async function runChecks() {
     assert(!desktopMetrics.hasHorizontalOverflow, 'Desktop page has horizontal overflow');
 
     const mobile = await browser.newPage({viewport: {width: 390, height: 844}});
-    await mobile.goto(BASE_URL, {waitUntil: 'networkidle'});
+    await mobile.goto(ROOT_URL, {waitUntil: 'networkidle'});
     const mobileMetrics = await getLayoutMetrics(mobile);
     assert(
       mobileMetrics.cardColumns === 1,
@@ -130,7 +139,7 @@ async function runChecks() {
     assert(!mobileMetrics.hasHorizontalOverflow, 'Mobile page has horizontal overflow');
 
     const docsPage = await browser.newPage({viewport: {width: 1366, height: 900}});
-    await docsPage.goto(`${BASE_URL}/docs/overview`, {waitUntil: 'networkidle'});
+    await docsPage.goto(OVERVIEW_DOC_URL, {waitUntil: 'networkidle'});
     const headingText = await docsPage.textContent('h1');
     assert(
       typeof headingText === 'string' && headingText.includes('Wavry Overview'),

@@ -31,26 +31,19 @@ Example approach in GitHub Actions:
     key: ${{ runner.os }}-bun-${{ hashFiles('apps/website/bun.lock') }}
 ```
 
-## Website Deploy Without Inbound SSH
+## Website Deploy (GitHub Pages)
 
-For teams that do not allow inbound SSH from CI providers:
+This project publishes the docs site to GitHub Pages.
 
-1. GitHub Actions builds the website and publishes `website-build.tar.gz` to a release tag (`website-latest`).
-2. Your server pulls the artifact over HTTPS on a schedule.
-3. The deploy script validates checksum and swaps the served directory.
+Pipeline behavior:
 
-Server pull script in this repo:
+1. Website checks run on pull requests and pushes.
+2. On `main`, the workflow builds `apps/website` and deploys to Pages.
+3. Production URL uses the repository Pages route.
 
-`scripts/website/pull-website-release.sh`
+Current production path:
 
-Example:
-
-```bash
-WEBSITE_DEPLOY_PATH=/var/www/wavry.dev \
-/opt/wavry/scripts/website/pull-website-release.sh
-```
-
-Run this via a timer/cron every few minutes for near-real-time updates.
+`https://bybrooklyn.github.io/wavry/`
 
 ## Docker Build Reliability
 

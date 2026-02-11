@@ -56,15 +56,22 @@ jobs:
         run: ./node_modules/.bin/playwright install --with-deps chromium
 
       - name: Style regression checks
+        env:
+          STYLE_CHECK_BASE_PATH: /wavry/
         run: bun run check:style
 
   deploy:
-    name: Publish website artifact
+    name: Deploy to GitHub Pages
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     needs: checks
     runs-on: ubuntu-latest
     permissions:
-      contents: write
+      contents: read
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -90,25 +97,14 @@ jobs:
         working-directory: apps/website
         run: bun run build
 
-      - name: Package website build
-        run: |
-          set -euo pipefail
-          tar -C apps/website/build -czf website-build.tar.gz .
-          sha256sum website-build.tar.gz > website-build.sha256
+      - name: Configure GitHub Pages
+        uses: actions/configure-pages@v5
 
-      - name: Publish latest website release asset
-        uses: softprops/action-gh-release@v2
+      - name: Upload site artifact
+        uses: actions/upload-pages-artifact@v3
         with:
-          tag_name: website-latest
-          name: Website Latest
-          body: |
-            Pull-based website artifact for self-hosted deployers.
-            Commit: ${{ github.sha }}
-          prerelease: true
-          draft: false
-          make_latest: false
-          generate_release_notes: false
-          allow_updates: true
-          files: |
-            website-build.tar.gz
-            website-build.sha256
+          path: apps/website/build
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
