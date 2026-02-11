@@ -2,9 +2,6 @@ import {themes as prismThemes} from 'prism-react-renderer';
 import type {Config} from '@docusaurus/types';
 import type * as Preset from '@docusaurus/preset-classic';
 
-const siteUrl = process.env.DOCUSAURUS_URL ?? 'https://bybrooklyn.github.io';
-const siteBaseUrl = process.env.DOCUSAURUS_BASE_URL ?? '/wavry/';
-
 const config: Config = {
   title: 'Wavry',
   tagline: 'Latency-first remote desktop, game streaming, and cloud delivery.',
@@ -14,8 +11,8 @@ const config: Config = {
     v4: true,
   },
 
-  url: siteUrl,
-  baseUrl: siteBaseUrl,
+  url: 'https://wavry.dev',
+  baseUrl: '/',
 
   organizationName: 'bybrooklyn',
   projectName: 'wavry',

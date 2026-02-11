@@ -19,7 +19,7 @@ function normalizeBasePath(input) {
   return withLeadingSlash.endsWith('/') ? withLeadingSlash : `${withLeadingSlash}/`;
 }
 
-const BASE_PATH = normalizeBasePath(process.env.STYLE_CHECK_BASE_PATH ?? '/wavry/');
+const BASE_PATH = normalizeBasePath(process.env.STYLE_CHECK_BASE_PATH ?? '/');
 const ROOT_URL = new URL(BASE_PATH, BASE_URL).toString();
 const OVERVIEW_DOC_URL = new URL(`${BASE_PATH}docs/overview`, BASE_URL).toString();
 

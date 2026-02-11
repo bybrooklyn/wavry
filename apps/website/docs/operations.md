@@ -43,7 +43,7 @@ Pipeline behavior:
 
 Current production path:
 
-`https://bybrooklyn.github.io/wavry/`
+`https://wavry.dev/`
 
 ## Docker Build Reliability
 

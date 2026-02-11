@@ -2,7 +2,7 @@
 
 Public-facing Docusaurus site for GitHub Pages:
 
-- Production URL: `https://bybrooklyn.github.io/wavry/`
+- Production URL: `https://wavry.dev/`
 
 This site covers:
 
