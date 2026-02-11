@@ -229,7 +229,7 @@ jobs:
         run: bun install --frozen-lockfile
       - name: Build
         working-directory: crates/wavry-desktop
-        run: bun run tauri build --features custom-protocol --no-bundle --ci
+        run: bun run tauri build --no-bundle --ci
       - name: Stage
         shell: bash
         run: |
