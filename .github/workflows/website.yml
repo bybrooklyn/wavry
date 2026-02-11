@@ -59,10 +59,12 @@ jobs:
         run: bun run check:style
 
   deploy:
-    name: Deploy website to server
+    name: Publish website artifact
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     needs: checks
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -88,42 +90,25 @@ jobs:
         working-directory: apps/website
         run: bun run build
 
-      - name: Validate deploy secrets
-        env:
-          WEBSITE_DEPLOY_HOST: ${{ secrets.WEBSITE_DEPLOY_HOST }}
-          WEBSITE_DEPLOY_USER: ${{ secrets.WEBSITE_DEPLOY_USER }}
-          WEBSITE_DEPLOY_PATH: ${{ secrets.WEBSITE_DEPLOY_PATH }}
-          WEBSITE_DEPLOY_SSH_KEY: ${{ secrets.WEBSITE_DEPLOY_SSH_KEY }}
+      - name: Package website build
         run: |
           set -euo pipefail
-          [[ -n "${WEBSITE_DEPLOY_HOST}" ]] || { echo "Missing WEBSITE_DEPLOY_HOST"; exit 1; }
-          [[ -n "${WEBSITE_DEPLOY_USER}" ]] || { echo "Missing WEBSITE_DEPLOY_USER"; exit 1; }
-          [[ -n "${WEBSITE_DEPLOY_PATH}" ]] || { echo "Missing WEBSITE_DEPLOY_PATH"; exit 1; }
-          [[ -n "${WEBSITE_DEPLOY_SSH_KEY}" ]] || { echo "Missing WEBSITE_DEPLOY_SSH_KEY"; exit 1; }
+          tar -C apps/website/build -czf website-build.tar.gz .
+          sha256sum website-build.tar.gz > website-build.sha256
 
-      - name: Configure SSH key and known hosts
-        env:
-          WEBSITE_DEPLOY_HOST: ${{ secrets.WEBSITE_DEPLOY_HOST }}
-          WEBSITE_DEPLOY_SSH_KEY: ${{ secrets.WEBSITE_DEPLOY_SSH_KEY }}
-        run: |
-          set -euo pipefail
-          mkdir -p ~/.ssh
-          chmod 700 ~/.ssh
-          printf '%s\n' "${WEBSITE_DEPLOY_SSH_KEY}" > ~/.ssh/id_ed25519
-          chmod 600 ~/.ssh/id_ed25519
-          ssh-keyscan -H "${WEBSITE_DEPLOY_HOST}" >> ~/.ssh/known_hosts
-          chmod 644 ~/.ssh/known_hosts
-
-      - name: Sync static site to server
-        env:
-          WEBSITE_DEPLOY_HOST: ${{ secrets.WEBSITE_DEPLOY_HOST }}
-          WEBSITE_DEPLOY_USER: ${{ secrets.WEBSITE_DEPLOY_USER }}
-          WEBSITE_DEPLOY_PATH: ${{ secrets.WEBSITE_DEPLOY_PATH }}
-          WEBSITE_DEPLOY_PORT: ${{ secrets.WEBSITE_DEPLOY_PORT }}
-        run: |
-          set -euo pipefail
-          PORT="${WEBSITE_DEPLOY_PORT:-22}"
-          rsync -az --delete \
-            -e "ssh -p ${PORT}" \
-            apps/website/build/ \
-            "${WEBSITE_DEPLOY_USER}@${WEBSITE_DEPLOY_HOST}:${WEBSITE_DEPLOY_PATH}/"
+      - name: Publish latest website release asset
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: website-latest
+          name: Website Latest
+          body: |
+            Pull-based website artifact for self-hosted deployers.
+            Commit: ${{ github.sha }}
+          prerelease: true
+          draft: false
+          make_latest: false
+          generate_release_notes: false
+          allow_updates: true
+          files: |
+            website-build.tar.gz
+            website-build.sha256

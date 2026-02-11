@@ -31,6 +31,27 @@ Example approach in GitHub Actions:
     key: ${{ runner.os }}-bun-${{ hashFiles('apps/website/bun.lock') }}
 ```
 
+## Website Deploy Without Inbound SSH
+
+For teams that do not allow inbound SSH from CI providers:
+
+1. GitHub Actions builds the website and publishes `website-build.tar.gz` to a release tag (`website-latest`).
+2. Your server pulls the artifact over HTTPS on a schedule.
+3. The deploy script validates checksum and swaps the served directory.
+
+Server pull script in this repo:
+
+`scripts/website/pull-website-release.sh`
+
+Example:
+
+```bash
+WEBSITE_DEPLOY_PATH=/var/www/wavry.dev \
+/opt/wavry/scripts/website/pull-website-release.sh
+```
+
+Run this via a timer/cron every few minutes for near-real-time updates.
+
 ## Docker Build Reliability
 
 - Pin base images by digest where possible.
