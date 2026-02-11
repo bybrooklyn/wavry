@@ -84,3 +84,6 @@ pub use windows_input_injector::WindowsInjector;
 
 mod dummy;
 pub use dummy::{DummyCapturer, DummyInjector};
+
+mod input_map;
+pub use input_map::{ButtonRemap, InputMap, KeyRemap, MappedInjector};

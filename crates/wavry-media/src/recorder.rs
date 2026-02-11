@@ -53,6 +53,9 @@ pub struct VideoRecorder {
     current_codec: Option<Codec>,
     resolution: Option<Resolution>,
     fps: u16,
+    /// Set when recording cannot proceed (e.g. unsupported codec) to avoid
+    /// re-attempting initialization and spamming warnings on every frame.
+    disabled: bool,
 }
 
 impl VideoRecorder {
@@ -72,6 +75,7 @@ impl VideoRecorder {
             current_codec: None,
             resolution: None,
             fps: 60,
+            disabled: false,
         })
     }
 
@@ -171,6 +175,10 @@ impl VideoRecorder {
         res: Resolution,
         fps: u16,
     ) -> Result<()> {
+        if self.disabled {
+            return Ok(());
+        }
+
         if self.writer.is_none()
             || (self.config.split_on_codec_change
                 && (self.current_codec != Some(codec) || self.resolution != Some(res)))
@@ -179,7 +187,8 @@ impl VideoRecorder {
                 self.finalize()?;
             }
             if let Err(e) = self.init_writer(codec, res, fps) {
-                log::warn!("Failed to initialize recorder: {}", e);
+                log::warn!("Recording disabled: {}", e);
+                self.disabled = true;
                 return Ok(());
             }
         }

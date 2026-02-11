@@ -1,6 +1,6 @@
 # Wavry Project TODOs
 
-**Current Version**: v0.0.2-canary
+**Current Version**: v0.0.3-canary
 **Last Updated**: 2026-02-10
 **Build Status**: ✅ Clean (0 warnings, 150+ tests passing)
 
@@ -116,11 +116,11 @@
 All infrastructure and core functionality is complete. Next phase focuses on new features for v0.0.3.
 
 ### Android CI Build Speed Improvements
-- [ ] **Add Rust cache to Android CI job** - Add `Swatinem/rust-cache@v2` (only platform job missing it; rebuilds entire dep tree from scratch every run)
-- [ ] **Cache Android NDK/SDK** - NDK 26.3 (~1.4GB) is downloaded fresh every build via `sdkmanager`
-- [ ] **Add `gradlew` wrapper to repo** - Gradle 8.7 (~100MB) is downloaded from scratch each run
+- [x] **Add Rust cache to Android CI job** - `Swatinem/rust-cache@v2` added to Android job
+- [x] **Cache Android NDK/SDK** - NDK 26.3 cached by path in CI
+- [x] **Add `gradlew` wrapper to repo** - Gradle 8.7 wrapper committed to `apps/android/`
+- [x] **Enable Gradle build cache** - `org.gradle.caching=true` added to `gradle.properties`
 - [ ] **Parallelize ABI builds** - `build-android-ffi.sh` builds arm64-v8a then x86_64 sequentially; use matrix strategy or parallel `cargo ndk`
-- [ ] **Enable Gradle build cache** - Add `org.gradle.caching=true` to `gradle.properties`
 - [ ] **Remove `--no-daemon` from Gradle** - `dev-android.sh` disables daemon, paying full JVM startup cost every build
 
 ### Windows Platform Stabilization (v0.0.2+)
@@ -146,26 +146,26 @@ All infrastructure and core functionality is complete. Next phase focuses on new
 **Status**: Design & Prioritization Complete
 **Reference**: See [docs/BACKLOG_ROADMAP.md](docs/BACKLOG_ROADMAP.md)
 
-### Recommended v0.0.3 Feature: Recording
-**Complexity**: Medium | **Impact**: High | **Time**: 6-8 hours
+### ✅ v0.0.3 Feature: Recording
+**Status**: Complete
+- [x] Core RecorderConfig + Quality structs
+- [x] VideoRecorder (MP4 muxing with AAC audio)
+- [x] Server-side (`--record`, `--record-dir`, `--record-quality`)
+- [x] Client-side integration
+- [x] AV1 fallback: logs once, disables recording gracefully (stream unaffected)
 
-- [x] Design document created (docs/RECORDING_DESIGN.md)
-- [x] Architecture finalized (MP4 muxing, video/audio tracks)
-- [x] Integration points identified (server/client)
-- [x] Implementation completed
-  - [x] Core RecorderConfig + Quality structs
-  - [x] VideoRecorder implementation (MP4 muxing with audio)
-  - [x] Server-side integration (wavry-server)
-  - [x] Audio track + synchronization
-  - [x] Client-side integration (wavry-client)
+### ✅ v0.0.3 Feature: Clipboard Sync
+**Status**: Complete
+- [x] `ClipboardMessage` in RIFT proto, 1 MiB size cap
+- [x] `ArboardClipboard` in `wavry-platform` (Android-gated)
+- [x] Bidirectional polling in server and client (500 ms interval)
+- [x] Echo prevention via `last_clipboard_text`
 
-**Next Steps**:
-1. Final quality presets & performance testing
-2. Automated file rotation on size limits (optional polish)
-
-### Other v0.0.3 Candidates
-- **Clipboard Sync** (Low complexity, medium impact, 4-6 hours)
-- **Input Mapping** (Low complexity, low impact, 3-4 hours)
+### ✅ v0.0.3 Feature: Input Mapping
+**Status**: Complete
+- [x] `InputMap` profile struct (key remapping, key blocking, button remapping)
+- [x] `MappedInjector<I>` wrapper — applies map to any `InputInjector` at runtime
+- [x] 6 unit tests covering passthrough, remap, block, and gamepad button mapping
 
 ### v0.0.4+ Candidates
 - **Audio Routing** (Medium complexity, 6-8 hours)
@@ -175,12 +175,12 @@ All infrastructure and core functionality is complete. Next phase focuses on new
 
 ## 📋 BACKLOG (Future Releases)
 
-### Features (v0.0.3+)
-- [ ] **Recording** - Local recording with configurable quality and compression
-- [ ] **Clipboard Sync** - Bidirectional clipboard sharing (host ↔ client)
+### Features (v0.0.4+)
+- [x] ~~**Recording**~~ - Shipped in v0.0.3-canary
+- [x] ~~**Clipboard Sync**~~ - Shipped in v0.0.3-canary
+- [x] ~~**Input Mapping**~~ - Shipped in v0.0.3-canary
 - [ ] **File Transfer** - Secure file transfer over RIFT protocol
 - [ ] **Audio Routing** - Per-application audio capture and routing
-- [ ] **Input Mapping** - Custom input device profiles
 
 ### Platform Support
 - [ ] **iOS Client** - WebTransport or native app
@@ -271,12 +271,20 @@ TOTAL          147+ tests ✅
 - [ ] AV1 validation on M4 MacBook Air & RTX 3070 Ti (hardware testing via HWTODO.md)
 - [ ] Optional: Record actual hardware benchmark results
 
-### v0.0.3 (Proposed)
-- [ ] Recording capability
-- [ ] Clipboard sync
+### v0.0.3 (Current)
+- [x] Recording capability (VideoRecorder, MP4 muxing)
+- [x] Clipboard sync (bidirectional, 1 MiB cap)
+- [x] Input mapping (key/button remap + block profiles)
+- [x] Android Gradle wrapper (deterministic builds)
+- [x] Windows crate upgrade to 0.62.2
+- [x] VR architecture decoupled (wavry-vr-openxr crate)
+- [ ] AV1 validation on M4 MacBook Air & RTX 3070 Ti (hardware testing via HWTODO.md)
+
+### v0.0.4 (Proposed)
 - [ ] File transfer
 - [ ] iOS support
 - [ ] Performance benchmarking suite
+- [ ] Audio routing
 
 ---
 
