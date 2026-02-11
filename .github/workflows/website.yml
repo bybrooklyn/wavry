@@ -59,17 +59,10 @@ jobs:
         run: bun run check:style
 
   deploy:
-    name: Deploy wavry.dev
+    name: Deploy website to server
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     needs: checks
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      pages: write
-      id-token: write
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -95,14 +88,42 @@ jobs:
         working-directory: apps/website
         run: bun run build
 
-      - name: Configure GitHub Pages
-        uses: actions/configure-pages@v5
+      - name: Validate deploy secrets
+        env:
+          WEBSITE_DEPLOY_HOST: ${{ secrets.WEBSITE_DEPLOY_HOST }}
+          WEBSITE_DEPLOY_USER: ${{ secrets.WEBSITE_DEPLOY_USER }}
+          WEBSITE_DEPLOY_PATH: ${{ secrets.WEBSITE_DEPLOY_PATH }}
+          WEBSITE_DEPLOY_SSH_KEY: ${{ secrets.WEBSITE_DEPLOY_SSH_KEY }}
+        run: |
+          set -euo pipefail
+          [[ -n "${WEBSITE_DEPLOY_HOST}" ]] || { echo "Missing WEBSITE_DEPLOY_HOST"; exit 1; }
+          [[ -n "${WEBSITE_DEPLOY_USER}" ]] || { echo "Missing WEBSITE_DEPLOY_USER"; exit 1; }
+          [[ -n "${WEBSITE_DEPLOY_PATH}" ]] || { echo "Missing WEBSITE_DEPLOY_PATH"; exit 1; }
+          [[ -n "${WEBSITE_DEPLOY_SSH_KEY}" ]] || { echo "Missing WEBSITE_DEPLOY_SSH_KEY"; exit 1; }
 
-      - name: Upload site artifact
-        uses: actions/upload-pages-artifact@v3
-        with:
-          path: apps/website/build
+      - name: Configure SSH key and known hosts
+        env:
+          WEBSITE_DEPLOY_HOST: ${{ secrets.WEBSITE_DEPLOY_HOST }}
+          WEBSITE_DEPLOY_SSH_KEY: ${{ secrets.WEBSITE_DEPLOY_SSH_KEY }}
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          printf '%s\n' "${WEBSITE_DEPLOY_SSH_KEY}" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          ssh-keyscan -H "${WEBSITE_DEPLOY_HOST}" >> ~/.ssh/known_hosts
+          chmod 644 ~/.ssh/known_hosts
 
-      - name: Deploy to GitHub Pages
-        id: deployment
-        uses: actions/deploy-pages@v4
+      - name: Sync static site to server
+        env:
+          WEBSITE_DEPLOY_HOST: ${{ secrets.WEBSITE_DEPLOY_HOST }}
+          WEBSITE_DEPLOY_USER: ${{ secrets.WEBSITE_DEPLOY_USER }}
+          WEBSITE_DEPLOY_PATH: ${{ secrets.WEBSITE_DEPLOY_PATH }}
+          WEBSITE_DEPLOY_PORT: ${{ secrets.WEBSITE_DEPLOY_PORT }}
+        run: |
+          set -euo pipefail
+          PORT="${WEBSITE_DEPLOY_PORT:-22}"
+          rsync -az --delete \
+            -e "ssh -p ${PORT}" \
+            apps/website/build/ \
+            "${WEBSITE_DEPLOY_USER}@${WEBSITE_DEPLOY_HOST}:${WEBSITE_DEPLOY_PATH}/"

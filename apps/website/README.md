@@ -46,3 +46,14 @@ bun run check:style
 - Docs are authored locally in `apps/website/docs`.
 - Site uses Docusaurus classic preset.
 - Do not use npm scripts for this app; use Bun.
+- CI deploys to your server via SSH using `.github/workflows/website.yml`.
+
+## GitHub Secrets For Deploy
+
+Set these repository secrets before enabling production deploys:
+
+- `WEBSITE_DEPLOY_HOST`: server hostname or IP.
+- `WEBSITE_DEPLOY_USER`: SSH user on the server.
+- `WEBSITE_DEPLOY_PATH`: absolute remote directory where static files are served.
+- `WEBSITE_DEPLOY_SSH_KEY`: private key content for deploy access.
+- `WEBSITE_DEPLOY_PORT` (optional): defaults to `22`.
