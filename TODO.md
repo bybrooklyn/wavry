@@ -1,8 +1,8 @@
 # Wavry Project TODOs
 
-**Current Version**: v0.0.3-canary
+**Current Version**: v0.0.3-rc1
 **Last Updated**: 2026-02-10
-**Build Status**: ✅ Clean (0 warnings, 150+ tests passing)
+**Build Status**: ✅ Clean (0 warnings, 155+ tests passing)
 
 ---
 
@@ -92,21 +92,23 @@
 - [x] WebTransport unidirectional frame streaming fixed
 
 ### ✅ CI/CD & Build Infrastructure Fixes (2026-02-10)
-**Status**: Critical workflow issues resolved
-**Completion**: 🎯 All GitHub Actions workflows now working properly
+**Status**: Complete
 - [x] Fixed Docker build system for multi-platform (gateway, relay)
-  - Added missing system dependencies to cacher stage
-  - Resolved gdk-3.0.pc compilation errors
-  - Supports linux/amd64 and linux/arm64 builds
-- [x] Fixed Platform Builds workflow logic
-  - Removed `already_released` gate preventing tests from running
-  - Tests and builds now run on every push to main
-  - Release job still prevents duplicate releases
-- [x] Fixed GitHub API rate limiting
-  - Added authentication token to arduino/setup-protoc action
-  - Prevents "API rate limit exceeded" errors
-  - Enables 10,000 req/hour limit (vs 60 req/hour unauthenticated)
-- [x] Code cleanup in Windows encoder (formatting, removed redundant comments)
+- [x] Fixed Platform Builds workflow logic (release job, artifact naming, asset deletion)
+- [x] Fixed GitHub API rate limiting (authenticated protoc action)
+- [x] Android caching: Rust cache, NDK cache, Gradle wrapper, build cache
+- [x] `set-version.sh`: perl one-liner for safe first-occurrence version replace
+- [x] Code cleanup: Windows encoder, all Clippy warnings resolved
+
+### ✅ Code Cleanup & Warning Elimination (FIXING.md complete)
+**Status**: All items resolved
+- [x] `mac_audio_capturer.rs`: `tx` / `frame_duration_us` dead-code warnings suppressed with `#[cfg_attr(not(feature = "opus-support"), allow(dead_code))]`; opus-only constants moved to `#[cfg(feature = "opus-support")]` import
+- [x] `wavry-desktop/commands.rs`: added missing `Mutex` import
+- [x] `wavry-vr-openxr/common.rs`: `width % 2 == 0` → `width.is_multiple_of(2)`
+- [x] `wavry-gateway` tests: `assert!(hash.len() > 0)` → `assert!(!hash.is_empty())`
+- [x] `wavry-vr-openxr/android.rs`: broken `use` brace, unused imports, spurious `mut`
+- [x] `wavry-vr-openxr/linux.rs`: unused `Instant` import
+- [x] Zero compiler warnings across all crates
 
 ---
 
@@ -120,8 +122,8 @@ All infrastructure and core functionality is complete. Next phase focuses on new
 - [x] **Cache Android NDK/SDK** - NDK 26.3 cached by path in CI
 - [x] **Add `gradlew` wrapper to repo** - Gradle 8.7 wrapper committed to `apps/android/`
 - [x] **Enable Gradle build cache** - `org.gradle.caching=true` added to `gradle.properties`
-- [ ] **Parallelize ABI builds** - `build-android-ffi.sh` builds arm64-v8a then x86_64 sequentially; use matrix strategy or parallel `cargo ndk`
-- [ ] **Remove `--no-daemon` from Gradle** - `dev-android.sh` disables daemon, paying full JVM startup cost every build
+- [x] **Parallelize ABI builds** - `build-android-ffi.sh` already launches arm64-v8a and x86_64 as background jobs and waits (implemented)
+- [x] **`--no-daemon` removal** - `dev-android.sh` never had `--no-daemon`; uses `gradlew` wrapper directly (already correct)
 
 ### Windows Platform Stabilization (v0.0.2+)
 - [x] **Workspace-wide `windows` crate upgrade** - Upgrade from `windows` 0.58 to 0.62+ and refactor media/server/client modules to match new API.
@@ -271,13 +273,14 @@ TOTAL          147+ tests ✅
 - [ ] AV1 validation on M4 MacBook Air & RTX 3070 Ti (hardware testing via HWTODO.md)
 - [ ] Optional: Record actual hardware benchmark results
 
-### v0.0.3 (Current)
+### v0.0.3-rc1 (Current)
 - [x] Recording capability (VideoRecorder, MP4 muxing)
 - [x] Clipboard sync (bidirectional, 1 MiB cap)
 - [x] Input mapping (key/button remap + block profiles)
 - [x] Android Gradle wrapper (deterministic builds)
 - [x] Windows crate upgrade to 0.62.2
 - [x] VR architecture decoupled (wavry-vr-openxr crate)
+- [x] Zero compiler warnings across entire workspace
 - [ ] AV1 validation on M4 MacBook Air & RTX 3070 Ti (hardware testing via HWTODO.md)
 
 ### v0.0.4 (Proposed)

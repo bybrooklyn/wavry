@@ -1,6 +1,6 @@
 [package]
 name = "wavry-web"
-version = "0.0.3-canary"
+version = "0.0.3-rc1"
 edition.workspace = true
 license.workspace = true
 

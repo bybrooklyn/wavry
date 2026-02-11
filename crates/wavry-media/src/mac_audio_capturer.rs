@@ -40,9 +40,10 @@ use std::time::Instant;
 use tokio::sync::oneshot;
 
 use crate::audio::{
-    opus_frame_duration_us, AUDIO_MAX_BUFFER_SAMPLES, OPUS_BITRATE_BPS, OPUS_CHANNELS,
-    OPUS_FRAME_SAMPLES, OPUS_MAX_PACKET_BYTES, OPUS_SAMPLE_RATE,
+    opus_frame_duration_us, AUDIO_MAX_BUFFER_SAMPLES, OPUS_CHANNELS, OPUS_SAMPLE_RATE,
 };
+#[cfg(feature = "opus-support")]
+use crate::audio::{OPUS_BITRATE_BPS, OPUS_FRAME_SAMPLES, OPUS_MAX_PACKET_BYTES};
 use crate::EncodedFrame;
 
 #[cfg(target_os = "macos")]
@@ -51,12 +52,18 @@ use opus::{Application, Channels, Encoder as OpusEncoder};
 
 #[cfg(target_os = "macos")]
 struct AudioContext {
+    // `tx` and `frame_duration_us` are only consumed inside the
+    // `#[cfg(feature = "opus-support")]` encoding path; they are intentionally
+    // kept in the struct unconditionally so `AudioHandler::new` has a
+    // consistent shape regardless of features.
+    #[cfg_attr(not(feature = "opus-support"), allow(dead_code))]
     tx: mpsc::Sender<EncodedFrame>,
     start_time: Instant,
     #[cfg(feature = "opus-support")]
     encoder: OpusEncoder,
     pcm: VecDeque<i16>,
     next_timestamp_us: Option<u64>,
+    #[cfg_attr(not(feature = "opus-support"), allow(dead_code))]
     frame_duration_us: u64,
     channels: usize,
 }

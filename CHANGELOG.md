@@ -2,7 +2,7 @@
 
 All notable changes to the Wavry project.
 
-## [0.0.3-canary] - 2026-02-10
+## [0.0.3-rc1] - 2026-02-10
 
 ### Added
 - **Local Recording** (`wavry-media`): `VideoRecorder` with MP4 muxing (H.264 and HEVC tracks) and AAC audio. Integrated into `wavry-server` via `--record`, `--record-dir`, and `--record-quality` flags. Recordings split automatically on codec/resolution changes or when the file size limit is reached.
