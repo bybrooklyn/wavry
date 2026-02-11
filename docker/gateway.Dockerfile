@@ -4,7 +4,8 @@
 FROM lukemathwalker/cargo-chef:latest-rust-1-bookworm AS planner
 WORKDIR /app
 COPY . .
-RUN cargo chef prepare --recipe-path recipe.json
+# Scope the dependency graph to the gateway binary only.
+RUN cargo chef prepare --recipe-path recipe.json --bin wavry-gateway
 
 # 2. Cacher stage: build dependencies
 FROM lukemathwalker/cargo-chef:latest-rust-1-bookworm AS cacher
@@ -14,13 +15,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     pkg-config \
     protobuf-compiler \
     libsqlite3-dev \
-    libgstreamer1.0-dev \
-    libgstreamer-plugins-base1.0-dev \
-    libgtk-3-dev \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=planner /app/recipe.json recipe.json
-RUN cargo chef cook --release --recipe-path recipe.json
+RUN cargo chef cook --release --recipe-path recipe.json --bin wavry-gateway
 
 # 3. Builder stage: build the actual source
 FROM rust:1-bookworm AS builder

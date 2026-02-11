@@ -70,11 +70,11 @@ jobs:
         with:
           context: .
           file: docker/${{ matrix.component }}.Dockerfile
-          platforms: linux/amd64,linux/arm64
+          platforms: ${{ github.event_name == 'pull_request' && 'linux/amd64' || 'linux/amd64,linux/arm64' }}
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          provenance: true
-          sbom: true
+          provenance: ${{ github.event_name != 'pull_request' }}
+          sbom: ${{ github.event_name != 'pull_request' }}
           cache-from: type=gha,scope=wavry-${{ matrix.component }}
           cache-to: type=gha,mode=max,scope=wavry-${{ matrix.component }}

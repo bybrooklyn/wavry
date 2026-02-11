@@ -1,0 +1,71 @@
+name: Quality Gates
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  rust-quality:
+    name: Rust Quality
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: rust-${{ runner.os }}-quality-gates
+
+      - name: Format Check
+        run: cargo fmt --all -- --check
+
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Test Workspace
+        run: cargo test --workspace --locked
+
+  coverage:
+    name: Coverage Gate
+    runs-on: ubuntu-latest
+    needs: rust-quality
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: rust-${{ runner.os }}-quality-gates
+
+      - name: Install tarpaulin
+        run: cargo install cargo-tarpaulin --locked
+
+      - name: Coverage (Tier 1)
+        run: cargo tarpaulin -p rift-core -p rift-crypto --fail-under 70 --out Stdout
+
+  fuzz-smoke:
+    name: Fuzz Smoke
+    runs-on: ubuntu-latest
+    needs: rust-quality
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: rust-${{ runner.os }}-quality-gates
+
+      - name: Decode Fuzz Smoke Test
+        run: cargo test -p rift-core --test fuzz_decode -- --nocapture

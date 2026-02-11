@@ -89,6 +89,8 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
       - name: Cache
         uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: rust-${{ runner.os }}-workspace
       - name: Run tests
         run: cargo test --workspace --locked
 
@@ -111,6 +113,8 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
       - name: Cache
         uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: rust-${{ runner.os }}-workspace
       - name: Provision Secrets
         run: ./scripts/provision-infrastructure.sh ./secrets
       - name: Gateway Auth Smoke
@@ -155,6 +159,8 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
       - name: Cache
         uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: rust-${{ runner.os }}-workspace
       - name: Build
         run: cargo build --release --locked -p wavry-master -p wavry-gateway -p wavry-relay -p wavry-server -p wavry-client -p wavry-cli -p wavry-ffi
       - name: Stage
@@ -183,10 +189,13 @@ jobs:
         include:
           - os: ubuntu-latest
             suffix: linux
+            exe: ""
           - os: macos-14
             suffix: macos
+            exe: ""
           - os: windows-latest
             suffix: windows
+            exe: ".exe"
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -196,6 +205,11 @@ jobs:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
       - name: Install Bun
         uses: oven-sh/setup-bun@v2
+      - name: Cache frontend dependencies
+        uses: actions/cache@v4
+        with:
+          path: crates/wavry-desktop/node_modules
+          key: bun-${{ runner.os }}-${{ hashFiles('crates/wavry-desktop/bun.lock', 'crates/wavry-desktop/package.json') }}
       - name: Install dependencies (Linux)
         if: runner.os == 'Linux'
         run: |
@@ -205,15 +219,24 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
       - name: Cache
         uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: rust-${{ runner.os }}-workspace
+          workspaces: |
+            . -> target
+            crates/wavry-desktop/src-tauri -> target
+      - name: Install frontend dependencies
+        working-directory: crates/wavry-desktop
+        run: bun install --frozen-lockfile
       - name: Build
-        run: cargo build --release --locked -p wavry-desktop
+        working-directory: crates/wavry-desktop
+        run: bun run tauri build --features custom-protocol --no-bundle --ci
       - name: Stage
         shell: bash
         run: |
           mkdir -p ci-artifacts/desktop
           for name in wavry-desktop wavry_desktop; do
-            if [[ -f "target/release/${name}${{ matrix.exe }}" ]]; then
-              cp "target/release/${name}${{ matrix.exe }}" "ci-artifacts/desktop/wavry-desktop-${{ matrix.suffix }}${{ matrix.exe }}"
+            if [[ -f "crates/wavry-desktop/src-tauri/target/release/${name}${{ matrix.exe }}" ]]; then
+              cp "crates/wavry-desktop/src-tauri/target/release/${name}${{ matrix.exe }}" "ci-artifacts/desktop/wavry-desktop-${{ matrix.suffix }}${{ matrix.exe }}"
               break
             fi
           done
@@ -262,6 +285,7 @@ jobs:
       - name: Cache Rust
         uses: Swatinem/rust-cache@v2
         with:
+          shared-key: rust-${{ runner.os }}-android
           key: android-target
 
       - name: Cache cargo-ndk
