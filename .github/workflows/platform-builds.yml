@@ -227,10 +227,27 @@ jobs:
       - name: Install frontend dependencies
         working-directory: crates/wavry-desktop
         run: bun install --frozen-lockfile
-      - name: Build
+      - name: Build (macOS DMG bundle)
+        if: runner.os == 'macOS'
+        working-directory: crates/wavry-desktop
+        run: bun run tauri build --bundles dmg --no-sign --ci
+      - name: Build (non-macOS binary)
+        if: runner.os != 'macOS'
         working-directory: crates/wavry-desktop
         run: bun run tauri build --no-bundle --ci
-      - name: Stage
+      - name: Stage macOS desktop DMG
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          mkdir -p ci-artifacts/desktop
+          dmg_path="$(find crates/wavry-desktop/src-tauri/target/release/bundle/dmg -maxdepth 1 -type f -name "*.dmg" | head -n 1)"
+          if [[ -z "$dmg_path" ]]; then
+            echo "No desktop DMG found in bundle output" >&2
+            exit 1
+          fi
+          cp "$dmg_path" "ci-artifacts/desktop/wavry-desktop-macos.dmg"
+      - name: Stage non-macOS desktop binary
+        if: runner.os != 'macOS'
         shell: bash
         run: |
           mkdir -p ci-artifacts/desktop
@@ -327,9 +344,20 @@ jobs:
       - name: Build
         run: ./scripts/build-macos.sh release
       - name: Stage
+        shell: bash
         run: |
           mkdir -p ci-artifacts/macos-app
-          cd dist && zip -r "../ci-artifacts/macos-app/Wavry-macos.zip" Wavry.app
+          app_path="dist/Wavry.app"
+          if [[ ! -d "$app_path" ]]; then
+            echo "Native macOS app bundle not found at $app_path" >&2
+            exit 1
+          fi
+          hdiutil create \
+            -volname "Wavry" \
+            -srcfolder "$app_path" \
+            -ov \
+            -format UDZO \
+            "ci-artifacts/macos-app/Wavry-native-macos.dmg"
       - name: Upload
         uses: actions/upload-artifact@v4
         with:
@@ -356,9 +384,56 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           path: artifacts
+      - name: Collect release assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          mkdir -p release-assets
+
+          # Infrastructure/service binaries (exclude dev/client CLI artifacts).
+          for file in artifacts/backend-*/*; do
+            base="$(basename "$file")"
+            case "$base" in
+              wavry-master-*|wavry-gateway-*|wavry-relay-*|wavry-server-*)
+                cp "$file" "release-assets/$base"
+                ;;
+            esac
+          done
+
+          # Desktop app artifacts.
+          for file in artifacts/desktop-*/*; do
+            base="$(basename "$file")"
+            case "$base" in
+              wavry-desktop-linux|wavry-desktop-windows.exe|wavry-desktop-macos.dmg)
+                cp "$file" "release-assets/$base"
+                ;;
+            esac
+          done
+
+          # Native macOS app bundle.
+          for file in artifacts/macos-app-*/*.dmg; do
+            cp "$file" "release-assets/$(basename "$file")"
+          done
+
+          # Android release APKs only.
+          for file in artifacts/android-*/*.apk; do
+            base="$(basename "$file")"
+            case "$base" in
+              app-mobile-release.apk|app-quest-release.apk)
+                cp "$file" "release-assets/$base"
+                ;;
+            esac
+          done
+
+          count="$(find release-assets -type f | wc -l | tr -d ' ')"
+          if [[ "$count" == "0" ]]; then
+            echo "No release assets were collected." >&2
+            exit 1
+          fi
       - name: Checksums
         run: |
-          cd artifacts
+          cd release-assets
           find . -type f -exec sha256sum {} + > ../SHA256SUMS.txt
       - name: Delete existing release assets
         env:
@@ -382,5 +457,5 @@ jobs:
             RIFT Protocol: v${{ needs.pre-build.outputs.rift_version }}
             DELTA CC: v${{ needs.pre-build.outputs.delta_version }}
           files: |
-            artifacts/**/*
+            release-assets/*
             SHA256SUMS.txt
