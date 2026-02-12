@@ -76,6 +76,9 @@ See [Deployment Modes](/docs/deployment-modes) for exact usage boundaries.
 ## Where To Go Next
 
 - [Getting Started](/docs/getting-started): run a full local session
+- [Product Use Cases](/docs/product-use-cases): map Wavry to real workload patterns
 - [Architecture](/docs/architecture): component boundaries and data flow
+- [Session Lifecycle](/docs/lifecycle): detailed handshake-to-teardown walkthrough
+- [Networking and Relay](/docs/networking-and-relay): direct vs fallback path behavior
 - [Security](/docs/security): threat model and security posture
 - [Operations](/docs/operations): CI/CD, release, and production guidance

@@ -114,5 +114,6 @@ When testing locally, confirm:
 
 1. Read [Deployment Modes](/docs/deployment-modes) to pick OSS/commercial/hosted usage.
 2. Read [Architecture](/docs/architecture) to understand boundaries and extension points.
-3. Read [Security](/docs/security) before internet-facing deployment.
-4. Use [Operations](/docs/operations) to define your CI/CD and release path.
+3. Read [Session Lifecycle](/docs/lifecycle) and [Networking and Relay](/docs/networking-and-relay) to understand behavior under real network conditions.
+4. Read [Security](/docs/security) before internet-facing deployment.
+5. Use [Operations](/docs/operations) and [Troubleshooting](/docs/troubleshooting) to define your production runbook.

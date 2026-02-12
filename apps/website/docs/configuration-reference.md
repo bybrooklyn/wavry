@@ -1,0 +1,89 @@
+---
+title: Configuration Reference
+description: Key runtime flags and environment variables used when operating Wavry components.
+---
+
+This page summarizes commonly used runtime configuration knobs.
+
+For complete and current option sets, always check each binary's `--help` output.
+
+## Host Runtime (`wavry-server`)
+
+Common options:
+
+- `--listen`: UDP listen address (`0.0.0.0:0` by default)
+- `--no-encrypt`: disable transport encryption (testing only)
+- `--width` / `--height`: default stream resolution
+- `--fps`: target frame rate
+- `--bitrate-kbps`: initial target bitrate
+- `--keyframe-interval-ms`: keyframe cadence
+- `--display-id`: select capture display
+- `--gateway-url`: signaling gateway URL
+- `--session-token`: signaling session token
+- `--enable-webrtc`: optional web bridge path
+- `--record`: enable local recording
+- `--record-dir`: recording output directory
+- `--send-file`: queue file transfer(s) to client
+- `--file-out-dir`: incoming transfer directory
+- `--audio-source`: `system`, `microphone`, `app:<name>`, `disabled`
+
+Related env vars include:
+
+- `WAVRY_LISTEN_ADDR`
+- `WAVRY_GATEWAY_URL`
+- `WAVRY_SESSION_TOKEN`
+- `WAVRY_FILE_OUT_DIR`
+- `WAVRY_FILE_MAX_BYTES`
+- `WAVRY_AUDIO_SOURCE`
+
+## Client Runtime (`wavry-client`)
+
+Common options:
+
+- connect target (explicit host address or discovery-driven)
+- encryption and identity options
+- relay/master endpoint options
+- resolution and input behavior options
+- file transfer receive/output options
+
+For interactive transfer controls in CLI mode:
+
+- `--file-control-stdin`
+  - accepts `"<file_id> <pause|resume|cancel|retry>"`
+
+## Desktop App (`wavry-desktop`)
+
+Desktop app config spans:
+
+- Connectivity mode (cloud/direct/custom)
+- Gateway URL
+- Host port and UPnP behavior
+- Resolution strategy (native/client/custom)
+- Gamepad enable + deadzone tuning
+- Selected monitor/display target
+
+The desktop UI maps these choices to runtime config passed into host/client processes.
+
+## Gateway and Relay
+
+Deployment configuration should define:
+
+- Binding/listen addresses
+- Auth/session token policies
+- Rate-limiting/security controls
+- Database/migration paths (gateway)
+- Upstream coordination settings
+
+## Suggested Configuration Workflow
+
+1. Start with defaults for local validation.
+2. Pin critical addresses/ports for production.
+3. Set explicit security and logging policies.
+4. Validate direct/relay behavior in a staging network.
+5. Document your final environment profile per deployment tier.
+
+## Related Docs
+
+- [Getting Started](/docs/getting-started)
+- [Networking and Relay](/docs/networking-and-relay)
+- [Operations](/docs/operations)

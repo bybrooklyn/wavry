@@ -10,19 +10,19 @@ const deploymentCards = [
   {
     title: 'Open Source Core',
     body: 'Run and modify the full stack under AGPL-3.0 when infra control and transparency are the priority.',
-    to: '/docs/deployment-modes#open-source-self-hosted-agpl-30',
+    to: '/docs/deployment-modes',
     cta: 'Self-host with OSS',
   },
   {
     title: 'Commercial Licensing',
     body: 'Use private forks, proprietary embedding, or closed-source distribution paths under commercial terms.',
-    to: '/docs/deployment-modes#commercial-license',
+    to: '/docs/deployment-modes',
     cta: 'Review commercial path',
   },
   {
     title: 'Hosted Control Plane',
     body: 'Use managed signaling, auth, and relay assistance when you need faster operational rollout.',
-    to: '/docs/deployment-modes#official-hosted-services',
+    to: '/docs/deployment-modes',
     cta: 'See hosted model',
   },
 ];

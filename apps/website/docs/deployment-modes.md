@@ -1,50 +1,93 @@
 ---
 title: Deployment Modes
-description: Understand OSS, commercial licensing, and hosted services.
+description: Compare open-source, commercial, and hosted operating models for Wavry.
 ---
 
-Wavry supports three usage models.
+Wavry supports multiple operating models so teams can choose the right balance of control, speed, and licensing fit.
 
-## At a Glance
+## Summary Table
 
-| Mode | Best For | Source Obligations | Control Plane |
+| Mode | Best Fit | Source/License Considerations | Control Plane Ownership |
 |---|---|---|---|
-| Open source self-hosted | Teams that want full control | AGPL-3.0 obligations apply | Self-hosted |
-| Commercial license | Closed-source/private derivatives | Commercial terms | Usually self-hosted or hybrid |
-| Official hosted services | Fast onboarding and managed control plane | Service terms apply | Wavry-hosted |
+| Open-source self-hosted | Teams prioritizing full control | AGPL-3.0 obligations apply | You own it |
+| Commercial license | Closed/private derivative needs | Commercial agreement governs usage | Usually you or hybrid |
+| Hosted control plane | Fastest operational start | Service terms apply | Wavry-hosted control plane |
 
-## Open Source (Self-Hosted, AGPL-3.0)
+## 1. Open-Source Self-Hosted (AGPL-3.0)
 
-- Full access to code, protocol, and runtime behavior.
-- You can modify and self-host freely under AGPL-3.0.
-- If you run modified versions as a network service, AGPL obligations apply.
+Use this model when you want maximum infrastructure and code control.
 
-## Commercial License
+### Typical characteristics
 
-- Intended for closed-source forks, proprietary embedding, and private modifications.
-- Licensing terms are documented in the repository commercial terms file.
-- Use when AGPL distribution obligations do not fit your operating model.
+- Full code access and modification flexibility
+- Full ownership of gateway/relay/runtime deployment
+- Strong fit for compliance-heavy environments
 
-Reference: [COMMERCIAL.md](https://github.com/bybrooklyn/wavry/blob/main/COMMERCIAL.md)
+### Obligations to evaluate
 
-## Official Hosted Services
+- AGPL-3.0 distribution/network-use requirements for modified services
+- Internal legal review for your distribution and hosting model
 
-Hosted services can include:
+## 2. Commercial License
+
+Use this model when AGPL obligations do not fit your product or organizational requirements.
+
+### Typical characteristics
+
+- Closed-source/private derivative distribution support
+- Proprietary embedding and internal-only product paths
+- Contracted commercial terms and support expectations
+
+### Typical triggers for this model
+
+- Shipping Wavry-derived functionality in proprietary products
+- Private forks with restricted source disclosure
+- Enterprise procurement/compliance requirements
+
+Commercial pricing details are listed on [Pricing](/pricing).
+
+## 3. Official Hosted Services
+
+Use hosted services when you need faster launch and less control-plane operational burden.
+
+### Hosted components can include
 
 - Authentication
-- Matchmaking
-- Relay fallback
+- Signaling/matchmaking
+- Relay assistance
 
-Policy highlights:
+### Tradeoffs
 
-- Personal/non-commercial usage is generally free.
-- Commercial usage requires a commercial agreement.
-- Relay is fallback-first and capacity-constrained.
+- Faster onboarding and less infra overhead
+- Lower direct control over control-plane operations
+- Commercial usage requirements may apply depending on service terms
 
-Reference: [TERMS.md](https://github.com/bybrooklyn/wavry/blob/main/TERMS.md)
+## Decision Framework
 
-## Choosing a Model
+Ask these questions in order:
 
-1. Choose OSS self-hosted when compliance and infra ownership are the priority.
-2. Choose commercial when you need proprietary product integration.
-3. Choose hosted when speed-to-launch is the priority and service constraints are acceptable.
+1. Do you require private/proprietary derivative distribution?
+2. Do you need full control-plane ownership for compliance or policy reasons?
+3. Is your top priority launch speed over infra ownership?
+4. What support/SLA model does your business require?
+
+## Migration Between Modes
+
+Teams often evolve over time:
+
+- Pilot with hosted control plane
+- Move to self-hosted once scale/compliance needs increase
+- Adopt commercial terms if private derivative constraints emerge
+
+Plan migration with explicit checkpoints for:
+
+- Security controls
+- Session routing policy
+- Operational ownership and on-call boundaries
+
+## References
+
+- [Pricing](/pricing)
+- [COMMERCIAL.md](https://github.com/bybrooklyn/wavry/blob/main/COMMERCIAL.md)
+- [TERMS.md](https://github.com/bybrooklyn/wavry/blob/main/TERMS.md)
+- [License](https://github.com/bybrooklyn/wavry/blob/main/LICENSE)

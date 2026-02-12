@@ -4,16 +4,24 @@ const sidebars: SidebarsConfig = {
   docsSidebar: [
     'overview',
     'getting-started',
+    'product-use-cases',
     {
       type: 'category',
-      label: 'Product and Deployment',
-      items: ['deployment-modes', 'desktop-app', 'roadmap'],
+      label: 'Build and Integrate',
+      items: [
+        'architecture',
+        'lifecycle',
+        'networking-and-relay',
+        'configuration-reference',
+        'desktop-app',
+      ],
     },
     {
       type: 'category',
-      label: 'Technical Foundation',
-      items: ['architecture', 'security', 'operations'],
+      label: 'Deploy and Operate',
+      items: ['deployment-modes', 'security', 'operations', 'troubleshooting'],
     },
+    'roadmap',
     'faq',
   ],
 };

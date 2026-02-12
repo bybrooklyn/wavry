@@ -83,6 +83,31 @@ html {
   box-shadow: 0 6px 20px rgba(4, 21, 28, 0.06);
 }
 
+.navbar-pricing-button .navbar__link {
+  border-radius: 999px;
+  padding: 0.4rem 0.9rem;
+  border: 1px solid rgba(13, 127, 149, 0.45);
+  background: rgba(13, 127, 149, 0.12);
+  color: var(--ifm-link-color);
+  font-weight: 700;
+}
+
+.navbar-pricing-button .navbar__link:hover {
+  background: rgba(13, 127, 149, 0.2);
+  border-color: rgba(13, 127, 149, 0.75);
+}
+
+[data-theme='dark'] .navbar-pricing-button .navbar__link {
+  border-color: rgba(121, 219, 231, 0.45);
+  background: rgba(121, 219, 231, 0.14);
+  color: #c9f3f8;
+}
+
+[data-theme='dark'] .navbar-pricing-button .navbar__link:hover {
+  background: rgba(121, 219, 231, 0.22);
+  border-color: rgba(121, 219, 231, 0.75);
+}
+
 .footer {
   border-top: 1px solid rgba(90, 151, 171, 0.25);
 }

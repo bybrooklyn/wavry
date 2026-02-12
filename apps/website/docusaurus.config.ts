@@ -72,10 +72,10 @@ const config: Config = {
           label: 'What Is Wavry',
         },
         {
-          type: 'doc',
-          docId: 'deployment-modes',
-          position: 'left',
-          label: 'OSS + Commercial',
+          to: '/pricing',
+          label: 'Pricing',
+          position: 'right',
+          className: 'navbar-pricing-button',
         },
         {
           href: 'https://github.com/bybrooklyn/wavry',
@@ -102,6 +102,10 @@ const config: Config = {
               label: 'Deployment Modes',
               to: '/docs/deployment-modes',
             },
+            {
+              label: 'Pricing',
+              to: '/pricing',
+            },
           ],
         },
         {
@@ -119,10 +123,14 @@ const config: Config = {
               label: 'Operations',
               to: '/docs/operations',
             },
+            {
+              label: 'Troubleshooting',
+              to: '/docs/troubleshooting',
+            },
           ],
         },
         {
-          title: 'More',
+          title: 'Commercial',
           items: [
             {
               label: 'Commercial Terms',
@@ -131,6 +139,10 @@ const config: Config = {
             {
               label: 'Hosted Terms',
               href: 'https://github.com/bybrooklyn/wavry/blob/main/TERMS.md',
+            },
+            {
+              label: 'Pricing',
+              to: '/pricing',
             },
             {
               label: 'License',

@@ -1,0 +1,177 @@
+.wrap {
+  padding: 3.2rem 1.25rem 5.2rem;
+}
+
+.hero,
+.section {
+  max-width: 74rem;
+  margin: 0 auto;
+}
+
+.section {
+  margin-top: 2.3rem;
+}
+
+.eyebrow {
+  margin: 0;
+  text-transform: uppercase;
+  letter-spacing: 0.18em;
+  font-size: 0.78rem;
+  font-weight: 700;
+  color: #0f7f95;
+}
+
+.title {
+  margin: 1rem 0 0;
+  max-width: 56rem;
+  font-size: clamp(2rem, 4.2vw, 3.2rem);
+  line-height: 1.1;
+}
+
+.subtitle {
+  margin: 1.1rem 0 0;
+  max-width: 56rem;
+  color: #2b5160;
+  font-size: 1.04rem;
+  line-height: 1.7;
+}
+
+.actions {
+  margin-top: 1.5rem;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.8rem;
+}
+
+.sectionTitle {
+  margin: 0;
+  font-size: clamp(1.3rem, 2.4vw, 1.9rem);
+}
+
+.sectionIntro {
+  margin: 0.6rem 0 0;
+  color: #2b5160;
+}
+
+.noticeCard {
+  margin-top: 0.9rem;
+  border: 1px solid rgba(9, 76, 93, 0.22);
+  border-radius: 0.95rem;
+  padding: 1.1rem;
+  background: #ffffff;
+  box-shadow: 0 10px 30px rgba(7, 32, 40, 0.07);
+}
+
+.noticeTitle {
+  margin: 0;
+  font-size: 1.08rem;
+}
+
+.noticeBody {
+  margin: 0.58rem 0 0;
+  color: #315766;
+  line-height: 1.65;
+}
+
+.grid {
+  margin-top: 0.95rem;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 1rem;
+}
+
+.card {
+  border: 1px solid rgba(9, 76, 93, 0.22);
+  border-radius: 0.95rem;
+  padding: 1.2rem;
+  background: #ffffff;
+  box-shadow: 0 10px 30px rgba(7, 32, 40, 0.07);
+}
+
+.cardStatus {
+  margin: 0;
+  display: inline-block;
+  border-radius: 999px;
+  background: rgba(13, 127, 149, 0.12);
+  border: 1px solid rgba(13, 127, 149, 0.32);
+  padding: 0.28rem 0.55rem;
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  font-weight: 700;
+  color: #0f6880;
+}
+
+.cardTitle {
+  margin: 0.85rem 0 0;
+  font-size: 1.15rem;
+}
+
+.cardMainPrice {
+  margin: 0.58rem 0 0;
+  color: #0d4f62;
+  font-size: 1.08rem;
+  font-weight: 800;
+}
+
+.cardAlt {
+  margin: 0.42rem 0 0;
+  color: #2e5362;
+  font-weight: 600;
+}
+
+.cardFormula {
+  margin: 0.54rem 0 0;
+  color: #3b606e;
+  line-height: 1.6;
+}
+
+.examplesWrap {
+  margin-top: 1.2rem;
+}
+
+.examplesTitle {
+  margin: 0;
+  font-size: 1.05rem;
+}
+
+.examplesTable {
+  margin-top: 0.7rem;
+  width: 100%;
+  border-collapse: collapse;
+  border: 1px solid rgba(9, 76, 93, 0.22);
+  border-radius: 0.7rem;
+  overflow: hidden;
+  background: #ffffff;
+}
+
+.examplesTable th,
+.examplesTable td {
+  padding: 0.58rem 0.7rem;
+  border-bottom: 1px solid rgba(9, 76, 93, 0.16);
+  text-align: left;
+}
+
+.examplesTable th {
+  background: rgba(13, 127, 149, 0.11);
+  color: #0f5262;
+}
+
+.examplesTable tr:last-child td {
+  border-bottom: none;
+}
+
+@media (max-width: 996px) {
+  .wrap {
+    padding: 2.3rem 1rem 4.2rem;
+  }
+
+  .grid {
+    grid-template-columns: 1fr;
+  }
+
+  .actions :global(.button) {
+    width: 100%;
+    justify-content: center;
+  }
+}

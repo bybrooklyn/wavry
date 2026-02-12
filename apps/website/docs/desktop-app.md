@@ -1,13 +1,15 @@
 ---
 title: Desktop App (Tauri)
-description: Build, run, and package the desktop app for Linux, Windows, and macOS.
+description: Development, runtime behavior, and packaging guidance for the Wavry desktop application.
 ---
+
+Wavry Desktop provides a native application surface for host/client workflows, built with Tauri and Svelte.
 
 ## Stack
 
-- Rust backend (`crates/wavry-desktop/src-tauri`)
-- Frontend build with Bun
-- Tauri runtime for native distribution
+- Rust backend: `crates/wavry-desktop/src-tauri`
+- Frontend: Svelte + TypeScript
+- Runtime: Tauri
 
 ## Local Development
 
@@ -17,6 +19,22 @@ bun install
 bun run tauri dev
 ```
 
+Recommended additional validation:
+
+```bash
+bun run check
+```
+
+## What the Desktop App Controls
+
+The desktop UI drives runtime config for:
+
+- Connectivity mode (cloud/direct/custom)
+- Session start/stop behavior
+- Resolution and display target
+- Input settings (including gamepad controls)
+- Session status and runtime feedback
+
 ## Packaging
 
 ```bash
@@ -24,35 +42,29 @@ cd crates/wavry-desktop
 bun run tauri build
 ```
 
-Expected packaging targets by platform:
+Typical outputs by platform:
 
-- Windows: `.exe` and/or installer bundle
-- Linux: distro-friendly binary formats
-- macOS: signed app bundle and `.dmg` for user distribution
+- Windows: executable/installer
+- Linux: distro-appropriate bundles
+- macOS: app bundle and disk image workflow
 
-## Windows Localhost Error Troubleshooting
+## Production Validation Checklist
 
-If a packaged build opens and shows `localhost cannot be found`, verify:
+1. Launch packaged app on a clean environment.
+2. Verify app startup without local dev servers.
+3. Verify session start/stop behavior and persistence.
+4. Verify upgrade path from previous app builds.
 
-1. Production config points to built static assets (`frontendDist`), not a dev server URL.
-2. `devUrl` is only used for `tauri dev`.
-3. You are not enabling undeclared Cargo features (for example `custom-protocol`) unless that feature exists in `Cargo.toml`.
+## Troubleshooting Quick Notes
 
-Typical Tauri config shape:
+If packaged app loads a localhost error, confirm:
 
-```json
-{
-  "build": {
-    "beforeDevCommand": "bun run dev",
-    "devUrl": "http://localhost:1420",
-    "beforeBuildCommand": "bun run build",
-    "frontendDist": "../dist"
-  }
-}
-```
+- Production build points to `frontendDist`
+- `devUrl` is used only during dev mode
+- Tauri feature flags/config match Cargo configuration
 
-## Release Validation
+## Related Docs
 
-- Launch packaged app on a clean VM.
-- Confirm the app starts without local dev services.
-- Confirm upgrade path and settings persistence.
+- [Getting Started](/docs/getting-started)
+- [Troubleshooting](/docs/troubleshooting)
+- [Operations](/docs/operations)

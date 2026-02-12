@@ -1,73 +1,92 @@
 ---
 title: Operations
-description: CI/CD guidance, caching strategy, and release packaging expectations.
+description: Production operations guidance for deploying, observing, and releasing Wavry reliably.
 ---
+
+This page outlines practical operations guidance for teams running Wavry in production-like environments.
+
+## Operational Priorities
+
+1. Predictable session quality
+2. Fast failure detection
+3. Repeatable release process
+4. Security and compliance alignment
+
+## Deployment Topology (Typical)
+
+A common deployment layout includes:
+
+- Gateway/control-plane services
+- Relay services in one or more regions
+- Host pools with capture/encode workloads
+- Client apps or integrated product frontends
+
+For resilience, separate control-plane and data-plane scaling decisions.
+
+## Observability Baseline
+
+At minimum, collect:
+
+- Session creation/teardown events
+- Handshake success/failure rates
+- Relay/direct path usage ratios
+- RTT/loss/jitter trends
+- Bitrate adaptation and quality state transitions
+
+Recommended output targets:
+
+- Structured logs
+- Metrics backend with dashboards
+- Alerting integrated into on-call workflow
 
 ## CI/CD Baseline
 
-Production pipelines should optimize for repeatability and speed.
+### Build speed and reproducibility
 
-### Cache What Actually Hurts Build Time
+- Cache Rust dependencies/toolchain artifacts
+- Cache Bun dependencies keyed by lockfile
+- Keep build environments deterministic
 
-- Rust crates + target metadata (`~/.cargo`, workspace target cache strategy)
-- Bun dependency cache (keyed by `bun.lock`)
-- Toolchain layers (Rust toolchain, Bun runtime, system packages)
+### Quality gates
 
-Example approach in GitHub Actions:
+- Formatting and lint checks
+- Unit/integration test suites
+- Platform packaging validation where applicable
 
-```yaml
-- uses: dtolnay/rust-toolchain@stable
-- uses: Swatinem/rust-cache@v2
-  with:
-    workspaces: |
-      . -> target
+## Release Pipeline Checklist
 
-- uses: oven-sh/setup-bun@v2
-- uses: actions/cache@v4
-  with:
-    path: |
-      ~/.bun/install/cache
-      apps/website/node_modules
-    key: ${{ runner.os }}-bun-${{ hashFiles('apps/website/bun.lock') }}
-```
+1. `cargo fmt --all`
+2. `cargo clippy --workspace --all-targets -- -D warnings`
+3. `cargo test --workspace`
+4. Desktop/frontend checks where relevant
+5. Artifact checksum generation and verification
+6. Signed/notarized packaging where required by platform
 
-## Website Deploy (GitHub Pages)
+## Capacity and Reliability Planning
 
-This project publishes the docs site to GitHub Pages.
+Plan for:
 
-Pipeline behavior:
+- Burst relay load during network events
+- Host pool saturation behavior
+- Backpressure and admission strategy
+- Regional failover/runbook procedures
 
-1. Website checks run on pull requests and pushes.
-2. On `main`, the workflow builds `apps/website` and deploys to Pages.
-3. Production URL uses the repository Pages route.
+## Incident Management Suggestions
 
-Current production path:
+- Maintain a severity rubric tied to user impact
+- Keep runbooks for connect failures, relay overload, and auth outages
+- Capture post-incident action items with owners and deadlines
 
-`https://wavry.dev/`
+## Change Management
 
-## Docker Build Reliability
+Before major rollout:
 
-- Pin base images by digest where possible.
-- Keep Docker context small and deterministic.
-- Move dependency resolution earlier in the Dockerfile so layers are reusable.
-- Fail fast on missing toolchain prerequisites.
+- Test in staging with realistic network conditions
+- Validate backward compatibility assumptions
+- Roll out with canary phases and rollback plan
 
-## Release Artifact Strategy
+## Related Docs
 
-Only publish artifacts users can install directly.
-
-Recommended desktop distribution outputs:
-
-- Windows: installer and/or signed executable
-- Linux: package + checksum
-- macOS: signed `.app` bundle packaged as `.dmg` (plus checksums)
-
-Avoid publishing internal-only intermediates unless explicitly needed.
-
-## Release Checklist
-
-1. Build matrix passes for Linux/macOS/Windows.
-2. Checksums are generated and verified.
-3. macOS bundles are signed/notarized where required.
-4. Release notes map artifacts to target platforms.
-5. Smoke test each platform artifact on a clean machine.
+- [Troubleshooting](/docs/troubleshooting)
+- [Security](/docs/security)
+- [Configuration Reference](/docs/configuration-reference)

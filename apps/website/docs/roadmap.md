@@ -1,25 +1,34 @@
 ---
 title: Roadmap
-description: Current priorities and medium-term direction.
+description: Current direction, near-term priorities, and where detailed planning lives.
 ---
 
-## Current Focus
+This roadmap summarizes active product and platform priorities for Wavry.
 
-- Desktop platform stability and packaging reliability.
-- Production-grade gateway and relay operations.
-- Better distribution ergonomics across Linux, macOS, and Windows.
-- Documentation unification for OSS, commercial, and hosted usage.
+## Current Focus Areas
+
+- Session quality and stability across desktop platforms
+- Gateway and relay operational maturity
+- Packaging and distribution reliability
+- Documentation depth for evaluators and operators
 
 ## Near-Term Priorities
 
-1. Reduce CI runtime through stronger dependency and toolchain caching.
-2. Improve cross-platform artifact quality (especially installer/bundle parity).
-3. Expand test coverage for security-critical and networking paths.
-4. Strengthen release automation with reproducible checksums and signing.
+1. Improve onboarding clarity for first-time adopters.
+2. Expand production-grade observability and troubleshooting guidance.
+3. Strengthen CI speed and reliability with better caching and matrix hygiene.
+4. Continue hardening security-critical paths and admin controls.
+5. Improve consistency of release artifacts across Linux/macOS/Windows.
 
-## Source of Truth
+## Medium-Term Themes
 
-For detailed backlog items and implementation tracking, use:
+- Better deployment ergonomics for varied infrastructure models
+- More explicit integration patterns for product teams
+- Expanded platform capability parity where feasible
+
+## How to Track Detailed Work
+
+For implementation-level detail, use:
 
 - [BACKLOG_ROADMAP.md](https://github.com/bybrooklyn/wavry/blob/main/docs/BACKLOG_ROADMAP.md)
 - [CHANGELOG.md](https://github.com/bybrooklyn/wavry/blob/main/CHANGELOG.md)
