@@ -42,6 +42,7 @@ Related env vars include:
 - `WAVRY_FILE_TRANSFER_MIN_KBPS`
 - `WAVRY_FILE_TRANSFER_MAX_KBPS`
 - `WAVRY_ALLOW_INSECURE_SIGNALING` (production override for `ws://`)
+- `WAVRY_SIGNALING_TLS_PINS_SHA256` (comma/semicolon-separated SHA-256 cert fingerprints for `wss://` signaling pinning)
 
 ## Client Runtime (`wavry-client`)
 

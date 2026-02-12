@@ -136,7 +136,7 @@ jobs:
         include:
           - os: ubuntu-latest
             suffix: linux
-            arch: x86_64
+            arch: x64
             exe: ""
           - os: macos-14
             suffix: macos
@@ -144,7 +144,7 @@ jobs:
             exe: ""
           - os: windows-latest
             suffix: windows
-            arch: x86_64
+            arch: x64
             exe: ".exe"
     steps:
       - name: Checkout
@@ -196,7 +196,7 @@ jobs:
         include:
           - os: ubuntu-latest
             suffix: linux
-            arch: x86_64
+            arch: x64
             exe: ""
           - os: macos-14
             suffix: macos
@@ -204,7 +204,7 @@ jobs:
             exe: ""
           - os: windows-latest
             suffix: windows
-            arch: x86_64
+            arch: x64
             exe: ".exe"
     steps:
       - name: Checkout

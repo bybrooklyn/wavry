@@ -21,7 +21,7 @@ wavry-vr = { path = "../../crates/wavry-vr" }
 wavry-vr-alvr = { path = "../../crates/wavry-vr-alvr", features = ["alvr"] }
 rand.workspace = true
 hex = "0.4.3"
-tokio-tungstenite = "0.28.0"
+tokio-tungstenite = { version = "0.28.0", features = ["rustls-tls-native-roots"] }
 serde.workspace = true
 serde_json.workspace = true
 url = "2.5.8"
@@ -31,6 +31,7 @@ uuid = { workspace = true, features = ["v4", "serde"] }
 gilrs = "0.11"
 socket2 = { workspace = true }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+sha2 = "0.10"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 evdev = "0.12"

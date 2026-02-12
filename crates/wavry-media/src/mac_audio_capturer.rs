@@ -46,10 +46,11 @@ use std::time::Instant;
 use tokio::sync::oneshot;
 
 use crate::audio::{
-    opus_frame_duration_us, AUDIO_MAX_BUFFER_SAMPLES, OPUS_CHANNELS, OPUS_SAMPLE_RATE,
+    opus_frame_duration_us, AUDIO_MAX_BUFFER_SAMPLES, OPUS_CHANNELS, OPUS_FRAME_SAMPLES,
+    OPUS_SAMPLE_RATE,
 };
 #[cfg(feature = "opus-support")]
-use crate::audio::{OPUS_BITRATE_BPS, OPUS_FRAME_SAMPLES, OPUS_MAX_PACKET_BYTES};
+use crate::audio::{OPUS_BITRATE_BPS, OPUS_MAX_PACKET_BYTES};
 use crate::EncodedFrame;
 
 #[cfg(target_os = "macos")]

@@ -930,3 +930,33 @@ impl crate::CapabilityProbe for MacProbe {
         Ok(vec![])
     }
 }
+
+#[cfg(all(test, target_os = "macos"))]
+mod tests {
+    use super::{hardware_encode_supported, MacProbe};
+    use crate::{CapabilityProbe, Codec};
+
+    #[test]
+    fn mac_probe_always_reports_h264() {
+        let probe = MacProbe;
+        let caps = probe.encoder_capabilities().expect("capabilities");
+        assert!(caps.iter().any(|cap| cap.codec == Codec::H264));
+    }
+
+    #[test]
+    fn mac_probe_av1_visibility_matches_hardware_support() {
+        let probe = MacProbe;
+        let caps = probe.encoder_capabilities().expect("capabilities");
+        let av1_listed = caps.iter().any(|cap| cap.codec == Codec::Av1);
+        assert_eq!(av1_listed, hardware_encode_supported(Codec::Av1));
+    }
+
+    #[test]
+    fn mac_probe_av1_is_hardware_accelerated_when_present() {
+        let probe = MacProbe;
+        let caps = probe.encoder_capabilities().expect("capabilities");
+        if let Some(av1) = caps.iter().find(|cap| cap.codec == Codec::Av1) {
+            assert!(av1.hardware_accelerated);
+        }
+    }
+}

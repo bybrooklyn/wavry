@@ -502,6 +502,14 @@ pub struct WindowsAudioCapturer {
 
 impl WindowsAudioCapturer {
     pub async fn new() -> Result<Self> {
+        Self::new_with_mode(WindowsAudioCaptureMode::SystemMix).await
+    }
+
+    pub async fn new_microphone() -> Result<Self> {
+        Self::new_with_mode(WindowsAudioCaptureMode::Microphone).await
+    }
+
+    async fn new_with_mode(mode: WindowsAudioCaptureMode) -> Result<Self> {
         unsafe {
             match CoInitializeEx(None, COINIT_MULTITHREADED).ok() {
                 Err(e) if e.code() != RPC_E_CHANGED_MODE => {
@@ -514,21 +522,26 @@ impl WindowsAudioCapturer {
                 CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL)
                     .context("CoCreateInstance failed")?;
 
-            let device = enumerator.GetDefaultAudioEndpoint(eRender, eConsole)?;
+            let device = match mode {
+                WindowsAudioCaptureMode::SystemMix => {
+                    enumerator.GetDefaultAudioEndpoint(eRender, eConsole)?
+                }
+                WindowsAudioCaptureMode::Microphone => {
+                    enumerator.GetDefaultAudioEndpoint(eCapture, eConsole)?
+                }
+            };
 
             let audio_client: IAudioClient = device.Activate(CLSCTX_ALL, None)?;
 
             let format = audio_client.GetMixFormat()?;
 
-            // Note: Loopback requires a specific initialization
-            audio_client.Initialize(
-                AUDCLNT_SHAREMODE_SHARED,
-                AUDCLNT_STREAMFLAGS_LOOPBACK,
-                0,
-                0,
-                format,
-                None,
-            )?;
+            let stream_flags = match mode {
+                WindowsAudioCaptureMode::SystemMix => AUDCLNT_STREAMFLAGS_LOOPBACK,
+                WindowsAudioCaptureMode::Microphone => 0,
+            };
+
+            // Loopback mode captures system output; microphone mode uses capture endpoint.
+            audio_client.Initialize(AUDCLNT_SHAREMODE_SHARED, stream_flags, 0, 0, format, None)?;
 
             let capture_client: IAudioCaptureClient = audio_client.GetService()?;
             audio_client.Start()?;
@@ -705,6 +718,13 @@ impl WindowsAudioCapturer {
             }
         }
     }
+}
+
+#[cfg(target_os = "windows")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum WindowsAudioCaptureMode {
+    SystemMix,
+    Microphone,
 }
 
 #[cfg(feature = "opus-support")]

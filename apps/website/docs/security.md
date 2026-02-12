@@ -57,6 +57,7 @@ Wavry designs around practical threats such as:
 - Keep gateway global API rate limiting enabled (`WAVRY_GLOBAL_RATE_LIMIT*`).
 - Only trust forwarded client IP headers behind a trusted proxy (`WAVRY_TRUST_PROXY_HEADERS=1`).
 - In production, use `wss://` signaling and only enable insecure `ws://` via explicit override.
+- For high-assurance deployments, pin signaling TLS cert fingerprints with `WAVRY_SIGNALING_TLS_PINS_SHA256`.
 
 ### Runtime monitoring
 

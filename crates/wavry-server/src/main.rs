@@ -463,18 +463,22 @@ mod host {
             {
                 match source {
                     AudioRouteSource::Disabled => return Err(anyhow!("audio source disabled")),
-                    AudioRouteSource::Microphone => {
-                        warn!("microphone route requested but not yet supported, using system mix");
-                    }
+                    AudioRouteSource::SystemMix => AudioCapturer::new_system_mix().await?,
+                    AudioRouteSource::Microphone => match AudioCapturer::new_microphone().await {
+                        Ok(capturer) => capturer,
+                        Err(err) => {
+                            warn!("microphone route init failed ({}), using system mix", err);
+                            AudioCapturer::new_system_mix().await?
+                        }
+                    },
                     AudioRouteSource::Application(app) => {
                         warn!(
                             "application audio route '{}' requested but not yet supported, using system mix",
                             app
                         );
+                        AudioCapturer::new_system_mix().await?
                     }
-                    AudioRouteSource::SystemMix => {}
                 }
-                AudioCapturer::new().await?
             }
         };
         let (tx, rx) = mpsc::channel(16);
@@ -496,18 +500,8 @@ mod host {
 
     #[cfg(target_os = "windows")]
     async fn start_audio_capture(source: AudioRouteSource) -> Result<mpsc::Receiver<EncodedFrame>> {
-        match source {
-            AudioRouteSource::Disabled => return Err(anyhow!("audio source disabled")),
-            AudioRouteSource::Microphone => {
-                warn!("microphone route requested but not yet supported, using system mix");
-            }
-            AudioRouteSource::Application(app) => {
-                warn!(
-                    "application audio route '{}' requested but not yet supported, using system mix",
-                    app
-                );
-            }
-            AudioRouteSource::SystemMix => {}
+        if matches!(source, AudioRouteSource::Disabled) {
+            return Err(anyhow!("audio source disabled"));
         }
 
         let (tx, rx) = mpsc::channel(16);
@@ -526,11 +520,49 @@ mod host {
                 }
             };
 
-            let mut capturer = match runtime.block_on(AudioCapturer::new()) {
-                Ok(capturer) => capturer,
-                Err(err) => {
-                    error!("failed to initialize Windows audio capturer: {}", err);
-                    return;
+            let mut capturer = match source {
+                AudioRouteSource::Microphone => {
+                    match runtime.block_on(AudioCapturer::new_microphone()) {
+                        Ok(capturer) => capturer,
+                        Err(err) => {
+                            warn!(
+                                "Windows microphone route init failed ({}), using system mix",
+                                err
+                            );
+                            match runtime.block_on(AudioCapturer::new()) {
+                                Ok(capturer) => capturer,
+                                Err(fallback_err) => {
+                                    error!(
+                                    "failed to initialize Windows audio capturer (fallback): {}",
+                                    fallback_err
+                                );
+                                    return;
+                                }
+                            }
+                        }
+                    }
+                }
+                AudioRouteSource::Application(app) => {
+                    warn!(
+                        "application audio route '{}' requested but not yet supported, using system mix",
+                        app
+                    );
+                    match runtime.block_on(AudioCapturer::new()) {
+                        Ok(capturer) => capturer,
+                        Err(err) => {
+                            error!("failed to initialize Windows audio capturer: {}", err);
+                            return;
+                        }
+                    }
+                }
+                AudioRouteSource::SystemMix | AudioRouteSource::Disabled => {
+                    match runtime.block_on(AudioCapturer::new()) {
+                        Ok(capturer) => capturer,
+                        Err(err) => {
+                            error!("failed to initialize Windows audio capturer: {}", err);
+                            return;
+                        }
+                    }
                 }
             };
 

@@ -13,7 +13,7 @@
 | **Recording** | Medium | High | wavry-media | 6-8 | ✅ Shipped (v0.0.3-rc1) |
 | **Clipboard Sync** | Low | Medium | signal channel | 4-6 | ✅ Shipped (v0.0.3-rc1) |
 | **File Transfer** | High | High | RIFT protocol | 12-16 | 🟡 MVP Implemented |
-| **Audio Routing** | Medium | Medium | wavry-media | 6-8 | 🟡 Phase 1 Implemented |
+| **Audio Routing** | Medium | Medium | wavry-media | 6-8 | 🟡 Phase 2 (mic parity) |
 | **Input Mapping** | Low | Low | config | 3-4 | ✅ Shipped (v0.0.3-rc1) |
 
 ---
@@ -184,7 +184,7 @@ message FileStatus {
 **Where**: wavry-media + platform modules
 **Why**: Game audio, selective streaming, audio conferencing
 **Time**: 6-8 hours
-**Status**: 🟡 Phase 1 implemented in v0.0.3-rc1 (`--audio-source` route select + system mix forwarding)
+**Status**: 🟡 Phase 2 in progress (`--audio-source` + system mix + microphone parity; per-app parity pending)
 
 **Architecture**:
 ```
@@ -358,6 +358,7 @@ Docs: FILE_TRANSFER.md
 ### Audio Routing
 - 🟡 Audio source routing selector implemented (`--audio-source`)
 - 🟡 System mix capture integrated in host streaming path
+- ✅ Microphone capture path integrated on macOS/Linux/Windows (with runtime fallback safety)
 - 🔴 App-specific capture (OS-dependent) still pending
 - ✅ Audio encoding infrastructure exists
 - ⚠️ May need Opus codec updates
@@ -432,7 +433,7 @@ Docs: FILE_TRANSFER.md
 3. ✅ File transfer MVP integrated across protocol + client/server
 4. ✅ Audio routing phase 1 integrated (`--audio-source` + forwarding)
 5. ✅ v0.4 hardening: transfer resume/cancel + congestion-aware fairness
-6. 🟡 v0.4 hardening: per-app and microphone routing parity
+6. 🟡 v0.4 hardening: per-app routing parity
 7. ⏳ Release v0.0.4
 
 ---

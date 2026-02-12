@@ -36,13 +36,15 @@ Runtime enum:
 
 ### Linux
 
-- Current implementation captures system mix via PipeWire/GStreamer path.
-- `microphone` and `app:<name>` are currently fallback-routed to system mix with warning logs.
+- `system`: PipeWire portal/system mix capture (PulseAudio fallback when needed)
+- `microphone`: default microphone capture via GStreamer source path (`pulsesrc`/`autoaudiosrc`)
+- `app:<name>`: currently fallback-routed to `system` with warning logs
 
 ### Windows
 
-- Current implementation captures loopback/system output.
-- `microphone` and `app:<name>` are currently fallback-routed to system mix with warning logs.
+- `system`: WASAPI loopback capture on default render endpoint
+- `microphone`: WASAPI capture on default input endpoint
+- `app:<name>`: currently fallback-routed to `system` with warning logs
 
 ## Stream Path
 
@@ -78,6 +80,5 @@ Recommended operator behavior:
 ## Future Work
 
 - Linux per-application route selection via PipeWire node targeting
-- Windows microphone route via dedicated input endpoint
 - Policy control: allowlist of application route targets
 - Route capability probing exposed to UI and CLI diagnostics

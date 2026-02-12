@@ -16,7 +16,7 @@
 ### ✅ Security + Reliability Follow-up (2026-02-11)
 - [x] **RIFT File Transfer Protocol** - Added `FileHeader`, `FileChunk`, and `FileStatus` messages.
 - [x] **File Transfer Runtime Integration** - Client/server send + receive paths with checksum validation and safe filename handling.
-- [x] **Audio Route Selection** - Added server `--audio-source` path selection with safe fallback to system mix where app/mic routing is not available.
+- [x] **Audio Route Selection** - Added server `--audio-source` path selection with platform-aware route initialization and safe fallback behavior.
 - [x] **Admin Audit Logging** - Added `admin_audit_log` table, DB APIs, and `/admin/api/audit` endpoint.
 - [x] **Post-auth Rate Limiting** - Added logout post-auth limiter path in gateway auth flow.
 - [x] **Quality Gates Workflow** - Added CI workflow for fmt/clippy/tests/coverage/fuzz-smoke checks.
@@ -139,10 +139,11 @@ All infrastructure and core functionality is complete. Next phase focuses on new
 - [x] **Remove `openxr` 0.16 patch** - Successfully upgraded to upstream `openxr` 0.21.1 and isolated it in its own crate.
 
 ### Outstanding Items (Optional, not blocking)
-- [ ] **Hardware AV1 Validation**: Run benchmarks on M4 MacBook Air ↔ RTX 3070 Ti
-  - Use HWTODO.md procedures
-  - Validates codec performance on actual hardware
-  - Updates docs/AV1_VALIDATION.md with results
+- [ ] **Hardware AV1 Validation**: Run full cross-device benchmarks on M4 MacBook Air ↔ RTX 3070 Ti
+  - ✅ Local Mac smoke complete (2026-02-12): `./scripts/av1-hardware-smoke.sh`
+  - ✅ Probe/path validation added (`mac_probe_*` tests in `wavry-media`)
+  - ✅ Result documented in `docs/AV1_VALIDATION.md` (local host reports `[Hevc, H264]`, AV1 not exposed for realtime)
+  - [ ] Cross-machine bitrate/latency/quality benchmarks still pending
 
 - [ ] **Version Bump** (when starting v0.0.3 work)
   - Update VERSION file to v0.0.3-canary
@@ -186,10 +187,11 @@ All infrastructure and core functionality is complete. Next phase focuses on new
 - [x] Round-robin transfer scheduling to avoid paused/finished queue head blocking
 
 ### ✅ v0.0.3-rc1 Feature: Audio Routing (Phase 1)
-**Status**: Partially implemented
+**Status**: Extended in v0.0.4-canary
 - [x] Server-side `--audio-source` route selector
 - [x] Live audio packet forwarding in main streaming path
-- [ ] Per-application routing and full microphone route support per platform
+- [x] Microphone route support on macOS, Linux, and Windows (with runtime fallback to system mix on init failure)
+- [ ] Per-application routing parity across platforms (`app:<name>`)
 
 ---
 
@@ -201,7 +203,7 @@ All infrastructure and core functionality is complete. Next phase focuses on new
 - [x] ~~**Input Mapping**~~ - Shipped in v0.0.3-canary
 - [x] **File Transfer (MVP)** - Secure chunked transfer with integrity checks
 - [x] **File Transfer (Advanced)** - Resume/cancel and congestion-aware fairness
-- [ ] **Audio Routing (Advanced)** - Per-application and microphone parity across platforms
+- [ ] **Audio Routing (Advanced)** - Per-application routing parity across platforms
 
 ### Platform Support
 - [ ] **iOS Client** - WebTransport or native app
@@ -214,7 +216,7 @@ All infrastructure and core functionality is complete. Next phase focuses on new
 - [x] **Audit Logging (Admin Actions)** - Persisted admin audit events with API access
 - [x] **Rate Limiting (Auth + Post-auth paths)** - Added pre-auth and post-auth limiter coverage
 - [x] **Rate Limiting (Global)** - Added gateway-wide API limiter middleware
-- [ ] **Certificate Pinning** - TLS certificate validation for relay servers
+- [x] **Certificate Pinning** - Optional SHA-256 cert pinning for signaling TLS (`WAVRY_SIGNALING_TLS_PINS_SHA256`)
 - [x] **Production Signaling Safety Guard** - Reject `ws://` signaling URLs in production unless explicitly allowed
 
 ### Advanced Networking

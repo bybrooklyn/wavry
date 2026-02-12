@@ -56,6 +56,13 @@
    cargo run --bin wavry-server --release 2>&1 | grep -i "codec\|videoToolbox\|NVENC\|hardware"
    ```
 
+### Local Progress Snapshot (2026-02-12, Apple M4)
+
+- [x] Ran `./scripts/av1-hardware-smoke.sh`
+- [x] Ran macOS probe tests (`cargo test -p wavry-media mac_probe -- --nocapture`)
+- [x] Captured host startup capability output (`Local encoder candidates: [Hevc, H264]`)
+- [ ] Full AV1 quality/latency benchmarking (requires end-to-end stream session workload)
+
 ---
 
 ## 🧪 Test Case 1: H.264 Baseline (30fps, 1080p)

@@ -1,9 +1,13 @@
 use anyhow::{anyhow, Result};
 use futures::{SinkExt, StreamExt};
+use sha2::{Digest, Sha256};
+use std::collections::HashSet;
 use tokio::net::TcpStream;
 use tokio_tungstenite::{connect_async, MaybeTlsStream, WebSocketStream};
 
 pub use wavry_common::protocol::SignalMessage;
+
+const SIGNALING_TLS_PINS_ENV: &str = "WAVRY_SIGNALING_TLS_PINS_SHA256";
 
 pub struct SignalingClient {
     ws: WebSocketStream<MaybeTlsStream<TcpStream>>,
@@ -19,8 +23,60 @@ fn env_bool(name: &str, default: bool) -> bool {
     }
 }
 
-fn validate_signaling_url(url: &str) -> Result<()> {
-    let insecure = url.trim().to_ascii_lowercase().starts_with("ws://");
+fn normalize_fingerprint(input: &str) -> Result<String> {
+    let normalized: String = input.chars().filter(|c| c.is_ascii_hexdigit()).collect();
+    if normalized.len() != 64 {
+        return Err(anyhow!(
+            "invalid certificate fingerprint length in {}: expected 64 hex chars",
+            SIGNALING_TLS_PINS_ENV
+        ));
+    }
+    Ok(normalized.to_ascii_lowercase())
+}
+
+fn parse_tls_pin_set(value: &str) -> Result<HashSet<String>> {
+    let mut pins = HashSet::new();
+    for raw in value.split([',', ';']) {
+        let trimmed = raw.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        pins.insert(normalize_fingerprint(trimmed)?);
+    }
+
+    if pins.is_empty() {
+        return Err(anyhow!(
+            "{} is set but no usable certificate fingerprints were found",
+            SIGNALING_TLS_PINS_ENV
+        ));
+    }
+    Ok(pins)
+}
+
+fn configured_tls_pin_set() -> Result<Option<HashSet<String>>> {
+    match std::env::var(SIGNALING_TLS_PINS_ENV) {
+        Ok(value) => {
+            if value.trim().is_empty() {
+                Ok(None)
+            } else {
+                Ok(Some(parse_tls_pin_set(&value)?))
+            }
+        }
+        Err(std::env::VarError::NotPresent) => Ok(None),
+        Err(e) => Err(anyhow!("failed to read {}: {e}", SIGNALING_TLS_PINS_ENV)),
+    }
+}
+
+fn is_insecure_signaling_url(url: &str) -> bool {
+    url.trim().to_ascii_lowercase().starts_with("ws://")
+}
+
+fn is_secure_signaling_url(url: &str) -> bool {
+    url.trim().to_ascii_lowercase().starts_with("wss://")
+}
+
+fn validate_signaling_url(url: &str, tls_pin_set: Option<&HashSet<String>>) -> Result<()> {
+    let insecure = is_insecure_signaling_url(url);
     let production = env_bool("WAVRY_ENVIRONMENT_PRODUCTION", false)
         || std::env::var("WAVRY_ENVIRONMENT")
             .map(|v| v.eq_ignore_ascii_case("production"))
@@ -33,13 +89,80 @@ fn validate_signaling_url(url: &str) -> Result<()> {
         ));
     }
 
+    if tls_pin_set.is_some() && !is_secure_signaling_url(url) {
+        return Err(anyhow!(
+            "{} requires a wss:// signaling URL",
+            SIGNALING_TLS_PINS_ENV
+        ));
+    }
+
     Ok(())
+}
+
+fn fingerprint_sha256(bytes: &[u8]) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(bytes);
+    hex::encode(hasher.finalize())
+}
+
+fn validate_peer_certificate_pin(
+    url: &str,
+    ws: &WebSocketStream<MaybeTlsStream<TcpStream>>,
+    tls_pin_set: &HashSet<String>,
+) -> Result<()> {
+    if !is_secure_signaling_url(url) {
+        return Ok(());
+    }
+
+    let presented_fingerprints = match ws.get_ref() {
+        MaybeTlsStream::Rustls(stream) => {
+            let (_, session) = stream.get_ref();
+            let certs = session
+                .peer_certificates()
+                .ok_or_else(|| anyhow!("signaling TLS peer did not provide certificates"))?;
+            certs
+                .iter()
+                .map(|cert| fingerprint_sha256(cert.as_ref()))
+                .collect::<Vec<_>>()
+        }
+        MaybeTlsStream::Plain(_) => {
+            return Err(anyhow!(
+                "expected TLS signaling stream for certificate pinning"
+            ));
+        }
+        _ => {
+            return Err(anyhow!(
+                "unsupported signaling TLS backend for certificate pinning"
+            ));
+        }
+    };
+
+    if presented_fingerprints
+        .iter()
+        .any(|fingerprint| tls_pin_set.contains(fingerprint))
+    {
+        return Ok(());
+    }
+
+    let presented = presented_fingerprints
+        .first()
+        .cloned()
+        .unwrap_or_else(|| "<missing>".to_string());
+    Err(anyhow!(
+        "signaling TLS certificate pin mismatch; expected one of {} configured fingerprint(s), got leaf sha256={}",
+        tls_pin_set.len(),
+        presented
+    ))
 }
 
 impl SignalingClient {
     pub async fn connect(url: &str, token: &str) -> Result<Self> {
-        validate_signaling_url(url)?;
+        let tls_pin_set = configured_tls_pin_set()?;
+        validate_signaling_url(url, tls_pin_set.as_ref())?;
         let (mut ws_stream, _) = connect_async(url).await?;
+        if let Some(tls_pin_set) = tls_pin_set.as_ref() {
+            validate_peer_certificate_pin(url, &ws_stream, tls_pin_set)?;
+        }
 
         // Auth
         let bind_msg = SignalMessage::BIND {
@@ -74,5 +197,31 @@ impl SignalingClient {
             }
         }
         Err(anyhow!("Signaling connection closed"))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{normalize_fingerprint, parse_tls_pin_set};
+
+    #[test]
+    fn test_normalize_fingerprint_accepts_colons_and_case() {
+        let fp = "AA:BB:CC:DD:EE:FF:00:11:22:33:44:55:66:77:88:99:AA:BB:CC:DD:EE:FF:00:11:22:33:44:55:66:77:88:99";
+        let normalized = normalize_fingerprint(fp).expect("normalize");
+        assert_eq!(normalized.len(), 64);
+        assert!(normalized.chars().all(|c| c.is_ascii_hexdigit()));
+        assert_eq!(normalized, normalized.to_ascii_lowercase());
+    }
+
+    #[test]
+    fn test_parse_tls_pin_set_multiple_entries() {
+        let value = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef;aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        let pins = parse_tls_pin_set(value).expect("parse");
+        assert_eq!(pins.len(), 2);
+    }
+
+    #[test]
+    fn test_parse_tls_pin_set_rejects_invalid_length() {
+        assert!(parse_tls_pin_set("abcd").is_err());
     }
 }

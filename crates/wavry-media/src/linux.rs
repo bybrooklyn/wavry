@@ -524,25 +524,63 @@ pub struct PipewireAudioCapturer {
 
 impl PipewireAudioCapturer {
     pub async fn new() -> Result<Self> {
+        Self::new_system_mix().await
+    }
+
+    pub async fn new_system_mix() -> Result<Self> {
+        Self::new_with_route_linux(PipewireAudioRoute::SystemMix).await
+    }
+
+    pub async fn new_microphone() -> Result<Self> {
+        Self::new_with_route_linux(PipewireAudioRoute::Microphone).await
+    }
+
+    async fn new_with_route_linux(route: PipewireAudioRoute) -> Result<Self> {
         gst::init()?;
-        let portal = open_audio_portal_stream().await;
-        let (pipeline_str, fd_opt) = match portal {
-            Ok((fd, node_id)) => {
-                require_elements(&[
-                    "pipewiresrc",
-                    "audioconvert",
-                    "audioresample",
-                    "opusenc",
-                    "appsink",
-                ])?;
-                let pipeline_str = format!(
-                    "pipewiresrc fd={} path={} do-timestamp=true ! audioconvert ! audioresample ! opusenc bitrate=128000 frame-size=5 ! appsink name=sink max-buffers=4 drop=true sync=false",
-                    fd.as_raw_fd(),
-                    node_id
-                );
-                (pipeline_str, Some(fd))
+        let (pipeline_str, fd_opt) = match route {
+            PipewireAudioRoute::SystemMix => {
+                let portal = open_audio_portal_stream().await;
+                match portal {
+                    Ok((fd, node_id)) => {
+                        require_elements(&[
+                            "pipewiresrc",
+                            "audioconvert",
+                            "audioresample",
+                            "opusenc",
+                            "appsink",
+                        ])?;
+                        let pipeline_str = format!(
+                            "pipewiresrc fd={} path={} do-timestamp=true ! audioconvert ! audioresample ! opusenc bitrate=128000 frame-size=5 ! appsink name=sink max-buffers=4 drop=true sync=false",
+                            fd.as_raw_fd(),
+                            node_id
+                        );
+                        (pipeline_str, Some(fd))
+                    }
+                    Err(err) => {
+                        if element_available("pulsesrc") {
+                            require_elements(&[
+                                "pulsesrc",
+                                "audioconvert",
+                                "audioresample",
+                                "opusenc",
+                                "appsink",
+                            ])?;
+                            log::warn!(
+                                "PipeWire audio portal failed, falling back to PulseAudio: {}",
+                                err
+                            );
+                            let pipeline_str = "pulsesrc ! audioconvert ! audioresample ! opusenc bitrate=128000 frame-size=5 ! appsink name=sink max-buffers=4 drop=true sync=false".to_string();
+                            (pipeline_str, None)
+                        } else {
+                            return Err(anyhow!(
+                                "audio portal failed and pulsesrc unavailable: {}",
+                                err
+                            ));
+                        }
+                    }
+                }
             }
-            Err(err) => {
+            PipewireAudioRoute::Microphone => {
                 if element_available("pulsesrc") {
                     require_elements(&[
                         "pulsesrc",
@@ -551,16 +589,21 @@ impl PipewireAudioCapturer {
                         "opusenc",
                         "appsink",
                     ])?;
-                    log::warn!(
-                        "PipeWire audio portal failed, falling back to PulseAudio: {}",
-                        err
-                    );
                     let pipeline_str = "pulsesrc ! audioconvert ! audioresample ! opusenc bitrate=128000 frame-size=5 ! appsink name=sink max-buffers=4 drop=true sync=false".to_string();
+                    (pipeline_str, None)
+                } else if element_available("autoaudiosrc") {
+                    require_elements(&[
+                        "autoaudiosrc",
+                        "audioconvert",
+                        "audioresample",
+                        "opusenc",
+                        "appsink",
+                    ])?;
+                    let pipeline_str = "autoaudiosrc ! audioconvert ! audioresample ! opusenc bitrate=128000 frame-size=5 ! appsink name=sink max-buffers=4 drop=true sync=false".to_string();
                     (pipeline_str, None)
                 } else {
                     return Err(anyhow!(
-                        "audio portal failed and pulsesrc unavailable: {}",
-                        err
+                        "no supported microphone source element found (expected pulsesrc or autoaudiosrc)"
                     ));
                 }
             }
@@ -604,6 +647,12 @@ impl PipewireAudioCapturer {
             data: map.as_slice().to_vec(),
         })
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PipewireAudioRoute {
+    SystemMix,
+    Microphone,
 }
 
 pub struct GstAudioRenderer {
