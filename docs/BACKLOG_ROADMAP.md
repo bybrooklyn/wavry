@@ -96,7 +96,7 @@ Host Clipboard ←→ [signal channel] ←→ Client Clipboard
 **Where**: New RIFT media message type
 **Why**: Application deployment, document sharing, data transfer
 **Time**: 12-16 hours
-**Status**: 🟡 MVP implemented in v0.0.3-rc1 (resume/cancel/fair-share pending)
+**Status**: ✅ v0.0.4 hardening complete (resume/cancel controls + fair-share scheduling)
 
 **Protocol**:
 ```protobuf
@@ -431,7 +431,7 @@ Docs: FILE_TRANSFER.md
 2. ✅ v0.0.3 features implemented (recording, clipboard, input mapping)
 3. ✅ File transfer MVP integrated across protocol + client/server
 4. ✅ Audio routing phase 1 integrated (`--audio-source` + forwarding)
-5. 🟡 v0.4 hardening: transfer resume/cancel + congestion-aware fairness
+5. ✅ v0.4 hardening: transfer resume/cancel + congestion-aware fairness
 6. 🟡 v0.4 hardening: per-app and microphone routing parity
 7. ⏳ Release v0.0.4
 
@@ -439,7 +439,7 @@ Docs: FILE_TRANSFER.md
 
 See individual design documents for detailed specifications:
 - [RECORDING_DESIGN.md](RECORDING_DESIGN.md) - Complete
-- [CLIPBOARD_DESIGN.md](CLIPBOARD_DESIGN.md) - TODO
-- [FILE_TRANSFER_DESIGN.md](FILE_TRANSFER_DESIGN.md) - TODO
-- [AUDIO_ROUTING_DESIGN.md](AUDIO_ROUTING_DESIGN.md) - TODO
-- [INPUT_MAPPING_DESIGN.md](INPUT_MAPPING_DESIGN.md) - TODO
+- [CLIPBOARD_DESIGN.md](CLIPBOARD_DESIGN.md) - Complete
+- [FILE_TRANSFER_DESIGN.md](FILE_TRANSFER_DESIGN.md) - Complete
+- [AUDIO_ROUTING_DESIGN.md](AUDIO_ROUTING_DESIGN.md) - Complete
+- [INPUT_MAPPING_DESIGN.md](INPUT_MAPPING_DESIGN.md) - Complete

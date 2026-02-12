@@ -60,6 +60,7 @@ const FILE_TRANSFER_PROGRESS_CHUNK_INTERVAL: u32 = 64;
 const FILE_TRANSFER_SHARE_PERCENT: f32 = 15.0;
 const FILE_TRANSFER_MIN_KBPS: u32 = 256;
 const FILE_TRANSFER_MAX_KBPS: u32 = 4096;
+const MAX_FILE_STATUS_MESSAGE_CHARS: usize = 512;
 
 fn probe_supported_codecs() -> Vec<Codec> {
     #[cfg(target_os = "windows")]
@@ -353,6 +354,36 @@ fn parse_transfer_command(message: &str) -> Option<&'static str> {
     }
 }
 
+fn sanitize_file_status_message(raw: &str) -> String {
+    let trimmed = raw.trim();
+    let mut out = String::with_capacity(trimmed.len().min(MAX_FILE_STATUS_MESSAGE_CHARS));
+    for ch in trimmed.chars().take(MAX_FILE_STATUS_MESSAGE_CHARS) {
+        if ch.is_control() {
+            out.push(' ');
+        } else {
+            out.push(ch);
+        }
+    }
+    out.trim().to_string()
+}
+
+fn file_ready_for_transfer(file: &OutgoingFile) -> bool {
+    if !file.header_sent() {
+        return true;
+    }
+    !file.paused() && !file.finished()
+}
+
+fn rotate_to_next_ready_transfer(outgoing: &mut VecDeque<OutgoingFile>) -> bool {
+    let Some(idx) = outgoing.iter().position(file_ready_for_transfer) else {
+        return false;
+    };
+    if idx > 0 {
+        outgoing.rotate_left(idx);
+    }
+    true
+}
+
 fn apply_file_status_to_outgoing(
     outgoing: &mut VecDeque<OutgoingFile>,
     status: &rift_core::FileStatus,
@@ -365,7 +396,8 @@ fn apply_file_status_to_outgoing(
     };
 
     let status_kind = rift_core::file_status::Status::try_from(status.status).ok();
-    let message = status.message.trim();
+    let message = sanitize_file_status_message(&status.message);
+    let message = message.as_str();
 
     let mut remove_file = false;
     {
@@ -449,7 +481,8 @@ fn apply_file_status_to_incoming(
     incoming: &mut HashMap<u64, IncomingFile>,
     status: &rift_core::FileStatus,
 ) {
-    let message = status.message.trim();
+    let message = sanitize_file_status_message(&status.message);
+    let message = message.as_str();
 
     if let Some(cmd) = parse_transfer_command(message) {
         if matches!(cmd, "cancel" | "retry") {
@@ -1465,9 +1498,10 @@ async fn run_client_inner(
                                     let status_name = rift_core::file_status::Status::try_from(status.status)
                                         .map(|s| format!("{:?}", s))
                                         .unwrap_or_else(|_| format!("UNKNOWN({})", status.status));
+                                    let message = sanitize_file_status_message(&status.message);
                                     info!(
                                         "host file transfer status file_id={} status={} message={}",
-                                        status.file_id, status_name, status.message
+                                        status.file_id, status_name, message
                                     );
                                     apply_file_status_to_outgoing(&mut file_transfer.outgoing, &status);
                                     apply_file_status_to_incoming(&mut file_transfer.incoming, &status);
@@ -1688,65 +1722,23 @@ async fn send_next_file_chunk(
     limiter: &mut FileTransferLimiter,
     outgoing: &mut VecDeque<OutgoingFile>,
 ) -> Result<()> {
-    let Some(front) = outgoing.front_mut() else {
-        return Ok(());
-    };
-
-    if !front.header_sent() {
-        let header = offer_to_proto(front.offer());
-        let msg = ProtoMessage {
-            content: Some(rift_core::message::Content::Control(ProtoControl {
-                content: Some(rift_core::control_message::Content::FileHeader(header)),
-            })),
-        };
-        send_rift_msg(
-            socket,
-            crypto,
-            connect_addr,
-            msg,
-            Some(alias),
-            packet_id,
-            relay_info,
-        )
-        .await?;
-        front.mark_header_sent();
-        info!(
-            "started sending file {} ({} bytes)",
-            front.offer().filename,
-            front.offer().file_size
-        );
+    if !rotate_to_next_ready_transfer(outgoing) {
         return Ok(());
     }
 
-    if front.paused() {
-        return Ok(());
-    }
-
+    let mut progressed = false;
     limiter.set_rate_kbps(budget_kbps);
 
-    if front.finished() {
-        return Ok(());
-    }
-
-    let current_chunk = front.next_chunk_index();
-    match front.next_chunk()? {
-        Some(chunk) => {
-            if !limiter.try_take(chunk.payload.len()) {
-                front.set_next_chunk(current_chunk)?;
-                return Ok(());
-            }
+    {
+        let front = outgoing
+            .front_mut()
+            .expect("rotate helper guaranteed front");
+        if !front.header_sent() {
+            let header = offer_to_proto(front.offer());
             let msg = ProtoMessage {
-                content: Some(rift_core::message::Content::Media(
-                    rift_core::MediaMessage {
-                        content: Some(rift_core::media_message::Content::FileChunk(
-                            rift_core::FileChunk {
-                                file_id: chunk.file_id,
-                                chunk_index: chunk.chunk_index,
-                                payload: chunk.payload,
-                            },
-                        )),
-                    },
-                )),
+                content: Some(rift_core::message::Content::Control(ProtoControl {
+                    content: Some(rift_core::control_message::Content::FileHeader(header)),
+                })),
             };
             send_rift_msg(
                 socket,
@@ -1758,10 +1750,58 @@ async fn send_next_file_chunk(
                 relay_info,
             )
             .await?;
-            Ok(())
+            front.mark_header_sent();
+            info!(
+                "started sending file {} ({} bytes)",
+                front.offer().filename,
+                front.offer().file_size
+            );
+            progressed = true;
+        } else {
+            let current_chunk = front.next_chunk_index();
+            match front.next_chunk()? {
+                Some(chunk) => {
+                    if !limiter.try_take(chunk.payload.len()) {
+                        front.set_next_chunk(current_chunk)?;
+                    } else {
+                        let msg = ProtoMessage {
+                            content: Some(rift_core::message::Content::Media(
+                                rift_core::MediaMessage {
+                                    content: Some(rift_core::media_message::Content::FileChunk(
+                                        rift_core::FileChunk {
+                                            file_id: chunk.file_id,
+                                            chunk_index: chunk.chunk_index,
+                                            payload: chunk.payload,
+                                        },
+                                    )),
+                                },
+                            )),
+                        };
+                        send_rift_msg(
+                            socket,
+                            crypto,
+                            connect_addr,
+                            msg,
+                            Some(alias),
+                            packet_id,
+                            relay_info,
+                        )
+                        .await?;
+                        progressed = true;
+                    }
+                }
+                None => {
+                    // completion is finalized after remote FileStatus::Complete
+                }
+            }
         }
-        None => Ok(()),
     }
+
+    if progressed && outgoing.len() > 1 {
+        outgoing.rotate_left(1);
+    }
+
+    Ok(())
 }
 
 #[allow(clippy::too_many_arguments)]

@@ -1,7 +1,8 @@
 use axum::{
-    extract::State,
-    http::{header, HeaderName, Method},
-    response::IntoResponse,
+    extract::{ConnectInfo, State},
+    http::{header, HeaderName, Method, Request, StatusCode},
+    middleware,
+    response::{IntoResponse, Response},
     routing::{get, post},
     Json, Router,
 };
@@ -38,6 +39,11 @@ struct RuntimeMetrics {
     active_relay_sessions: usize,
 }
 
+#[derive(Serialize)]
+struct RateLimitError {
+    error: String,
+}
+
 async fn health(State(state): State<AppState>) -> impl IntoResponse {
     let active_ws_connections = state.connections.read().await.len();
     let active_relay_sessions = state.relay_sessions.read().await.len();
@@ -49,6 +55,32 @@ async fn health(State(state): State<AppState>) -> impl IntoResponse {
         }),
     )
         .into_response()
+}
+
+async fn global_api_rate_limit(req: Request<axum::body::Body>, next: middleware::Next) -> Response {
+    let path = req.uri().path();
+    if path == "/" || path == "/health" || path.starts_with("/metrics/") {
+        return next.run(req).await;
+    }
+
+    let direct_addr = req
+        .extensions()
+        .get::<ConnectInfo<SocketAddr>>()
+        .map(|info| info.0)
+        .unwrap_or_else(|| SocketAddr::from(([0, 0, 0, 0], 0)));
+    let client_ip = security::effective_client_ip(req.headers(), direct_addr);
+    let key = format!("{}:{}:{}", req.method(), path, client_ip);
+    if !security::allow_global_api_request(&key) {
+        return (
+            StatusCode::TOO_MANY_REQUESTS,
+            Json(RateLimitError {
+                error: "Too many requests".to_string(),
+            }),
+        )
+            .into_response();
+    }
+
+    next.run(req).await
 }
 
 impl axum::extract::FromRef<AppState> for sqlx::SqlitePool {
@@ -266,6 +298,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/v1/relays/report", post(web::handle_relay_report))
         .route("/v1/relays/reputation", get(web::handle_relay_reputation))
         .route("/ws", get(signal::ws_handler))
+        .layer(middleware::from_fn(global_api_rate_limit))
         .layer(build_cors_layer())
         .with_state(app_state);
 

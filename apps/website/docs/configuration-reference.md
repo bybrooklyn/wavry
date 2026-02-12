@@ -25,6 +25,9 @@ Common options:
 - `--record-dir`: recording output directory
 - `--send-file`: queue file transfer(s) to client
 - `--file-out-dir`: incoming transfer directory
+- `--file-transfer-share-percent`: max transfer share of current video bitrate
+- `--file-transfer-min-kbps`: transfer floor budget
+- `--file-transfer-max-kbps`: transfer ceiling budget
 - `--audio-source`: `system`, `microphone`, `app:<name>`, `disabled`
 
 Related env vars include:
@@ -35,6 +38,10 @@ Related env vars include:
 - `WAVRY_FILE_OUT_DIR`
 - `WAVRY_FILE_MAX_BYTES`
 - `WAVRY_AUDIO_SOURCE`
+- `WAVRY_FILE_TRANSFER_SHARE_PERCENT`
+- `WAVRY_FILE_TRANSFER_MIN_KBPS`
+- `WAVRY_FILE_TRANSFER_MAX_KBPS`
+- `WAVRY_ALLOW_INSECURE_SIGNALING` (production override for `ws://`)
 
 ## Client Runtime (`wavry-client`)
 
@@ -73,6 +80,13 @@ Deployment configuration should define:
 - Rate-limiting/security controls
 - Database/migration paths (gateway)
 - Upstream coordination settings
+
+Useful security-focused env vars:
+
+- `WAVRY_GLOBAL_RATE_LIMIT`: global gateway request cap per window
+- `WAVRY_GLOBAL_RATE_WINDOW_SECS`: global limiter window size
+- `WAVRY_GLOBAL_RATE_MAX_KEYS`: bounded key cardinality for limiter map
+- `WAVRY_TRUST_PROXY_HEADERS`: whether to trust `X-Forwarded-For` / `X-Real-IP`
 
 ## Suggested Configuration Workflow
 

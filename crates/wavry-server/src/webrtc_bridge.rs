@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{anyhow, Result};
 use futures_util::{SinkExt, StreamExt};
 use prost::Message;
 use std::sync::Arc;
@@ -23,6 +23,33 @@ pub struct WebRtcBridge {
     video_track: Arc<TrackLocalStaticSample>,
     peer_connection: Arc<Mutex<Option<RTCPeerConnection>>>,
     input_tx: mpsc::UnboundedSender<rift_core::input_message::Event>,
+}
+
+fn env_bool(name: &str, default: bool) -> bool {
+    match std::env::var(name) {
+        Ok(value) => matches!(
+            value.trim().to_ascii_lowercase().as_str(),
+            "1" | "true" | "yes" | "on"
+        ),
+        Err(_) => default,
+    }
+}
+
+fn validate_signaling_url(url: &str) -> Result<()> {
+    let insecure = url.trim().to_ascii_lowercase().starts_with("ws://");
+    let production = env_bool("WAVRY_ENVIRONMENT_PRODUCTION", false)
+        || std::env::var("WAVRY_ENVIRONMENT")
+            .map(|v| v.eq_ignore_ascii_case("production"))
+            .unwrap_or(false);
+    let allow_insecure = env_bool("WAVRY_ALLOW_INSECURE_SIGNALING", false);
+
+    if insecure && production && !allow_insecure {
+        return Err(anyhow!(
+            "refusing insecure ws:// signaling URL in production; use wss:// or set WAVRY_ALLOW_INSECURE_SIGNALING=1"
+        ));
+    }
+
+    Ok(())
 }
 
 impl WebRtcBridge {
@@ -54,6 +81,7 @@ impl WebRtcBridge {
     }
 
     pub async fn run(&self) -> Result<()> {
+        validate_signaling_url(&self.gateway_url)?;
         let (mut ws_stream, _) = connect_async(&self.gateway_url).await?;
         info!("Connected to signaling gateway: {}", self.gateway_url);
 

@@ -175,24 +175,7 @@ fn auth_response(user: User, session: Session) -> AuthResponse {
 }
 
 fn get_client_ip(headers: &HeaderMap, direct_addr: SocketAddr) -> IpAddr {
-    // 1. Try X-Forwarded-For
-    if let Some(forwarded_for) = headers.get("x-forwarded-for").and_then(|v| v.to_str().ok()) {
-        if let Some(first_ip) = forwarded_for.split(',').next() {
-            if let Ok(ip) = first_ip.trim().parse::<IpAddr>() {
-                return ip;
-            }
-        }
-    }
-
-    // 2. Try X-Real-IP
-    if let Some(real_ip) = headers.get("x-real-ip").and_then(|v| v.to_str().ok()) {
-        if let Ok(ip) = real_ip.trim().parse::<IpAddr>() {
-            return ip;
-        }
-    }
-
-    // 3. Fallback to direct connection info
-    direct_addr.ip()
+    security::effective_client_ip(headers, direct_addr)
 }
 
 fn rate_limit_key(scope: &str, ip: IpAddr) -> String {

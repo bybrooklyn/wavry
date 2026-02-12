@@ -9,8 +9,36 @@ pub struct SignalingClient {
     ws: WebSocketStream<MaybeTlsStream<TcpStream>>,
 }
 
+fn env_bool(name: &str, default: bool) -> bool {
+    match std::env::var(name) {
+        Ok(value) => matches!(
+            value.trim().to_ascii_lowercase().as_str(),
+            "1" | "true" | "yes" | "on"
+        ),
+        Err(_) => default,
+    }
+}
+
+fn validate_signaling_url(url: &str) -> Result<()> {
+    let insecure = url.trim().to_ascii_lowercase().starts_with("ws://");
+    let production = env_bool("WAVRY_ENVIRONMENT_PRODUCTION", false)
+        || std::env::var("WAVRY_ENVIRONMENT")
+            .map(|v| v.eq_ignore_ascii_case("production"))
+            .unwrap_or(false);
+    let allow_insecure = env_bool("WAVRY_ALLOW_INSECURE_SIGNALING", false);
+
+    if insecure && production && !allow_insecure {
+        return Err(anyhow!(
+            "refusing insecure ws:// signaling URL in production; use wss:// or set WAVRY_ALLOW_INSECURE_SIGNALING=1"
+        ));
+    }
+
+    Ok(())
+}
+
 impl SignalingClient {
     pub async fn connect(url: &str, token: &str) -> Result<Self> {
+        validate_signaling_url(url)?;
         let (mut ws_stream, _) = connect_async(url).await?;
 
         // Auth

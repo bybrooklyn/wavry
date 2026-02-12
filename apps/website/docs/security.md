@@ -54,6 +54,9 @@ Wavry designs around practical threats such as:
 - Use TLS for internet-facing control-plane traffic.
 - Restrict management/admin surfaces by network policy.
 - Apply DDoS/rate-limit controls at ingress boundaries.
+- Keep gateway global API rate limiting enabled (`WAVRY_GLOBAL_RATE_LIMIT*`).
+- Only trust forwarded client IP headers behind a trusted proxy (`WAVRY_TRUST_PROXY_HEADERS=1`).
+- In production, use `wss://` signaling and only enable insecure `ws://` via explicit override.
 
 ### Runtime monitoring
 

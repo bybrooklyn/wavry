@@ -1,11 +1,12 @@
 use std::{
     collections::{HashMap, HashSet},
+    net::{IpAddr, SocketAddr},
     sync::{Mutex, OnceLock},
     time::{Duration, Instant},
 };
 
 use anyhow::{anyhow, Context};
-use axum::http::HeaderValue;
+use axum::http::{HeaderMap, HeaderValue};
 use base64::{engine::general_purpose, Engine as _};
 use chacha20poly1305::{
     aead::{Aead, KeyInit},
@@ -81,6 +82,7 @@ static AUTH_LIMITER: OnceLock<FixedWindowRateLimiter> = OnceLock::new();
 static POST_AUTH_LIMITER: OnceLock<FixedWindowRateLimiter> = OnceLock::new();
 static WEBRTC_LIMITER: OnceLock<FixedWindowRateLimiter> = OnceLock::new();
 static WS_BIND_LIMITER: OnceLock<FixedWindowRateLimiter> = OnceLock::new();
+static GLOBAL_API_LIMITER: OnceLock<FixedWindowRateLimiter> = OnceLock::new();
 static ALLOWED_ORIGINS: OnceLock<HashSet<String>> = OnceLock::new();
 
 fn env_bool(name: &str, default: bool) -> bool {
@@ -208,6 +210,46 @@ pub fn allow_ws_bind_request(key: &str) -> bool {
             )
         })
         .allow(key)
+}
+
+pub fn allow_global_api_request(key: &str) -> bool {
+    GLOBAL_API_LIMITER
+        .get_or_init(|| {
+            FixedWindowRateLimiter::new(
+                env_u32("WAVRY_GLOBAL_RATE_LIMIT", 600),
+                Duration::from_secs(env_u32("WAVRY_GLOBAL_RATE_WINDOW_SECS", 60).max(1) as u64),
+                env_usize("WAVRY_GLOBAL_RATE_MAX_KEYS", 200_000),
+            )
+        })
+        .allow(key)
+}
+
+fn parse_proxy_ip(headers: &HeaderMap) -> Option<IpAddr> {
+    if let Some(forwarded_for) = headers.get("x-forwarded-for").and_then(|v| v.to_str().ok()) {
+        if let Some(first_ip) = forwarded_for.split(',').next() {
+            if let Ok(ip) = first_ip.trim().parse::<IpAddr>() {
+                return Some(ip);
+            }
+        }
+    }
+
+    if let Some(real_ip) = headers.get("x-real-ip").and_then(|v| v.to_str().ok()) {
+        if let Ok(ip) = real_ip.trim().parse::<IpAddr>() {
+            return Some(ip);
+        }
+    }
+
+    None
+}
+
+pub fn effective_client_ip(headers: &HeaderMap, direct_addr: SocketAddr) -> IpAddr {
+    let trust_proxy = env_bool("WAVRY_TRUST_PROXY_HEADERS", false);
+    if trust_proxy {
+        if let Some(proxy_ip) = parse_proxy_ip(headers) {
+            return proxy_ip;
+        }
+    }
+    direct_addr.ip()
 }
 
 pub fn hash_token(token: &str) -> String {
@@ -362,4 +404,44 @@ pub fn decrypt_totp_secret(stored: &str) -> anyhow::Result<String> {
         .map_err(|_| anyhow!("failed to decrypt TOTP secret"))?;
 
     String::from_utf8(plaintext).context("decrypted TOTP secret is not utf-8")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::http::HeaderValue;
+
+    #[test]
+    fn parse_proxy_ip_prefers_x_forwarded_for_first_ip() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "x-forwarded-for",
+            HeaderValue::from_static("203.0.113.10, 10.0.0.1"),
+        );
+        headers.insert("x-real-ip", HeaderValue::from_static("198.51.100.7"));
+
+        assert_eq!(
+            parse_proxy_ip(&headers),
+            Some("203.0.113.10".parse::<IpAddr>().expect("valid ip"))
+        );
+    }
+
+    #[test]
+    fn parse_proxy_ip_uses_x_real_ip_when_forwarded_for_missing() {
+        let mut headers = HeaderMap::new();
+        headers.insert("x-real-ip", HeaderValue::from_static("198.51.100.7"));
+
+        assert_eq!(
+            parse_proxy_ip(&headers),
+            Some("198.51.100.7".parse::<IpAddr>().expect("valid ip"))
+        );
+    }
+
+    #[test]
+    fn effective_client_ip_defaults_to_direct_addr() {
+        let headers = HeaderMap::new();
+        let direct: SocketAddr = "192.0.2.55:12345".parse().expect("valid socket addr");
+
+        assert_eq!(effective_client_ip(&headers, direct), direct.ip());
+    }
 }

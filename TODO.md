@@ -1,7 +1,7 @@
 # Wavry Project TODOs
 
-**Current Version**: v0.0.3-rc1
-**Last Updated**: 2026-02-11
+**Current Version**: v0.0.4-canary
+**Last Updated**: 2026-02-12
 **Build Status**: ✅ Clean (0 warnings, 160+ tests passing)
 
 ---
@@ -178,11 +178,12 @@ All infrastructure and core functionality is complete. Next phase focuses on new
 - [x] 6 unit tests covering passthrough, remap, block, and gamepad button mapping
 
 ### ✅ v0.0.3-rc1 Feature: File Transfer (MVP)
-**Status**: Implemented
+**Status**: Hardened in v0.0.4-canary
 - [x] File transfer protobuf messages in RIFT control/media channels
 - [x] Shared transfer manager with SHA-256 verification and safe filename normalization
 - [x] Host/client transfer loop integration and status exchange
-- [ ] Resume/cancel controls and adaptive congestion-aware bandwidth shaping
+- [x] Resume/cancel controls and adaptive congestion-aware bandwidth shaping
+- [x] Round-robin transfer scheduling to avoid paused/finished queue head blocking
 
 ### ✅ v0.0.3-rc1 Feature: Audio Routing (Phase 1)
 **Status**: Partially implemented
@@ -199,7 +200,7 @@ All infrastructure and core functionality is complete. Next phase focuses on new
 - [x] ~~**Clipboard Sync**~~ - Shipped in v0.0.3-canary
 - [x] ~~**Input Mapping**~~ - Shipped in v0.0.3-canary
 - [x] **File Transfer (MVP)** - Secure chunked transfer with integrity checks
-- [ ] **File Transfer (Advanced)** - Resume/cancel and congestion-aware fairness
+- [x] **File Transfer (Advanced)** - Resume/cancel and congestion-aware fairness
 - [ ] **Audio Routing (Advanced)** - Per-application and microphone parity across platforms
 
 ### Platform Support
@@ -212,8 +213,9 @@ All infrastructure and core functionality is complete. Next phase focuses on new
 - [ ] **E2E Encryption** - End-to-end encryption for relayed connections
 - [x] **Audit Logging (Admin Actions)** - Persisted admin audit events with API access
 - [x] **Rate Limiting (Auth + Post-auth paths)** - Added pre-auth and post-auth limiter coverage
-- [ ] **Rate Limiting (Global)** - Extend limiter strategy to all public APIs
+- [x] **Rate Limiting (Global)** - Added gateway-wide API limiter middleware
 - [ ] **Certificate Pinning** - TLS certificate validation for relay servers
+- [x] **Production Signaling Safety Guard** - Reject `ws://` signaling URLs in production unless explicitly allowed
 
 ### Advanced Networking
 - [ ] **Adaptive Resolution** - Dynamic resolution adjustment based on bandwidth
@@ -293,7 +295,7 @@ TOTAL          160+ tests ✅
 - [ ] AV1 validation on M4 MacBook Air & RTX 3070 Ti (hardware testing via HWTODO.md)
 - [ ] Optional: Record actual hardware benchmark results
 
-### v0.0.3-rc1 (Current)
+### v0.0.4-canary (Current)
 - [x] Recording capability (VideoRecorder, MP4 muxing)
 - [x] Clipboard sync (bidirectional, 1 MiB cap)
 - [x] Input mapping (key/button remap + block profiles)
@@ -309,7 +311,7 @@ TOTAL          160+ tests ✅
 - [ ] AV1 validation on M4 MacBook Air & RTX 3070 Ti (hardware testing via HWTODO.md)
 
 ### v0.0.4 (Proposed)
-- [ ] File transfer resume/cancel/fair-share controls
+- [x] File transfer resume/cancel/fair-share controls
 - [ ] iOS support
 - [ ] Performance benchmarking suite
 - [ ] Full audio routing parity (app + mic capture across platforms)
@@ -326,6 +328,6 @@ TOTAL          160+ tests ✅
   - Docker Images: Multi-platform builds (linux/amd64, linux/arm64)
   - Quality Gates: fmt/clippy/tests/coverage/fuzz-smoke workflow added
 - **Platform Support**: macOS, Linux, Windows, Android (ready); iOS (planned)
-- **Next Phase**: v0.4 hardening (file transfer resume/fairness and advanced audio routing)
+- **Next Phase**: advanced audio routing parity and certificate pinning work
 
 See [CHANGELOG.md](./CHANGELOG.md) for detailed version history.
