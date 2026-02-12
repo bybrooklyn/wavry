@@ -15,6 +15,7 @@ This document tracks the validation of AV1 hardware acceleration across target p
 **Date**: 2026-02-12  
 **Host**: Apple M4, macOS 26.3 (build 25D122)  
 **Command**: `./scripts/av1-hardware-smoke.sh`
+**Report**: `docs/HWTEST_RESULTS.md`
 
 ### Observed Results
 

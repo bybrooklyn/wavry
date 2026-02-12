@@ -6,6 +6,7 @@ cd "${ROOT_DIR}"
 
 PROBE_SECONDS="${WAVRY_AV1_PROBE_SECONDS:-6}"
 REQUIRE_AV1="${WAVRY_REQUIRE_AV1:-0}"
+STARTUP_TIMEOUT_SECONDS="${WAVRY_AV1_STARTUP_TIMEOUT_SECONDS:-120}"
 
 echo "== Wavry AV1 Hardware Smoke =="
 echo "Date: $(date -u +"%Y-%m-%dT%H:%M:%SZ")"
@@ -24,16 +25,33 @@ echo "-- Running macOS codec probe tests --"
 cargo test -p wavry-media mac_probe -- --nocapture
 
 echo
-echo "-- Sampling wavry-server startup capabilities (${PROBE_SECONDS}s) --"
+echo "-- Sampling wavry-server startup capabilities --"
 LOG_FILE="$(mktemp)"
 RUST_LOG=info cargo run -p wavry-server -- --listen 127.0.0.1:0 --disable-mdns >"${LOG_FILE}" 2>&1 &
 PID=$!
-sleep "${PROBE_SECONDS}"
+FOUND=0
+for _ in $(seq 1 "${STARTUP_TIMEOUT_SECONDS}"); do
+  if grep -q "Local encoder candidates" "${LOG_FILE}"; then
+    FOUND=1
+    break
+  fi
+  if ! kill -0 "${PID}" >/dev/null 2>&1; then
+    break
+  fi
+  sleep 1
+done
+
+if [[ "${FOUND}" == "1" ]]; then
+  sleep "${PROBE_SECONDS}"
+fi
+
 kill "${PID}" >/dev/null 2>&1 || true
 wait "${PID}" >/dev/null 2>&1 || true
 
 if ! grep -q "Local encoder candidates" "${LOG_FILE}"; then
   echo "ERROR: no local encoder candidates line found in probe logs"
+  echo "Last log lines:"
+  tail -n 30 "${LOG_FILE}" || true
   echo "Probe log: ${LOG_FILE}"
   exit 1
 fi

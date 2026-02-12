@@ -55,6 +55,9 @@ DerivedData/
 **/.externalNativeBuild/
 **/.kotlin/
 **/build/
+!crates/wavry-desktop/build/
+crates/wavry-desktop/build/*
+!crates/wavry-desktop/build/.gitkeep
 **/captures/
 apps/android/local.properties
 apps/android/**/local.properties

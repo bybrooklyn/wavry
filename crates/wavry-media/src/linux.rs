@@ -2,6 +2,7 @@ use std::env;
 use std::fs;
 use std::os::fd::{AsRawFd, OwnedFd};
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::str::FromStr;
 
 use anyhow::{anyhow, Context, Result};
@@ -535,6 +536,10 @@ impl PipewireAudioCapturer {
         Self::new_with_route_linux(PipewireAudioRoute::Microphone).await
     }
 
+    pub async fn new_application(app_name: String) -> Result<Self> {
+        Self::new_with_route_linux(PipewireAudioRoute::Application(app_name)).await
+    }
+
     async fn new_with_route_linux(route: PipewireAudioRoute) -> Result<Self> {
         gst::init()?;
         let (pipeline_str, fd_opt) = match route {
@@ -607,6 +612,83 @@ impl PipewireAudioCapturer {
                     ));
                 }
             }
+            PipewireAudioRoute::Application(app_name) => {
+                if element_available("pulsesrc") {
+                    require_elements(&[
+                        "pulsesrc",
+                        "audioconvert",
+                        "audioresample",
+                        "opusenc",
+                        "appsink",
+                    ])?;
+                    match resolve_pulse_monitor_for_application(&app_name) {
+                        Ok(source_name) => {
+                            let escaped = gst_escape_property_value(&source_name);
+                            let pipeline_str = format!(
+                                "pulsesrc device=\"{}\" ! audioconvert ! audioresample ! opusenc bitrate=128000 frame-size=5 ! appsink name=sink max-buffers=4 drop=true sync=false",
+                                escaped
+                            );
+                            log::info!(
+                                "application audio route '{}' resolved to Pulse source '{}'",
+                                app_name,
+                                source_name
+                            );
+                            (pipeline_str, None)
+                        }
+                        Err(err) => {
+                            log::warn!(
+                                "application audio route '{}' resolution failed ({}), using system mix",
+                                app_name,
+                                err
+                            );
+                            let portal = open_audio_portal_stream().await;
+                            match portal {
+                                Ok((fd, node_id)) => {
+                                    require_elements(&[
+                                        "pipewiresrc",
+                                        "audioconvert",
+                                        "audioresample",
+                                        "opusenc",
+                                        "appsink",
+                                    ])?;
+                                    let pipeline_str = format!(
+                                        "pipewiresrc fd={} path={} do-timestamp=true ! audioconvert ! audioresample ! opusenc bitrate=128000 frame-size=5 ! appsink name=sink max-buffers=4 drop=true sync=false",
+                                        fd.as_raw_fd(),
+                                        node_id
+                                    );
+                                    (pipeline_str, Some(fd))
+                                }
+                                Err(portal_err) => {
+                                    if element_available("pulsesrc") {
+                                        require_elements(&[
+                                            "pulsesrc",
+                                            "audioconvert",
+                                            "audioresample",
+                                            "opusenc",
+                                            "appsink",
+                                        ])?;
+                                        log::warn!(
+                                            "PipeWire audio portal failed, falling back to PulseAudio: {}",
+                                            portal_err
+                                        );
+                                        let pipeline_str = "pulsesrc ! audioconvert ! audioresample ! opusenc bitrate=128000 frame-size=5 ! appsink name=sink max-buffers=4 drop=true sync=false".to_string();
+                                        (pipeline_str, None)
+                                    } else {
+                                        return Err(anyhow!(
+                                            "audio portal failed and pulsesrc unavailable: {}",
+                                            portal_err
+                                        ));
+                                    }
+                                }
+                            }
+                        }
+                    }
+                } else {
+                    return Err(anyhow!(
+                        "application route requires pulsesrc but it is unavailable"
+                    ));
+                }
+            }
         };
 
         let pipeline = gst::parse::launch(&pipeline_str)?
@@ -649,10 +731,145 @@ impl PipewireAudioCapturer {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 enum PipewireAudioRoute {
     SystemMix,
     Microphone,
+    Application(String),
+}
+
+fn gst_escape_property_value(input: &str) -> String {
+    input.replace('\\', "\\\\").replace('"', "\\\"")
+}
+
+fn run_pactl(args: &[&str]) -> Result<String> {
+    let output = Command::new("pactl")
+        .args(args)
+        .output()
+        .with_context(|| format!("failed to execute pactl {}", args.join(" ")))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(anyhow!(
+            "pactl {} failed: {}",
+            args.join(" "),
+            stderr.trim()
+        ));
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).to_string())
+}
+
+fn line_value_after_colon(line: &str, key: &str) -> Option<String> {
+    let trimmed = line.trim();
+    let value = trimmed.strip_prefix(key)?.trim();
+    if value.is_empty() {
+        None
+    } else {
+        Some(value.to_string())
+    }
+}
+
+fn parse_block_index(line: &str, prefix: &str) -> Option<u32> {
+    let trimmed = line.trim();
+    let value = trimmed.strip_prefix(prefix)?;
+    value.trim().parse::<u32>().ok()
+}
+
+fn parse_app_property_value(line: &str) -> Option<String> {
+    let trimmed = line.trim();
+    let eq_idx = trimmed.find('=')?;
+    let rhs = trimmed[(eq_idx + 1)..].trim();
+    if rhs.is_empty() {
+        return None;
+    }
+    Some(rhs.trim_matches('"').to_string())
+}
+
+fn find_sink_index_for_application_from_sink_inputs(
+    sink_inputs: &str,
+    target: &str,
+) -> Option<u32> {
+    let mut current_sink_id: Option<u32> = None;
+    let mut current_matches = false;
+    let mut matched_sink_id: Option<u32> = None;
+
+    for line in sink_inputs.lines() {
+        if parse_block_index(line, "Sink Input #").is_some() {
+            if current_matches && current_sink_id.is_some() {
+                matched_sink_id = current_sink_id;
+                break;
+            }
+            current_sink_id = None;
+            current_matches = false;
+            continue;
+        }
+
+        if let Some(sink_id) = line_value_after_colon(line, "Sink:").and_then(|s| s.parse().ok()) {
+            current_sink_id = Some(sink_id);
+            continue;
+        }
+
+        let trimmed = line.trim();
+        if trimmed.starts_with("application.name")
+            || trimmed.starts_with("application.process.binary")
+            || trimmed.starts_with("application.process.id")
+            || trimmed.starts_with("media.name")
+        {
+            if let Some(value) = parse_app_property_value(line) {
+                if value.to_ascii_lowercase().contains(target) {
+                    current_matches = true;
+                }
+            }
+        }
+    }
+
+    if matched_sink_id.is_none() && current_matches && current_sink_id.is_some() {
+        matched_sink_id = current_sink_id;
+    }
+    matched_sink_id
+}
+
+fn find_monitor_source_for_sink_from_sinks(sinks: &str, sink_id: u32) -> Option<String> {
+    let mut in_target_sink = false;
+    for line in sinks.lines() {
+        if let Some(idx) = parse_block_index(line, "Sink #") {
+            in_target_sink = idx == sink_id;
+            continue;
+        }
+        if !in_target_sink {
+            continue;
+        }
+        if let Some(source) = line_value_after_colon(line, "Monitor Source:") {
+            return Some(source);
+        }
+    }
+    None
+}
+
+fn resolve_pulse_monitor_for_application(app_name: &str) -> Result<String> {
+    let target = app_name.trim().to_ascii_lowercase();
+    if target.is_empty() {
+        return Err(anyhow!("application route cannot be empty"));
+    }
+
+    let sink_inputs = run_pactl(&["list", "sink-inputs"])?;
+    let sink_id = find_sink_index_for_application_from_sink_inputs(&sink_inputs, &target)
+        .ok_or_else(|| {
+            anyhow!(
+                "no matching PulseAudio sink input found for application '{}'",
+                app_name
+            )
+        })?;
+
+    let sinks = run_pactl(&["list", "sinks"])?;
+    if let Some(source) = find_monitor_source_for_sink_from_sinks(&sinks, sink_id) {
+        return Ok(source);
+    }
+
+    Err(anyhow!(
+        "unable to resolve monitor source for application '{}' (sink #{})",
+        app_name,
+        sink_id
+    ))
 }
 
 pub struct GstAudioRenderer {
@@ -813,6 +1030,52 @@ fn decoder_available(codec: Codec) -> bool {
 
 async fn open_audio_portal_stream() -> Result<(OwnedFd, u32)> {
     with_portal_retry("audio", open_audio_portal_stream_inner).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        find_monitor_source_for_sink_from_sinks, find_sink_index_for_application_from_sink_inputs,
+    };
+
+    #[test]
+    fn find_sink_index_for_application_matches_binary() {
+        let sink_inputs = r#"
+Sink Input #77
+    Driver: PipeWire
+    Sink: 2
+    Properties:
+        application.process.binary = "spotify"
+
+Sink Input #80
+    Driver: PipeWire
+    Sink: 4
+    Properties:
+        application.process.binary = "discord"
+"#;
+        let sink = find_sink_index_for_application_from_sink_inputs(sink_inputs, "discord");
+        assert_eq!(sink, Some(4));
+    }
+
+    #[test]
+    fn find_monitor_source_for_sink_reads_target_block() {
+        let sinks = r#"
+Sink #2
+    State: RUNNING
+    Name: alsa_output.usb-foo.analog-stereo
+    Monitor Source: alsa_output.usb-foo.analog-stereo.monitor
+
+Sink #4
+    State: RUNNING
+    Name: alsa_output.pci-0000_00_1f.3.analog-stereo
+    Monitor Source: alsa_output.pci-0000_00_1f.3.analog-stereo.monitor
+"#;
+        let source = find_monitor_source_for_sink_from_sinks(sinks, 4);
+        assert_eq!(
+            source.as_deref(),
+            Some("alsa_output.pci-0000_00_1f.3.analog-stereo.monitor")
+        );
+    }
 }
 
 async fn open_audio_portal_stream_inner() -> Result<(OwnedFd, u32)> {

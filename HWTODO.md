@@ -61,7 +61,8 @@
 - [x] Ran `./scripts/av1-hardware-smoke.sh`
 - [x] Ran macOS probe tests (`cargo test -p wavry-media mac_probe -- --nocapture`)
 - [x] Captured host startup capability output (`Local encoder candidates: [Hevc, H264]`)
-- [ ] Full AV1 quality/latency benchmarking (requires end-to-end stream session workload)
+- [x] Wrote local results report (`docs/HWTEST_RESULTS.md`)
+- [ ] Cross-device bitrate/latency benchmarking (requires second host)
 
 ---
 

@@ -472,11 +472,16 @@ mod host {
                         }
                     },
                     AudioRouteSource::Application(app) => {
-                        warn!(
-                            "application audio route '{}' requested but not yet supported, using system mix",
-                            app
-                        );
-                        AudioCapturer::new_system_mix().await?
+                        match AudioCapturer::new_application(app.clone()).await {
+                            Ok(capturer) => capturer,
+                            Err(err) => {
+                                warn!(
+                                    "application route '{}' init failed ({}), using system mix",
+                                    app, err
+                                );
+                                AudioCapturer::new_system_mix().await?
+                            }
+                        }
                     }
                 }
             }

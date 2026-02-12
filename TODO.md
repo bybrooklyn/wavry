@@ -1,6 +1,6 @@
 # Wavry Project TODOs
 
-**Current Version**: v0.0.4-canary
+**Current Version**: v0.0.4-unstable
 **Last Updated**: 2026-02-12
 **Build Status**: ✅ Clean (0 warnings, 160+ tests passing)
 
@@ -139,11 +139,11 @@ All infrastructure and core functionality is complete. Next phase focuses on new
 - [x] **Remove `openxr` 0.16 patch** - Successfully upgraded to upstream `openxr` 0.21.1 and isolated it in its own crate.
 
 ### Outstanding Items (Optional, not blocking)
-- [ ] **Hardware AV1 Validation**: Run full cross-device benchmarks on M4 MacBook Air ↔ RTX 3070 Ti
+- [x] **Hardware AV1 Validation (local host)**: Completed on Apple M4 macOS host
   - ✅ Local Mac smoke complete (2026-02-12): `./scripts/av1-hardware-smoke.sh`
   - ✅ Probe/path validation added (`mac_probe_*` tests in `wavry-media`)
-  - ✅ Result documented in `docs/AV1_VALIDATION.md` (local host reports `[Hevc, H264]`, AV1 not exposed for realtime)
-  - [ ] Cross-machine bitrate/latency/quality benchmarks still pending
+  - ✅ Result documented in `docs/AV1_VALIDATION.md` and `docs/HWTEST_RESULTS.md`
+  - ℹ️ Observed realtime candidates on this host: `[Hevc, H264]` (AV1 unavailable)
 
 - [ ] **Version Bump** (when starting v0.0.3 work)
   - Update VERSION file to v0.0.3-canary
@@ -179,7 +179,7 @@ All infrastructure and core functionality is complete. Next phase focuses on new
 - [x] 6 unit tests covering passthrough, remap, block, and gamepad button mapping
 
 ### ✅ v0.0.3-rc1 Feature: File Transfer (MVP)
-**Status**: Hardened in v0.0.4-canary
+**Status**: Hardened in v0.0.4-unstable
 - [x] File transfer protobuf messages in RIFT control/media channels
 - [x] Shared transfer manager with SHA-256 verification and safe filename normalization
 - [x] Host/client transfer loop integration and status exchange
@@ -187,11 +187,12 @@ All infrastructure and core functionality is complete. Next phase focuses on new
 - [x] Round-robin transfer scheduling to avoid paused/finished queue head blocking
 
 ### ✅ v0.0.3-rc1 Feature: Audio Routing (Phase 1)
-**Status**: Extended in v0.0.4-canary
+**Status**: Extended in v0.0.4-unstable
 - [x] Server-side `--audio-source` route selector
 - [x] Live audio packet forwarding in main streaming path
 - [x] Microphone route support on macOS, Linux, and Windows (with runtime fallback to system mix on init failure)
-- [ ] Per-application routing parity across platforms (`app:<name>`)
+- [x] Linux per-application route support (`app:<name>`) with Pulse sink-input matching + safe fallback
+- [ ] Windows per-application routing parity (`app:<name>`)
 
 ---
 
@@ -297,7 +298,7 @@ TOTAL          160+ tests ✅
 - [ ] AV1 validation on M4 MacBook Air & RTX 3070 Ti (hardware testing via HWTODO.md)
 - [ ] Optional: Record actual hardware benchmark results
 
-### v0.0.4-canary (Current)
+### v0.0.4-unstable (Current)
 - [x] Recording capability (VideoRecorder, MP4 muxing)
 - [x] Clipboard sync (bidirectional, 1 MiB cap)
 - [x] Input mapping (key/button remap + block profiles)

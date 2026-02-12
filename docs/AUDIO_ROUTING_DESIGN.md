@@ -38,7 +38,7 @@ Runtime enum:
 
 - `system`: PipeWire portal/system mix capture (PulseAudio fallback when needed)
 - `microphone`: default microphone capture via GStreamer source path (`pulsesrc`/`autoaudiosrc`)
-- `app:<name>`: currently fallback-routed to `system` with warning logs
+- `app:<name>`: best-effort PulseAudio app sink matching (`pactl` sink-input resolution), with fallback to `system`
 
 ### Windows
 

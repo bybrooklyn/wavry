@@ -184,7 +184,7 @@ message FileStatus {
 **Where**: wavry-media + platform modules
 **Why**: Game audio, selective streaming, audio conferencing
 **Time**: 6-8 hours
-**Status**: 🟡 Phase 2 in progress (`--audio-source` + system mix + microphone parity; per-app parity pending)
+**Status**: 🟡 Phase 2 in progress (`--audio-source` + system mix + microphone parity + Linux app routing; Windows app parity pending)
 
 **Architecture**:
 ```
@@ -359,7 +359,8 @@ Docs: FILE_TRANSFER.md
 - 🟡 Audio source routing selector implemented (`--audio-source`)
 - 🟡 System mix capture integrated in host streaming path
 - ✅ Microphone capture path integrated on macOS/Linux/Windows (with runtime fallback safety)
-- 🔴 App-specific capture (OS-dependent) still pending
+- 🟡 Linux app-specific capture route integrated (`app:<name>` via Pulse sink-input matching + fallback)
+- 🔴 Windows app-specific capture (process loopback) still pending
 - ✅ Audio encoding infrastructure exists
 - ⚠️ May need Opus codec updates
 
@@ -433,7 +434,7 @@ Docs: FILE_TRANSFER.md
 3. ✅ File transfer MVP integrated across protocol + client/server
 4. ✅ Audio routing phase 1 integrated (`--audio-source` + forwarding)
 5. ✅ v0.4 hardening: transfer resume/cancel + congestion-aware fairness
-6. 🟡 v0.4 hardening: per-app routing parity
+6. 🟡 v0.4 hardening: Windows per-app routing parity
 7. ⏳ Release v0.0.4
 
 ---

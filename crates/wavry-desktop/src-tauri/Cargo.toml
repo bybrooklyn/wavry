@@ -1,6 +1,6 @@
 [package]
 name = "wavry-desktop"
-version = "0.0.4-canary"
+version = "0.0.4-unstable"
 description = "A Tauri App"
 authors = ["you"]
 edition = "2021"
