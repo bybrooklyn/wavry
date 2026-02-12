@@ -1,76 +1,55 @@
 .hero {
   position: relative;
-  padding: 7.5rem 1.25rem 6.5rem;
+  padding: 7.2rem 1.25rem 6.2rem;
   background:
-    radial-gradient(circle at 8% 8%, rgba(248, 191, 73, 0.3), transparent 32%),
-    radial-gradient(circle at 94% -4%, rgba(58, 220, 201, 0.22), transparent 30%),
-    linear-gradient(145deg, #091522 0%, #14324a 52%, #0f5064 100%);
+    radial-gradient(circle at 10% 10%, rgba(92, 175, 195, 0.22), transparent 34%),
+    linear-gradient(150deg, #0d2533 0%, #13384a 58%, #1a5263 100%);
 }
 
 .heroShell {
   max-width: 74rem;
   margin: 0 auto;
-  color: #f7fbff;
+  color: #f2fbff;
 }
 
 .eyebrow {
   margin: 0;
-  font-size: 0.78rem;
+  font-size: 0.8rem;
   text-transform: uppercase;
-  letter-spacing: 0.2em;
+  letter-spacing: 0.18em;
   font-weight: 700;
-  color: #c8ffe8;
+  color: #b6f3e4;
 }
 
 .heroTitle {
-  margin: 1.15rem 0 0;
-  max-width: 58rem;
-  font-size: clamp(2.2rem, 5.6vw, 4.1rem);
-  line-height: 1.04;
+  margin: 1.1rem 0 0;
+  max-width: 56rem;
+  font-size: clamp(2.1rem, 5.3vw, 3.8rem);
+  line-height: 1.06;
 }
 
 .heroSubtitle {
-  margin: 1.4rem 0 0;
-  max-width: 49rem;
-  font-size: clamp(1.02rem, 2vw, 1.28rem);
-  line-height: 1.63;
-  color: #d4ebf5;
+  margin: 1.2rem 0 0;
+  max-width: 50rem;
+  font-size: clamp(1rem, 2vw, 1.2rem);
+  line-height: 1.66;
+  color: #d4ebf3;
 }
 
 .heroActions {
   display: flex;
   flex-wrap: wrap;
   gap: 0.9rem;
-  margin-top: 2rem;
-}
-
-.heroFacts {
-  margin: 1.6rem 0 0;
-  padding: 0;
-  list-style: none;
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.55rem;
-}
-
-.heroFacts li {
-  padding: 0.46rem 0.75rem;
-  border-radius: 999px;
-  border: 1px solid rgba(210, 242, 255, 0.35);
-  background: rgba(4, 17, 30, 0.28);
-  color: #d7edf7;
-  font-size: 0.78rem;
-  font-weight: 600;
-  letter-spacing: 0.01em;
+  margin-top: 1.8rem;
 }
 
 .section {
-  padding: 5.6rem 1.25rem 3.6rem;
+  padding: 4.8rem 1.25rem 3.4rem;
 }
 
 .sectionAlt {
-  padding: 3.8rem 1.25rem 6.4rem;
-  background: linear-gradient(180deg, #f2f8fb 0%, #f7fbfd 55%, #ffffff 100%);
+  padding: 3rem 1.25rem;
+  background: linear-gradient(180deg, #f3f9fc 0%, #f8fcfe 100%);
 }
 
 .sectionInner {
@@ -79,136 +58,117 @@
 }
 
 .sectionHeader {
-  max-width: 50rem;
-  margin-bottom: 1.8rem;
+  max-width: 49rem;
+  margin-bottom: 1.3rem;
 }
 
 .sectionTitle {
   margin: 0;
-  font-size: clamp(1.65rem, 3.4vw, 2.55rem);
+  font-size: clamp(1.5rem, 3vw, 2.15rem);
   line-height: 1.2;
 }
 
 .sectionText {
-  margin: 0.9rem 0 0;
-  color: #2a4d5e;
-  line-height: 1.67;
+  margin: 0.72rem 0 0;
+  color: #2d4f5f;
+  line-height: 1.65;
 }
 
 .cardGrid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 1.25rem;
+  gap: 1rem;
 }
 
 .card {
-  border: 1px solid rgba(7, 80, 101, 0.2);
-  border-radius: 1.05rem;
-  padding: 1.5rem;
+  border: 1px solid rgba(10, 78, 95, 0.2);
+  border-radius: 0.95rem;
+  padding: 1.25rem;
   background: #ffffff;
-  box-shadow: 0 12px 35px rgba(5, 34, 45, 0.08);
+  box-shadow: 0 8px 24px rgba(8, 36, 45, 0.06);
 }
 
 .cardTitle {
   margin: 0;
-  font-size: 1.23rem;
+  font-size: 1.12rem;
 }
 
 .cardBody {
-  margin: 0.75rem 0 0;
-  color: #2a4d5e;
-  line-height: 1.62;
-  min-height: 7.2rem;
-}
-
-.cardLink {
-  display: inline-block;
-  margin-top: 1.1rem;
-  font-weight: 700;
-}
-
-.stepList {
-  margin: 0;
-  padding: 0;
-  list-style: none;
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 1rem;
-  counter-reset: flow-step;
-}
-
-.stepItem {
-  position: relative;
-  padding: 1.2rem 1.2rem 1.2rem 3rem;
-  border-radius: 0.95rem;
-  border: 1px solid rgba(11, 76, 95, 0.24);
-  background: #ffffff;
-  box-shadow: 0 10px 28px rgba(6, 35, 45, 0.06);
-}
-
-.stepItem::before {
-  counter-increment: flow-step;
-  content: counter(flow-step);
-  position: absolute;
-  left: 1rem;
-  top: 1.05rem;
-  width: 1.45rem;
-  height: 1.45rem;
-  border-radius: 999px;
-  background: #0f7e8f;
-  color: #fff;
-  font-size: 0.78rem;
-  font-weight: 700;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.stepTitle {
-  margin: 0;
-  font-size: 1.1rem;
-  color: #0b3b4a;
-}
-
-.stepBody {
   margin: 0.65rem 0 0;
-  color: #2a4d5e;
-  line-height: 1.62;
+  color: #2d4f5f;
+  line-height: 1.6;
+}
+
+.licenseCard {
+  border: 1px solid rgba(10, 78, 95, 0.24);
+  border-radius: 1rem;
+  padding: 1.3rem;
+  background: #ffffff;
+  box-shadow: 0 10px 28px rgba(8, 36, 45, 0.08);
+}
+
+.licenseEyebrow {
+  margin: 0;
+  font-size: 0.77rem;
+  text-transform: uppercase;
+  letter-spacing: 0.16em;
+  color: #0f7e92;
+  font-weight: 700;
+}
+
+.licenseTitle {
+  margin: 0.55rem 0 0;
+  font-size: clamp(1.25rem, 2.8vw, 1.8rem);
+  line-height: 1.25;
+}
+
+.licenseText {
+  margin: 0.7rem 0 0;
+  color: #2d4f5f;
+  line-height: 1.66;
+  max-width: 62rem;
+}
+
+.licenseActions {
+  margin-top: 1rem;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
 }
 
 .trackGrid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 1rem;
+  gap: 0.95rem;
 }
 
 .trackCard {
   text-decoration: none;
-  border-radius: 0.95rem;
-  border: 1px solid rgba(9, 75, 92, 0.22);
+  border-radius: 0.9rem;
+  border: 1px solid rgba(10, 78, 95, 0.22);
   background: #ffffff;
-  padding: 1.25rem;
+  padding: 1.1rem;
   transition: transform 0.14s ease, box-shadow 0.14s ease, border-color 0.14s ease;
-  box-shadow: 0 10px 28px rgba(6, 35, 45, 0.05);
+  box-shadow: 0 8px 22px rgba(8, 36, 45, 0.05);
 }
 
 .trackCard:hover {
   text-decoration: none;
   transform: translateY(-2px);
-  box-shadow: 0 16px 35px rgba(6, 35, 45, 0.1);
-  border-color: rgba(9, 75, 92, 0.45);
+  box-shadow: 0 12px 28px rgba(8, 36, 45, 0.1);
+  border-color: rgba(10, 78, 95, 0.44);
 }
 
 .trackTitle {
   margin: 0;
-  font-size: 1.12rem;
-  color: #0b3b4a;
+  font-size: 1.05rem;
+  color: #123846;
 }
 
 .trackBody {
-  margin: 0.65rem 0 0;
-  color: #2a4d5e;
-  line-height: 1.6;
+  margin: 0.58rem 0 0;
+  color: #2d4f5f;
+  line-height: 1.56;
 }
 
 @media (max-width: 996px) {
@@ -217,21 +177,21 @@
   }
 
   .section {
-    padding: 4.7rem 1rem 2.8rem;
+    padding: 4.2rem 1rem 2.8rem;
   }
 
   .sectionAlt {
-    padding: 2.8rem 1rem 5rem;
+    padding: 2.4rem 1rem;
   }
 
   .cardGrid,
-  .trackGrid,
-  .stepList {
+  .trackGrid {
     grid-template-columns: 1fr;
   }
 
-  .cardBody {
-    min-height: 0;
+  .licenseActions :global(.button) {
+    width: 100%;
+    justify-content: center;
   }
 }
 
@@ -243,14 +203,5 @@
   .heroActions :global(.button) {
     width: 100%;
     justify-content: center;
-  }
-
-  .heroFacts {
-    gap: 0.45rem;
-  }
-
-  .heroFacts li {
-    width: 100%;
-    text-align: center;
   }
 }

@@ -6,81 +6,41 @@ import Heading from '@theme/Heading';
 
 import styles from './index.module.css';
 
-const deploymentCards = [
+const coreHighlights = [
   {
-    title: 'Open Source Core',
-    body: 'Run and modify the full stack under AGPL-3.0 when infra control and transparency are the priority.',
-    to: '/docs/deployment-modes',
-    cta: 'Self-host with OSS',
+    title: 'Built for Interaction',
+    body: 'Wavry is designed for sessions where input timing matters more than static image quality.',
   },
   {
-    title: 'Commercial Licensing',
-    body: 'Use private forks, proprietary embedding, or closed-source distribution paths under commercial terms.',
-    to: '/docs/deployment-modes',
-    cta: 'Review commercial path',
+    title: 'Encrypted by Default',
+    body: 'Session transport is end-to-end encrypted with replay protection and secure key negotiation.',
   },
   {
-    title: 'Hosted Control Plane',
-    body: 'Use managed signaling, auth, and relay assistance when you need faster operational rollout.',
-    to: '/docs/deployment-modes',
-    cta: 'See hosted model',
+    title: 'Rust Protocol Core',
+    body: 'RIFT + runtime components are implemented in Rust for predictable performance and maintainability.',
   },
 ];
 
 const docTracks = [
   {
-    title: 'Understand Wavry',
-    body: 'Start with product overview, use cases, and architecture boundaries.',
+    title: 'Overview',
+    body: 'Understand what Wavry is and where it fits.',
     to: '/docs/overview',
   },
   {
-    title: 'Run It Locally',
-    body: 'Bring up gateway, relay, host, and client in a practical first session.',
+    title: 'Getting Started',
+    body: 'Run gateway, relay, host, and client locally.',
     to: '/docs/getting-started',
   },
   {
-    title: 'Deploy Safely',
-    body: 'Review security expectations, controls, and production operations guidance.',
-    to: '/docs/security',
+    title: 'Architecture',
+    body: 'See protocol, control-plane, and runtime boundaries.',
+    to: '/docs/architecture',
   },
   {
-    title: 'Operate and Release',
-    body: 'Use CI/CD, packaging, and release checks to keep shipping predictable.',
+    title: 'Operations',
+    body: 'Deploy, monitor, and troubleshoot production setups.',
     to: '/docs/operations',
-  },
-];
-
-const useCases = [
-  {
-    title: 'Remote Workstations',
-    body: 'Interactive desktop control for creative, engineering, and support workloads.',
-  },
-  {
-    title: 'Cloud Gaming Sessions',
-    body: 'Low-latency session delivery where delayed input is unacceptable.',
-  },
-  {
-    title: 'Embedded Streaming Products',
-    body: 'A Rust-native base for products that need secure remote interaction at scale.',
-  },
-];
-
-const workflowSteps = [
-  {
-    title: 'Signal and establish path',
-    body: 'Client and host coordinate direct connectivity, with relay only when required.',
-  },
-  {
-    title: 'Negotiate encrypted transport',
-    body: 'Peers establish session keys and authenticated encrypted packet exchange.',
-  },
-  {
-    title: 'Stream media and control input',
-    body: 'Host sends media while client sends input events over low-latency control paths.',
-  },
-  {
-    title: 'Adapt continuously',
-    body: 'DELTA congestion control adjusts bitrate/FEC to keep response time stable.',
   },
 ];
 
@@ -90,27 +50,22 @@ function HomepageHeader() {
   return (
     <header className={styles.hero}>
       <div className={styles.heroShell}>
-        <p className={styles.eyebrow}>Wavry Platform</p>
+        <p className={styles.eyebrow}>Wavry</p>
         <Heading as="h1" className={styles.heroTitle}>
-          End-to-end encrypted remote sessions built for low-latency control.
+          Low-latency remote sessions, built to feel responsive.
         </Heading>
         <p className={styles.heroSubtitle}>
-          {siteConfig.tagline} Wavry is for teams shipping remote desktop and interactive streaming products where
-          responsiveness matters as much as reliability.
+          {siteConfig.tagline} Wavry is for remote desktop and interactive streaming workloads where delayed input
+          breaks the experience.
         </p>
         <div className={styles.heroActions}>
           <Link className="button button--primary button--lg" to="/docs/overview">
-            What is Wavry?
+            Read Overview
           </Link>
           <Link className="button button--outline button--lg" to="/docs/getting-started">
-            Run the stack locally
+            Start Locally
           </Link>
         </div>
-        <ul className={styles.heroFacts}>
-          <li>P2P-first transport</li>
-          <li>Mandatory encrypted sessions</li>
-          <li>Rust protocol and runtime core</li>
-        </ul>
       </div>
     </header>
   );
@@ -120,27 +75,27 @@ export default function Home(): ReactNode {
   return (
     <Layout
       title="Wavry"
-      description="Wavry documentation for low-latency remote desktop, cloud streaming, deployment modes, and operations.">
+      description="Wavry documentation for low-latency remote desktop and interactive streaming infrastructure.">
       <HomepageHeader />
       <main>
         <section className={styles.section}>
           <div className={styles.sectionInner}>
             <div className={styles.sectionHeader}>
               <Heading as="h2" className={styles.sectionTitle}>
-                What this software is for
+                What you get
               </Heading>
               <p className={styles.sectionText}>
-                Wavry is not a generic video streaming stack. It is purpose-built for interactive sessions that require
-                fast round-trip input handling and stable latency under changing network conditions.
+                A practical stack for interactive remote sessions: protocol, crypto, host/client runtimes, and
+                deployment guidance.
               </p>
             </div>
             <div className={styles.cardGrid}>
-              {useCases.map((card) => (
-                <article key={card.title} className={styles.card}>
+              {coreHighlights.map((item) => (
+                <article key={item.title} className={styles.card}>
                   <Heading as="h3" className={styles.cardTitle}>
-                    {card.title}
+                    {item.title}
                   </Heading>
-                  <p className={styles.cardBody}>{card.body}</p>
+                  <p className={styles.cardBody}>{item.body}</p>
                 </article>
               ))}
             </div>
@@ -149,22 +104,27 @@ export default function Home(): ReactNode {
 
         <section className={styles.sectionAlt}>
           <div className={styles.sectionInner}>
-            <div className={styles.sectionHeader}>
-              <Heading as="h2" className={styles.sectionTitle}>
-                How a Wavry session works
+            <div className={styles.licenseCard}>
+              <p className={styles.licenseEyebrow}>RIFT License</p>
+              <Heading as="h2" className={styles.licenseTitle}>
+                RIFT ships under AGPL-3.0 as part of Wavry’s open-source core.
               </Heading>
-              <p className={styles.sectionText}>The platform keeps control-plane coordination separate from encrypted media flow.</p>
+              <p className={styles.licenseText}>
+                If you release source under AGPL terms, you can use Wavry and the RIFT protocol implementation for free.
+                If you need exclusion from AGPL obligations and want the Wavry cloud service, use the commercial licensing path.
+              </p>
+              <div className={styles.licenseActions}>
+                <Link className="button button--primary" to="/pricing">
+                  View Pricing
+                </Link>
+                <Link className="button button--outline" to="/docs/deployment-modes">
+                  Deployment Modes
+                </Link>
+                <Link className="button button--outline" href="https://github.com/bybrooklyn/wavry/blob/main/LICENSE">
+                  AGPL-3.0 License
+                </Link>
+              </div>
             </div>
-            <ol className={styles.stepList}>
-              {workflowSteps.map((step) => (
-                <li key={step.title} className={styles.stepItem}>
-                  <Heading as="h3" className={styles.stepTitle}>
-                    {step.title}
-                  </Heading>
-                  <p className={styles.stepBody}>{step.body}</p>
-                </li>
-              ))}
-            </ol>
           </div>
         </section>
 
@@ -172,35 +132,9 @@ export default function Home(): ReactNode {
           <div className={styles.sectionInner}>
             <div className={styles.sectionHeader}>
               <Heading as="h2" className={styles.sectionTitle}>
-                Pick your deployment model
+                Start here
               </Heading>
-              <p className={styles.sectionText}>
-                Choose open source, commercial licensing, or hosted control plane based on compliance, speed, and product needs.
-              </p>
-            </div>
-            <div className={styles.cardGrid}>
-              {deploymentCards.map((card) => (
-                <article key={card.title} className={styles.card}>
-                  <Heading as="h3" className={styles.cardTitle}>
-                    {card.title}
-                  </Heading>
-                  <p className={styles.cardBody}>{card.body}</p>
-                  <Link className={styles.cardLink} to={card.to}>
-                    {card.cta}
-                  </Link>
-                </article>
-              ))}
-            </div>
-          </div>
-        </section>
-
-        <section className={styles.sectionAlt}>
-          <div className={styles.sectionInner}>
-            <div className={styles.sectionHeader}>
-              <Heading as="h2" className={styles.sectionTitle}>
-                Documentation tracks
-              </Heading>
-              <p className={styles.sectionText}>Use these paths to evaluate, deploy, and operate Wavry with fewer unknowns.</p>
+              <p className={styles.sectionText}>Use these docs to evaluate the software quickly and go deeper where needed.</p>
             </div>
             <div className={styles.trackGrid}>
               {docTracks.map((track) => (
