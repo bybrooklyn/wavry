@@ -78,6 +78,7 @@ impl FixedWindowRateLimiter {
 }
 
 static AUTH_LIMITER: OnceLock<FixedWindowRateLimiter> = OnceLock::new();
+static POST_AUTH_LIMITER: OnceLock<FixedWindowRateLimiter> = OnceLock::new();
 static WEBRTC_LIMITER: OnceLock<FixedWindowRateLimiter> = OnceLock::new();
 static WS_BIND_LIMITER: OnceLock<FixedWindowRateLimiter> = OnceLock::new();
 static ALLOWED_ORIGINS: OnceLock<HashSet<String>> = OnceLock::new();
@@ -168,6 +169,18 @@ pub fn allow_auth_request(key: &str) -> bool {
                 env_u32("WAVRY_AUTH_RATE_LIMIT", 20),
                 Duration::from_secs(env_u32("WAVRY_AUTH_RATE_WINDOW_SECS", 60).max(1) as u64),
                 env_usize("WAVRY_AUTH_RATE_MAX_KEYS", 10_000),
+            )
+        })
+        .allow(key)
+}
+
+pub fn allow_post_auth_request(key: &str) -> bool {
+    POST_AUTH_LIMITER
+        .get_or_init(|| {
+            FixedWindowRateLimiter::new(
+                env_u32("WAVRY_POST_AUTH_RATE_LIMIT", 60),
+                Duration::from_secs(env_u32("WAVRY_POST_AUTH_RATE_WINDOW_SECS", 60).max(1) as u64),
+                env_usize("WAVRY_POST_AUTH_RATE_MAX_KEYS", 50_000),
             )
         })
         .allow(key)

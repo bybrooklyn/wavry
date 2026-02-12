@@ -150,9 +150,7 @@ impl<I: InputInjector> InputInjector for MappedInjector<I> {
         }
         let mapped_buttons: Vec<(u32, bool)> = buttons
             .iter()
-            .filter_map(|&(btn, pressed)| {
-                self.map.resolve_button(btn).map(|b| (b, pressed))
-            })
+            .filter_map(|&(btn, pressed)| self.map.resolve_button(btn).map(|b| (b, pressed)))
             .collect();
         self.inner.gamepad(gamepad_id, axes, &mapped_buttons)
     }
@@ -169,7 +167,10 @@ mod tests {
 
     impl MockInjector {
         fn new() -> Self {
-            Self { keys: vec![], buttons: vec![] }
+            Self {
+                keys: vec![],
+                buttons: vec![],
+            }
         }
     }
 
@@ -178,11 +179,24 @@ mod tests {
             self.keys.push((keycode, pressed));
             Ok(())
         }
-        fn mouse_button(&mut self, _b: u8, _p: bool) -> Result<()> { Ok(()) }
-        fn mouse_motion(&mut self, _dx: i32, _dy: i32) -> Result<()> { Ok(()) }
-        fn mouse_absolute(&mut self, _x: f32, _y: f32) -> Result<()> { Ok(()) }
-        fn scroll(&mut self, _dx: f32, _dy: f32) -> Result<()> { Ok(()) }
-        fn gamepad(&mut self, _id: u32, _axes: &[(u32, f32)], buttons: &[(u32, bool)]) -> Result<()> {
+        fn mouse_button(&mut self, _b: u8, _p: bool) -> Result<()> {
+            Ok(())
+        }
+        fn mouse_motion(&mut self, _dx: i32, _dy: i32) -> Result<()> {
+            Ok(())
+        }
+        fn mouse_absolute(&mut self, _x: f32, _y: f32) -> Result<()> {
+            Ok(())
+        }
+        fn scroll(&mut self, _dx: f32, _dy: f32) -> Result<()> {
+            Ok(())
+        }
+        fn gamepad(
+            &mut self,
+            _id: u32,
+            _axes: &[(u32, f32)],
+            buttons: &[(u32, bool)],
+        ) -> Result<()> {
             for &(btn, pressed) in buttons {
                 self.buttons.push((btn, pressed));
             }
@@ -223,9 +237,9 @@ mod tests {
         let mock = MockInjector::new();
         let mut injector = MappedInjector::new(mock, map);
 
-        injector.key(1, true).unwrap();  // 1 → 2
-        injector.key(3, true).unwrap();  // blocked, nothing injected
-        injector.key(5, true).unwrap();  // passthrough
+        injector.key(1, true).unwrap(); // 1 → 2
+        injector.key(3, true).unwrap(); // blocked, nothing injected
+        injector.key(5, true).unwrap(); // passthrough
 
         assert_eq!(injector.inner.keys, vec![(2, true), (5, true)]);
     }
@@ -234,12 +248,14 @@ mod tests {
     fn mapped_injector_remaps_gamepad_buttons() {
         let mut map = InputMap::new("gamepad");
         map.remap_button(0, Some(1)); // A → B
-        map.remap_button(2, None);    // X blocked
+        map.remap_button(2, None); // X blocked
 
         let mock = MockInjector::new();
         let mut injector = MappedInjector::new(mock, map);
 
-        injector.gamepad(0, &[], &[(0, true), (1, true), (2, true)]).unwrap();
+        injector
+            .gamepad(0, &[], &[(0, true), (1, true), (2, true)])
+            .unwrap();
         // button 0→1, button 1 pass-through, button 2 blocked
         assert_eq!(injector.inner.buttons, vec![(1, true), (1, true)]);
     }

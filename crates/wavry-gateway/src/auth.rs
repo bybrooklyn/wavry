@@ -765,6 +765,12 @@ pub async fn logout(
         return error_response(StatusCode::BAD_REQUEST, "Invalid session token");
     }
 
+    let post_auth_key = format!("logout:{}:{}", client_ip, security::hash_token(&token));
+    if !security::allow_post_auth_request(&post_auth_key) {
+        AUTH_METRICS.rate_limited.fetch_add(1, Ordering::Relaxed);
+        return error_response(StatusCode::TOO_MANY_REQUESTS, "Too many logout requests");
+    }
+
     match db::revoke_session(&pool, &token).await {
         Ok(revoked) => {
             AUTH_METRICS.logout_success.fetch_add(1, Ordering::Relaxed);

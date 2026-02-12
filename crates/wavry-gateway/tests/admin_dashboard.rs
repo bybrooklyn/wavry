@@ -98,6 +98,24 @@ async fn setup_test_db() -> SqlitePool {
     .await
     .expect("Failed to create relay_stats table");
 
+    sqlx::query(
+        r#"
+        CREATE TABLE IF NOT EXISTS admin_audit_log (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            action TEXT NOT NULL,
+            target_type TEXT NOT NULL,
+            target_id TEXT,
+            outcome TEXT NOT NULL,
+            actor_ip_hash TEXT NOT NULL,
+            details TEXT,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+        "#,
+    )
+    .execute(&pool)
+    .await
+    .expect("Failed to create admin_audit_log table");
+
     pool
 }
 
@@ -403,4 +421,30 @@ async fn test_admin_overview_data_structure() {
     assert_eq!(recent_users.len(), 2);
     assert_eq!(recent_sessions.len(), 2);
     assert_eq!(active_bans.len(), 1);
+}
+
+#[tokio::test]
+async fn test_admin_audit_log_insert_and_list() {
+    let pool = setup_test_db().await;
+
+    db::insert_admin_audit(
+        &pool,
+        "ban_user",
+        "user",
+        Some("user-123"),
+        "success",
+        "0123456789abcdef",
+        Some("test reason"),
+    )
+    .await
+    .expect("Failed to insert admin audit row");
+
+    let rows = db::list_recent_admin_audit(&pool, 10)
+        .await
+        .expect("Failed to list admin audit rows");
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].action, "ban_user");
+    assert_eq!(rows[0].target_type, "user");
+    assert_eq!(rows[0].target_id.as_deref(), Some("user-123"));
+    assert_eq!(rows[0].outcome, "success");
 }

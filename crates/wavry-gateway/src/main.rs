@@ -247,6 +247,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/metrics/auth", get(auth::metrics))
         .route("/admin", get(admin::admin_panel))
         .route("/admin/api/overview", get(admin::admin_overview))
+        .route("/admin/api/audit", get(admin::admin_audit))
         .route(
             "/admin/api/sessions/revoke",
             post(admin::admin_revoke_session),

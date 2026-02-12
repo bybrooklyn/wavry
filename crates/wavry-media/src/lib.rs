@@ -257,7 +257,7 @@ pub use mac_input_injector::MacInputInjector;
 #[cfg(target_os = "macos")]
 mod mac_audio_capturer;
 #[cfg(target_os = "macos")]
-pub use mac_audio_capturer::MacAudioCapturer;
+pub use mac_audio_capturer::{MacAudioCapturer, MacAudioRoute};
 
 #[cfg(target_os = "macos")]
 mod mac_audio_renderer;

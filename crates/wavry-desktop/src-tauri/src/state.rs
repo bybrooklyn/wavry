@@ -1,5 +1,6 @@
 use std::sync::{atomic::AtomicU32, Arc, Mutex};
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::{broadcast, mpsc, oneshot};
+use wavry_client::FileTransferCommand;
 
 /// Global session state for the desktop app
 pub struct SessionState {
@@ -12,6 +13,7 @@ pub struct SessionState {
 pub struct ClientSessionState {
     pub stop_tx: Option<oneshot::Sender<()>>,
     pub monitor_tx: Option<mpsc::UnboundedSender<u32>>,
+    pub file_command_tx: Option<broadcast::Sender<FileTransferCommand>>,
 }
 
 pub struct AuthState {

@@ -819,6 +819,10 @@ pub async fn run_client(params: ClientSessionParams) -> Result<()> {
         vr_adapter: None,
         runtime_stats: Some(runtime_stats.clone()),
         recorder_config: None,
+        send_files: Vec::new(),
+        file_out_dir: std::path::PathBuf::from("received-files"),
+        file_max_bytes: wavry_common::file_transfer::DEFAULT_MAX_FILE_BYTES,
+        file_command_bus: None,
     };
 
     // Factory

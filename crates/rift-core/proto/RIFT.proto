@@ -145,6 +145,28 @@ message ClipboardMessage {
     string text = 1;
 }
 
+message FileHeader {
+    uint64 file_id = 1;
+    string filename = 2;
+    uint64 file_size = 3;
+    string checksum_sha256 = 4;
+    uint32 chunk_size = 5;
+    uint32 total_chunks = 6;
+}
+
+message FileStatus {
+    enum Status {
+        PENDING = 0;
+        IN_PROGRESS = 1;
+        COMPLETE = 2;
+        ERROR = 3;
+    }
+
+    uint64 file_id = 1;
+    Status status = 2;
+    string message = 3;
+}
+
 message ControlMessage {
     oneof content {
         Hello hello = 1;
@@ -162,6 +184,8 @@ message ControlMessage {
         VrTiming vr_timing = 13;
         HandPoseUpdate hand_pose_update = 14;
         ClipboardMessage clipboard = 15;
+        FileHeader file_header = 16;
+        FileStatus file_status = 17;
     }
 }
 
@@ -242,11 +266,18 @@ message FecPacket {
     bytes payload = 5;
 }
 
+message FileChunk {
+    uint64 file_id = 1;
+    uint32 chunk_index = 2;
+    bytes payload = 3;
+}
+
 message MediaMessage {
     oneof content {
         VideoChunk video = 1;
         FecPacket fec = 2;
         AudioPacket audio = 3;
+        FileChunk file_chunk = 4;
     }
 }
 

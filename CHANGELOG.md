@@ -25,7 +25,21 @@ All notable changes to the Wavry project.
 - Clippy: `width % 2 == 0` → `width.is_multiple_of(2)`, `assert_eq!(x, true)` → `assert!(x)`, `!hash.is_empty()` in gateway tests, unused import `Ordering` and `OPUS_BITRATE_BPS` in windows encoder.
 - Missing `use std::sync::{Arc, Mutex}` import in `wavry-desktop/src-tauri/src/commands.rs`.
 
-## [Unreleased] - 2026-02-10
+## [Unreleased] - 2026-02-11
+
+### Added
+- **RIFT file transfer protocol support**: `FileHeader`, `FileStatus`, and `FileChunk` messages were added to the RIFT schema, with shared send/receive helpers in `wavry-common::file_transfer` (checksum verification, safe filename normalization, chunk validation, and integrity checks).
+- **Host/client file transfer integration**: `wavry-server` and `wavry-client` now support bidirectional file transfer over the encrypted control/media channels using chunked payloads and transfer status messages.
+- **File transfer control loop hardening**: Added pause/resume/retry/cancel command handling via `FileStatus` messages, duplicate-header resume negotiation (`resume_chunk=`), and progress-based retransmit hints so senders can rewind when receivers detect gaps.
+- **Server audio source routing controls**: `wavry-server` now accepts `--audio-source` (`system`, `microphone`, `app:<name>`, `disabled`) and forwards captured audio in the main media loop. Unsupported route modes currently fall back to system mix with explicit warnings.
+- **Gateway admin audit log**: Added `admin_audit_log` migration, DB accessors, and `GET /admin/api/audit` endpoint. Admin actions (ban, unban, revoke session) are now persisted with hashed actor IP metadata and outcome details.
+- **Admin dashboard audit panel**: The built-in `/admin` page now renders recent audit events and actively loads full history via `/admin/api/audit`.
+- **Quality Gates CI workflow**: Added `.github/workflows/quality-gates.yml` to enforce `cargo fmt --check`, `cargo clippy -D warnings`, `cargo test`, tiered tarpaulin coverage, and a fuzz-smoke decode test.
+
+### Changed
+- **Post-auth rate limiting**: Added a dedicated post-auth limiter path and enforced it on logout to reduce token abuse and high-rate revocation churn.
+- **File transfer fairness defaults**: Added token-bucket pacing and bitrate-share caps (`WAVRY_FILE_TRANSFER_SHARE_PERCENT`, `WAVRY_FILE_TRANSFER_MIN_KBPS`, `WAVRY_FILE_TRANSFER_MAX_KBPS`) on `wavry-server`, plus matching client-side pacing defaults derived from negotiated bitrate.
+- **Test suite expansion**: Added file-transfer unit/integration-style tests in `wavry-common`, gateway admin-audit tests, and protocol fuzz-smoke tests in `rift-core/tests/fuzz_decode.rs`.
 
 ### Fixed
 - **GitHub Actions Workflows**: Fixed critical build pipeline issues:

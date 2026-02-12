@@ -23,6 +23,7 @@ pub struct AdminOverview {
     recent_users: Vec<db::AdminUserRow>,
     recent_sessions: Vec<db::AdminSessionRow>,
     active_bans: Vec<db::AdminBannedUserRow>,
+    recent_admin_events: Vec<db::AdminAuditRow>,
 }
 
 #[derive(Deserialize)]
@@ -105,6 +106,36 @@ fn assert_admin(headers: &HeaderMap) -> Result<(), AdminAuthError> {
 fn check_admin_rate_limit(addr: SocketAddr) -> bool {
     let key = format!("admin:{}", addr.ip());
     security::allow_auth_request(&key)
+}
+
+fn admin_ip_hash(addr: SocketAddr) -> String {
+    let digest = security::hash_token(&addr.ip().to_string());
+    digest.chars().take(16).collect()
+}
+
+async fn log_admin_action(
+    pool: &SqlitePool,
+    action: &str,
+    target_type: &str,
+    target_id: Option<&str>,
+    outcome: &str,
+    addr: SocketAddr,
+    details: Option<&str>,
+) {
+    let ip_hash = admin_ip_hash(addr);
+    if let Err(err) = db::insert_admin_audit(
+        pool,
+        action,
+        target_type,
+        target_id,
+        outcome,
+        &ip_hash,
+        details,
+    )
+    .await
+    {
+        tracing::warn!("failed to write admin audit event: {}", err);
+    }
 }
 
 pub async fn admin_panel() -> impl IntoResponse {
@@ -211,6 +242,19 @@ pub async fn admin_overview(
         }
     };
 
+    let recent_admin_events = match db::list_recent_admin_audit(&pool, 50).await {
+        Ok(v) => v,
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(AdminError {
+                    error: format!("failed to list admin audit events: {e}"),
+                }),
+            )
+                .into_response();
+        }
+    };
+
     let payload = AdminOverview {
         users_total,
         sessions_total,
@@ -218,9 +262,44 @@ pub async fn admin_overview(
         recent_users,
         recent_sessions,
         active_bans,
+        recent_admin_events,
     };
 
     (StatusCode::OK, Json(payload)).into_response()
+}
+
+pub async fn admin_audit(
+    headers: HeaderMap,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    State(pool): State<SqlitePool>,
+) -> impl IntoResponse {
+    if !check_admin_rate_limit(addr) {
+        return (
+            StatusCode::TOO_MANY_REQUESTS,
+            Json(AdminError {
+                error: "Too many admin requests".to_string(),
+            }),
+        )
+            .into_response();
+    }
+
+    if let Err(err) = assert_admin(&headers) {
+        return match err {
+            AdminAuthError::Disabled => unauthorized("admin panel disabled: set ADMIN_PANEL_TOKEN"),
+            AdminAuthError::Invalid => unauthorized("invalid admin token"),
+        };
+    }
+
+    match db::list_recent_admin_audit(&pool, 200).await {
+        Ok(events) => (StatusCode::OK, Json(events)).into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(AdminError {
+                error: format!("failed to list admin audit events: {e}"),
+            }),
+        )
+            .into_response(),
+    }
 }
 
 pub async fn admin_revoke_session(
@@ -247,14 +326,40 @@ pub async fn admin_revoke_session(
     }
 
     match db::revoke_session(&pool, &payload.token).await {
-        Ok(revoked) => (StatusCode::OK, Json(RevokeSessionResponse { revoked })).into_response(),
-        Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(AdminError {
-                error: format!("failed to revoke session: {e}"),
-            }),
-        )
-            .into_response(),
+        Ok(revoked) => {
+            let token_hash = security::hash_token(&payload.token);
+            log_admin_action(
+                &pool,
+                "revoke_session",
+                "session",
+                Some(&token_hash),
+                if revoked { "success" } else { "not_found" },
+                addr,
+                None,
+            )
+            .await;
+            (StatusCode::OK, Json(RevokeSessionResponse { revoked })).into_response()
+        }
+        Err(e) => {
+            let token_hash = security::hash_token(&payload.token);
+            log_admin_action(
+                &pool,
+                "revoke_session",
+                "session",
+                Some(&token_hash),
+                "error",
+                addr,
+                Some(&e.to_string()),
+            )
+            .await;
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(AdminError {
+                    error: format!("failed to revoke session: {e}"),
+                }),
+            )
+                .into_response()
+        }
     }
 }
 
@@ -286,14 +391,38 @@ pub async fn admin_ban_user(
         .map(|h| chrono::Utc::now() + chrono::Duration::hours(h));
 
     match db::ban_user(&pool, &payload.user_id, &payload.reason, expires_at).await {
-        Ok(_) => (StatusCode::OK, Json(SimpleAdminResponse { success: true })).into_response(),
-        Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(AdminError {
-                error: format!("failed to ban user: {e}"),
-            }),
-        )
-            .into_response(),
+        Ok(_) => {
+            log_admin_action(
+                &pool,
+                "ban_user",
+                "user",
+                Some(&payload.user_id),
+                "success",
+                addr,
+                Some(&payload.reason),
+            )
+            .await;
+            (StatusCode::OK, Json(SimpleAdminResponse { success: true })).into_response()
+        }
+        Err(e) => {
+            log_admin_action(
+                &pool,
+                "ban_user",
+                "user",
+                Some(&payload.user_id),
+                "error",
+                addr,
+                Some(&e.to_string()),
+            )
+            .await;
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(AdminError {
+                    error: format!("failed to ban user: {e}"),
+                }),
+            )
+                .into_response()
+        }
     }
 }
 
@@ -321,14 +450,38 @@ pub async fn admin_unban_user(
     }
 
     match db::unban_user(&pool, &payload.user_id).await {
-        Ok(_) => (StatusCode::OK, Json(SimpleAdminResponse { success: true })).into_response(),
-        Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(AdminError {
-                error: format!("failed to unban user: {e}"),
-            }),
-        )
-            .into_response(),
+        Ok(_) => {
+            log_admin_action(
+                &pool,
+                "unban_user",
+                "user",
+                Some(&payload.user_id),
+                "success",
+                addr,
+                None,
+            )
+            .await;
+            (StatusCode::OK, Json(SimpleAdminResponse { success: true })).into_response()
+        }
+        Err(e) => {
+            log_admin_action(
+                &pool,
+                "unban_user",
+                "user",
+                Some(&payload.user_id),
+                "error",
+                addr,
+                Some(&e.to_string()),
+            )
+            .await;
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(AdminError {
+                    error: format!("failed to unban user: {e}"),
+                }),
+            )
+                .into_response()
+        }
     }
 }
 
@@ -373,6 +526,9 @@ const ADMIN_HTML: &str = r#"<!doctype html>
   <h3>Active Bans</h3>
   <table id=\"bansTable\"><thead><tr><th>Username</th><th>Reason</th><th>Expires</th><th>Actions</th></tr></thead><tbody></tbody></table>
 
+  <h3>Admin Audit Events</h3>
+  <table id=\"auditTable\"><thead><tr><th>When</th><th>Action</th><th>Target</th><th>Outcome</th><th>Actor IP Hash</th><th>Details</th></tr></thead><tbody></tbody></table>
+
   <script>
     function appendCell(row, value) {
       const cell = document.createElement('td');
@@ -396,6 +552,32 @@ const ADMIN_HTML: &str = r#"<!doctype html>
         return false;
       }
       return true;
+    }
+
+    function renderAuditEvents(events) {
+      const auditBody = document.querySelector('#auditTable tbody');
+      auditBody.innerHTML = '';
+      for (const ev of events || []) {
+        const row = document.createElement('tr');
+        appendCell(row, ev.created_at);
+        appendCell(row, ev.action);
+        appendCell(row, `${ev.target_type}${ev.target_id ? ':' + ev.target_id : ''}`);
+        appendCell(row, ev.outcome);
+        appendCell(row, ev.actor_ip_hash);
+        appendCell(row, ev.details || '');
+        auditBody.appendChild(row);
+      }
+    }
+
+    async function loadAuditEvents(token) {
+      const res = await fetch('/admin/api/audit', {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      if (!res.ok) {
+        throw new Error(await res.text());
+      }
+      const events = await res.json();
+      renderAuditEvents(events);
     }
 
     async function revokeSession(token) {
@@ -489,6 +671,15 @@ const ADMIN_HTML: &str = r#"<!doctype html>
         actionCell.appendChild(unbanBtn);
         row.appendChild(actionCell);
         bansBody.appendChild(row);
+      }
+
+      if (Array.isArray(data.recent_admin_events)) {
+        renderAuditEvents(data.recent_admin_events);
+      }
+      try {
+        await loadAuditEvents(token);
+      } catch (err) {
+        console.warn('Failed to load admin audit events', err);
       }
     }
 

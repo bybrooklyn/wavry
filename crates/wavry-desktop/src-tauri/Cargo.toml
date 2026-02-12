@@ -1,6 +1,6 @@
 [package]
 name = "wavry-desktop"
-version = "0.0.3-rc1"
+version = "0.0.4-canary"
 description = "A Tauri App"
 authors = ["you"]
 edition = "2021"
@@ -16,6 +16,12 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
+
+[features]
+# Keep the app on bundled assets outside `tauri dev`.
+default = ["custom-protocol"]
+# `tauri dev` disables default features automatically.
+custom-protocol = ["tauri/custom-protocol"]
 
 [dependencies]
 tauri = { version = "2", features = [] }

@@ -34,6 +34,10 @@ pub const RIFT_MAGIC: [u8; 2] = [0x52, 0x49]; // 'RI'
 /// Maximum clipboard text size accepted from the network (1 MiB).
 /// Prevents memory exhaustion from malformed or malicious ClipboardMessage payloads.
 pub const MAX_CLIPBOARD_TEXT_BYTES: usize = 1024 * 1024;
+/// Default maximum file size accepted over file-transfer messages (1 GiB).
+pub const MAX_FILE_TRANSFER_BYTES: u64 = 1024 * 1024 * 1024;
+/// Default chunk payload size for file transfer.
+pub const DEFAULT_FILE_CHUNK_BYTES: usize = 900;
 
 #[derive(Debug, thiserror::Error)]
 pub enum RiftError {

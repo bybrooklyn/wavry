@@ -240,7 +240,15 @@ jobs:
         shell: bash
         run: |
           mkdir -p ci-artifacts/desktop
-          dmg_path="$(find crates/wavry-desktop/src-tauri/target/release/bundle/dmg -maxdepth 1 -type f -name "*.dmg" | head -n 1)"
+          dmg_path=""
+          for root in "target/release" "crates/wavry-desktop/src-tauri/target/release"; do
+            if [[ -d "$root/bundle/dmg" ]]; then
+              dmg_path="$(find "$root/bundle/dmg" -maxdepth 1 -type f -name "*.dmg" | head -n 1)"
+              if [[ -n "$dmg_path" ]]; then
+                break
+              fi
+            fi
+          done
           if [[ -z "$dmg_path" ]]; then
             echo "No desktop DMG found in bundle output" >&2
             exit 1
@@ -251,12 +259,23 @@ jobs:
         shell: bash
         run: |
           mkdir -p ci-artifacts/desktop
-          for name in wavry-desktop wavry_desktop; do
-            if [[ -f "crates/wavry-desktop/src-tauri/target/release/${name}${{ matrix.exe }}" ]]; then
-              cp "crates/wavry-desktop/src-tauri/target/release/${name}${{ matrix.exe }}" "ci-artifacts/desktop/wavry-desktop-${{ matrix.suffix }}${{ matrix.exe }}"
+          found=""
+          for root in "target/release" "crates/wavry-desktop/src-tauri/target/release"; do
+            for name in wavry-desktop wavry_desktop; do
+              if [[ -f "$root/${name}${{ matrix.exe }}" ]]; then
+                cp "$root/${name}${{ matrix.exe }}" "ci-artifacts/desktop/wavry-desktop-${{ matrix.suffix }}${{ matrix.exe }}"
+                found="1"
+                break
+              fi
+            done
+            if [[ -n "$found" ]]; then
               break
             fi
           done
+          if [[ -z "$found" ]]; then
+            echo "No desktop binary found in expected output paths" >&2
+            exit 1
+          fi
       - name: Upload
         uses: actions/upload-artifact@v4
         with:

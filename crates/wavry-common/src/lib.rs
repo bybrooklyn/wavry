@@ -5,6 +5,7 @@
 #![forbid(unsafe_code)]
 
 pub mod error;
+pub mod file_transfer;
 pub mod helpers;
 pub mod protocol;
 

@@ -6,7 +6,7 @@ use crate::secure_storage;
 use crate::state::{AuthState, AUTH_STATE, CLIENT_SESSION_STATE, SESSION_STATE};
 use std::net::SocketAddr;
 use std::str::FromStr;
-use wavry_client::ClientConfig;
+use wavry_client::{ClientConfig, FileTransferAction, FileTransferCommand};
 use wavry_media::CapabilityProbe;
 
 #[cfg(target_os = "macos")]
@@ -276,6 +276,10 @@ pub async fn start_session(
         vr_adapter: None,
         runtime_stats: None,
         recorder_config: None,
+        send_files: Vec::new(),
+        file_out_dir: std::path::PathBuf::from("received-files"),
+        file_max_bytes: 1_073_741_824,
+        file_command_bus: None,
     };
 
     spawn_client_session(config)?;
@@ -296,6 +300,29 @@ pub async fn stop_session() -> Result<String, String> {
     } else {
         Err("No active client session".into())
     }
+}
+
+#[tauri::command]
+pub fn send_file_transfer_command(file_id: u64, action: String) -> Result<String, String> {
+    let action = action
+        .parse::<FileTransferAction>()
+        .map_err(|e| e.to_string())?;
+    let tx = {
+        let state = CLIENT_SESSION_STATE.lock().unwrap();
+        state.as_ref().and_then(|s| s.file_command_tx.clone())
+    };
+
+    let Some(tx) = tx else {
+        return Err("No active client session".into());
+    };
+
+    tx.send(FileTransferCommand { file_id, action })
+        .map_err(|e| format!("failed to enqueue file transfer command: {}", e))?;
+
+    Ok(format!(
+        "queued file transfer command: file_id={} action={}",
+        file_id, action
+    ))
 }
 
 #[tauri::command]
@@ -473,6 +500,10 @@ pub async fn connect_via_id(target_username: String) -> Result<String, String> {
                         vr_adapter: None,
                         runtime_stats: None,
                         recorder_config: None,
+                        send_files: Vec::new(),
+                        file_out_dir: std::path::PathBuf::from("received-files"),
+                        file_max_bytes: 1_073_741_824,
+                        file_command_bus: None,
                     };
 
                     spawn_client_session(config)?;

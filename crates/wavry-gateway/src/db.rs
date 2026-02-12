@@ -56,6 +56,18 @@ pub struct AdminSessionRow {
     pub created_at: DateTime<Utc>,
 }
 
+#[derive(Debug, Serialize, Deserialize, sqlx::FromRow)]
+pub struct AdminAuditRow {
+    pub id: i64,
+    pub action: String,
+    pub target_type: String,
+    pub target_id: Option<String>,
+    pub outcome: String,
+    pub actor_ip_hash: String,
+    pub details: Option<String>,
+    pub created_at: DateTime<Utc>,
+}
+
 // DB Operations
 
 pub async fn create_user(
@@ -356,6 +368,58 @@ pub async fn list_active_bans(pool: &SqlitePool) -> anyhow::Result<Vec<AdminBann
         ORDER BY b.created_at DESC
         "#,
     )
+    .fetch_all(pool)
+    .await?;
+    Ok(rows)
+}
+
+pub async fn insert_admin_audit(
+    pool: &SqlitePool,
+    action: &str,
+    target_type: &str,
+    target_id: Option<&str>,
+    outcome: &str,
+    actor_ip_hash: &str,
+    details: Option<&str>,
+) -> anyhow::Result<()> {
+    sqlx::query(
+        r#"
+        INSERT INTO admin_audit_log (action, target_type, target_id, outcome, actor_ip_hash, details)
+        VALUES (?, ?, ?, ?, ?, ?)
+        "#,
+    )
+    .bind(action)
+    .bind(target_type)
+    .bind(target_id)
+    .bind(outcome)
+    .bind(actor_ip_hash)
+    .bind(details)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+pub async fn list_recent_admin_audit(
+    pool: &SqlitePool,
+    limit: i64,
+) -> anyhow::Result<Vec<AdminAuditRow>> {
+    let rows = sqlx::query_as::<_, AdminAuditRow>(
+        r#"
+        SELECT
+            id,
+            action,
+            target_type,
+            target_id,
+            outcome,
+            actor_ip_hash,
+            details,
+            created_at
+        FROM admin_audit_log
+        ORDER BY created_at DESC, id DESC
+        LIMIT ?
+        "#,
+    )
+    .bind(limit)
     .fetch_all(pool)
     .await?;
     Ok(rows)

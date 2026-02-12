@@ -500,6 +500,17 @@ export class AppState {
             this.hostErrorMessage = "";
         }
     }
+
+    async sendFileTransferCommand(fileId: number, action: "pause" | "resume" | "cancel" | "retry") {
+        if (!Number.isInteger(fileId) || fileId <= 0) {
+            throw new Error("File ID must be a positive integer.");
+        }
+        const response = await invoke<string>("send_file_transfer_command", {
+            file_id: fileId,
+            action,
+        });
+        return response;
+    }
 }
 
 export const appState = new AppState();

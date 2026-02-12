@@ -4,6 +4,10 @@ use tokio::sync::mpsc;
 #[cfg(target_os = "macos")]
 use block2::RcBlock;
 #[cfg(target_os = "macos")]
+use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
+#[cfg(target_os = "macos")]
+use cpal::{BufferSize, SampleFormat, SampleRate, Stream, StreamConfig, SupportedBufferSize};
+#[cfg(target_os = "macos")]
 use dispatch2::{DispatchObject, DispatchRetained};
 #[cfg(target_os = "macos")]
 use objc2::msg_send;
@@ -26,14 +30,16 @@ use objc2_core_media::{
     CMBlockBuffer, CMSampleBuffer, CMTime,
 };
 #[cfg(target_os = "macos")]
-use objc2_foundation::{NSError, NSObject, NSObjectProtocol};
+use objc2_foundation::{NSArray, NSError, NSObject, NSObjectProtocol};
 #[cfg(target_os = "macos")]
 use objc2_screen_capture_kit::{
-    SCContentFilter, SCShareableContent, SCStream, SCStreamConfiguration, SCStreamOutput,
-    SCStreamOutputType,
+    SCContentFilter, SCRunningApplication, SCShareableContent, SCStream, SCStreamConfiguration,
+    SCStreamOutput, SCStreamOutputType,
 };
 use std::collections::VecDeque;
 use std::ptr::NonNull;
+#[cfg(target_os = "macos")]
+use std::sync::{Arc, Mutex};
 #[cfg(target_os = "macos")]
 use std::time::Instant;
 #[cfg(target_os = "macos")]
@@ -45,6 +51,14 @@ use crate::audio::{
 #[cfg(feature = "opus-support")]
 use crate::audio::{OPUS_BITRATE_BPS, OPUS_FRAME_SAMPLES, OPUS_MAX_PACKET_BYTES};
 use crate::EncodedFrame;
+
+#[cfg(target_os = "macos")]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MacAudioRoute {
+    SystemMix,
+    Microphone,
+    Application(String),
+}
 
 #[cfg(target_os = "macos")]
 #[cfg(feature = "opus-support")]
@@ -271,6 +285,7 @@ async fn get_shareable_content() -> Result<SendRetained<SCShareableContent>> {
 fn setup_stream(
     content: Retained<SCShareableContent>,
     output_handler: &AudioHandler,
+    route: &MacAudioRoute,
 ) -> Result<StreamSetupResult> {
     let queue = dispatch2::DispatchQueue::new("com.wavry.audio-capture", None);
     let queue_ptr = queue.as_raw().as_ptr();
@@ -282,12 +297,45 @@ fn setup_stream(
     }
     let display = displays.objectAtIndex(0);
 
-    let filter = unsafe {
-        SCContentFilter::initWithDisplay_excludingWindows(
-            SCContentFilter::alloc(),
-            &display,
-            &objc2_foundation::NSArray::new(),
-        )
+    let empty_windows = NSArray::new();
+    let filter = match route {
+        MacAudioRoute::SystemMix => unsafe {
+            SCContentFilter::initWithDisplay_excludingWindows(
+                SCContentFilter::alloc(),
+                &display,
+                &empty_windows,
+            )
+        },
+        MacAudioRoute::Application(app_filter) => {
+            let selected =
+                find_running_app_by_name_or_bundle(&content, app_filter).ok_or_else(|| {
+                    anyhow!(
+                        "application audio source '{}' not found in shareable application list",
+                        app_filter
+                    )
+                })?;
+            let selected_name = unsafe { selected.applicationName() }.to_string();
+            let selected_bundle = unsafe { selected.bundleIdentifier() }.to_string();
+            log::info!(
+                "capturing app-specific macOS audio route: {} ({})",
+                selected_name,
+                selected_bundle
+            );
+            let selected_array = NSArray::from_slice(&[&*selected]);
+            unsafe {
+                SCContentFilter::initWithDisplay_includingApplications_exceptingWindows(
+                    SCContentFilter::alloc(),
+                    &display,
+                    &selected_array,
+                    &empty_windows,
+                )
+            }
+        }
+        MacAudioRoute::Microphone => {
+            return Err(anyhow!(
+                "microphone route must be initialized via microphone capture path"
+            ));
+        }
     };
 
     let stream_config = unsafe { SCStreamConfiguration::new() };
@@ -344,6 +392,29 @@ fn setup_stream(
     }
 
     Ok((SendRetained(stream), queue, rx_start))
+}
+
+#[cfg(target_os = "macos")]
+fn find_running_app_by_name_or_bundle(
+    content: &SCShareableContent,
+    query: &str,
+) -> Option<Retained<SCRunningApplication>> {
+    let normalized = query.trim().to_ascii_lowercase();
+    if normalized.is_empty() {
+        return None;
+    }
+    let apps = unsafe { content.applications() };
+    for index in 0..apps.count() {
+        let app = apps.objectAtIndex(index);
+        let name = unsafe { app.applicationName() }.to_string();
+        let bundle = unsafe { app.bundleIdentifier() }.to_string();
+        let name_match = name.to_ascii_lowercase().contains(&normalized);
+        let bundle_match = bundle.to_ascii_lowercase().contains(&normalized);
+        if name_match || bundle_match {
+            return Some(app.retain());
+        }
+    }
+    None
 }
 
 #[cfg(target_os = "macos")]
@@ -518,13 +589,238 @@ fn read_sample_i16(
     Some(sample)
 }
 
+#[cfg(target_os = "macos")]
+fn build_audio_context(tx: mpsc::Sender<EncodedFrame>) -> Result<AudioContext> {
+    #[cfg(feature = "opus-support")]
+    {
+        let encoder = create_opus_encoder()?;
+        Ok(AudioContext {
+            tx,
+            start_time: Instant::now(),
+            encoder,
+            pcm: VecDeque::with_capacity(AUDIO_MAX_BUFFER_SAMPLES),
+            next_timestamp_us: None,
+            frame_duration_us: opus_frame_duration_us(),
+            channels: OPUS_CHANNELS,
+        })
+    }
+
+    #[cfg(not(feature = "opus-support"))]
+    {
+        Ok(AudioContext {
+            tx,
+            start_time: Instant::now(),
+            pcm: VecDeque::with_capacity(AUDIO_MAX_BUFFER_SAMPLES),
+            next_timestamp_us: None,
+            frame_duration_us: opus_frame_duration_us(),
+            channels: OPUS_CHANNELS,
+        })
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn select_input_config(device: &cpal::Device) -> Result<(StreamConfig, SampleFormat)> {
+    let mut preferred: Option<(StreamConfig, SampleFormat, u16)> = None;
+    let configs = device
+        .supported_input_configs()
+        .map_err(|e| anyhow!("audio input config query failed: {}", e))?;
+
+    for cfg in configs {
+        let channels = cfg.channels();
+        if channels == 0 {
+            continue;
+        }
+        let min = cfg.min_sample_rate().0;
+        let max = cfg.max_sample_rate().0;
+        if min <= OPUS_SAMPLE_RATE && max >= OPUS_SAMPLE_RATE {
+            let mut config = cfg.with_sample_rate(SampleRate(OPUS_SAMPLE_RATE)).config();
+            if let SupportedBufferSize::Range { min, max } = cfg.buffer_size() {
+                let desired = OPUS_FRAME_SAMPLES as u32;
+                config.buffer_size = BufferSize::Fixed(desired.clamp(*min, *max));
+            }
+            if channels == OPUS_CHANNELS as u16 {
+                return Ok((config, cfg.sample_format()));
+            }
+            preferred = Some((config, cfg.sample_format(), channels));
+        }
+    }
+
+    if let Some((config, format, channels)) = preferred {
+        log::info!(
+            "microphone route using {}-channel input (will map to {} channels)",
+            channels,
+            OPUS_CHANNELS
+        );
+        return Ok((config, format));
+    }
+
+    let fallback = device
+        .default_input_config()
+        .map_err(|e| anyhow!("default microphone config error: {}", e))?;
+    Ok((fallback.config(), fallback.sample_format()))
+}
+
+#[cfg(target_os = "macos")]
+fn ingest_mic_callback_frames(
+    context: &Arc<Mutex<AudioContext>>,
+    frames: usize,
+    mut sample_for: impl FnMut(usize, usize) -> i16,
+) {
+    if frames == 0 {
+        return;
+    }
+
+    let mut interleaved = Vec::with_capacity(frames * OPUS_CHANNELS);
+    for frame in 0..frames {
+        let left = sample_for(frame, 0);
+        let right = if OPUS_CHANNELS > 1 {
+            sample_for(frame, 1)
+        } else {
+            left
+        };
+        interleaved.push(left);
+        if OPUS_CHANNELS > 1 {
+            interleaved.push(right);
+        }
+    }
+
+    let mut guard = match context.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    let timestamp_us = guard.start_time.elapsed().as_micros() as u64;
+    guard.ingest_chunk(PcmChunk {
+        timestamp_us,
+        samples: interleaved,
+    });
+}
+
+#[cfg(target_os = "macos")]
+fn f32_to_i16(value: f32) -> i16 {
+    (value.clamp(-1.0, 1.0) * i16::MAX as f32) as i16
+}
+
+#[cfg(target_os = "macos")]
+fn u16_to_i16(value: u16) -> i16 {
+    let normalized = (value as f32 / u16::MAX as f32) * 2.0 - 1.0;
+    f32_to_i16(normalized)
+}
+
+#[cfg(target_os = "macos")]
+fn build_input_stream_f32(
+    device: &cpal::Device,
+    config: &StreamConfig,
+    input_channels: usize,
+    context: Arc<Mutex<AudioContext>>,
+    err_fn: impl FnMut(cpal::StreamError) + Send + 'static,
+) -> Result<Stream> {
+    let stream = device.build_input_stream(
+        config,
+        move |data: &[f32], _| {
+            let frames = data.len() / input_channels.max(1);
+            ingest_mic_callback_frames(&context, frames, |frame, channel| {
+                let src_channel = channel.min(input_channels.saturating_sub(1));
+                let idx = frame * input_channels + src_channel;
+                f32_to_i16(data[idx])
+            });
+        },
+        err_fn,
+        None,
+    )?;
+    Ok(stream)
+}
+
+#[cfg(target_os = "macos")]
+fn build_input_stream_i16(
+    device: &cpal::Device,
+    config: &StreamConfig,
+    input_channels: usize,
+    context: Arc<Mutex<AudioContext>>,
+    err_fn: impl FnMut(cpal::StreamError) + Send + 'static,
+) -> Result<Stream> {
+    let stream = device.build_input_stream(
+        config,
+        move |data: &[i16], _| {
+            let frames = data.len() / input_channels.max(1);
+            ingest_mic_callback_frames(&context, frames, |frame, channel| {
+                let src_channel = channel.min(input_channels.saturating_sub(1));
+                let idx = frame * input_channels + src_channel;
+                data[idx]
+            });
+        },
+        err_fn,
+        None,
+    )?;
+    Ok(stream)
+}
+
+#[cfg(target_os = "macos")]
+fn build_input_stream_u16(
+    device: &cpal::Device,
+    config: &StreamConfig,
+    input_channels: usize,
+    context: Arc<Mutex<AudioContext>>,
+    err_fn: impl FnMut(cpal::StreamError) + Send + 'static,
+) -> Result<Stream> {
+    let stream = device.build_input_stream(
+        config,
+        move |data: &[u16], _| {
+            let frames = data.len() / input_channels.max(1);
+            ingest_mic_callback_frames(&context, frames, |frame, channel| {
+                let src_channel = channel.min(input_channels.saturating_sub(1));
+                let idx = frame * input_channels + src_channel;
+                u16_to_i16(data[idx])
+            });
+        },
+        err_fn,
+        None,
+    )?;
+    Ok(stream)
+}
+
+#[cfg(target_os = "macos")]
+fn start_microphone_capture(tx: mpsc::Sender<EncodedFrame>) -> Result<Stream> {
+    let host = cpal::default_host();
+    let device = host
+        .default_input_device()
+        .ok_or_else(|| anyhow!("No microphone/input audio device available"))?;
+    let (config, sample_format) = select_input_config(&device)?;
+    let input_channels = config.channels as usize;
+    if input_channels == 0 {
+        return Err(anyhow!("invalid microphone channel count"));
+    }
+
+    let context = Arc::new(Mutex::new(build_audio_context(tx)?));
+    let err_fn = |err| {
+        log::warn!("microphone capture stream error: {}", err);
+    };
+    let stream = match sample_format {
+        SampleFormat::F32 => {
+            build_input_stream_f32(&device, &config, input_channels, context.clone(), err_fn)?
+        }
+        SampleFormat::I16 => {
+            build_input_stream_i16(&device, &config, input_channels, context.clone(), err_fn)?
+        }
+        SampleFormat::U16 => {
+            build_input_stream_u16(&device, &config, input_channels, context.clone(), err_fn)?
+        }
+        _ => return Err(anyhow!("Unsupported microphone sample format")),
+    };
+    stream
+        .play()
+        .map_err(|e| anyhow!("failed to start microphone capture stream: {}", e))?;
+    Ok(stream)
+}
+
 pub struct MacAudioCapturer {
     #[cfg(target_os = "macos")]
     _stream: Option<Retained<SCStream>>,
     #[cfg(target_os = "macos")]
     _output_handler: Option<Retained<AudioHandler>>,
     #[cfg(target_os = "macos")]
-    _queue: DispatchRetained<dispatch2::DispatchQueue>,
+    _queue: Option<DispatchRetained<dispatch2::DispatchQueue>>,
+    #[cfg(target_os = "macos")]
+    _cpal_stream: Option<Stream>,
     rx: mpsc::Receiver<EncodedFrame>,
 }
 
@@ -534,29 +830,50 @@ unsafe impl Send for MacAudioCapturer {}
 impl MacAudioCapturer {
     #[cfg(target_os = "macos")]
     pub async fn new() -> Result<Self> {
+        Self::new_with_route(MacAudioRoute::SystemMix).await
+    }
+
+    #[cfg(target_os = "macos")]
+    pub async fn new_with_route(route: MacAudioRoute) -> Result<Self> {
         let (tx, rx) = mpsc::channel(32);
-        let content = get_shareable_content().await?.0;
+        match route {
+            MacAudioRoute::Microphone => {
+                log::info!("starting macOS microphone capture route");
+                let stream = start_microphone_capture(tx)?;
+                Ok(Self {
+                    _stream: None,
+                    _output_handler: None,
+                    _queue: None,
+                    _cpal_stream: Some(stream),
+                    rx,
+                })
+            }
+            MacAudioRoute::SystemMix | MacAudioRoute::Application(_) => {
+                let content = get_shareable_content().await?.0;
 
-        #[cfg(feature = "opus-support")]
-        let output_handler = {
-            let encoder = create_opus_encoder()?;
-            AudioHandler::new(tx, encoder)
-        };
-        #[cfg(not(feature = "opus-support"))]
-        let output_handler = AudioHandler::new(tx);
+                #[cfg(feature = "opus-support")]
+                let output_handler = {
+                    let encoder = create_opus_encoder()?;
+                    AudioHandler::new(tx, encoder)
+                };
+                #[cfg(not(feature = "opus-support"))]
+                let output_handler = AudioHandler::new(tx);
 
-        let (stream, queue, rx_start) = setup_stream(content, &output_handler)?;
+                let (stream, queue, rx_start) = setup_stream(content, &output_handler, &route)?;
 
-        rx_start
-            .await
-            .map_err(|e| anyhow!("Start audio capture canceled: {}", e))??;
+                rx_start
+                    .await
+                    .map_err(|e| anyhow!("Start audio capture canceled: {}", e))??;
 
-        Ok(Self {
-            _stream: Some(stream.0),
-            _output_handler: Some(output_handler),
-            _queue: queue,
-            rx,
-        })
+                Ok(Self {
+                    _stream: Some(stream.0),
+                    _output_handler: Some(output_handler),
+                    _queue: Some(queue),
+                    _cpal_stream: None,
+                    rx,
+                })
+            }
+        }
     }
 
     #[cfg(not(target_os = "macos"))]

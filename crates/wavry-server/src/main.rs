@@ -5,6 +5,7 @@ mod host {
         collections::{HashMap, VecDeque},
         fmt,
         net::SocketAddr,
+        path::PathBuf,
         sync::Arc,
         time::Duration,
     };
@@ -18,15 +19,25 @@ mod host {
         Message as ProtoMessage, PhysicalPacket, Resolution as ProtoResolution, Role, RIFT_VERSION,
     };
     use rift_crypto::connection::SecureServer;
-    use std::path::PathBuf;
+    use wavry_common::file_transfer::{
+        FileOffer, IncomingFile, OutgoingFile, DEFAULT_CHUNK_SIZE, DEFAULT_MAX_FILE_BYTES,
+    };
     #[cfg(not(target_os = "linux"))]
     use wavry_media::DummyEncoder as VideoEncoder;
     #[cfg(target_os = "linux")]
     use wavry_media::LinuxProbe;
     #[cfg(target_os = "macos")]
+    use wavry_media::MacAudioCapturer as AudioCapturer;
+    #[cfg(target_os = "macos")]
+    use wavry_media::MacAudioRoute;
+    #[cfg(target_os = "macos")]
     use wavry_media::MacProbe;
     #[cfg(target_os = "linux")]
+    use wavry_media::PipewireAudioCapturer as AudioCapturer;
+    #[cfg(target_os = "linux")]
     use wavry_media::PipewireEncoder as VideoEncoder;
+    #[cfg(target_os = "windows")]
+    use wavry_media::WindowsAudioCapturer as AudioCapturer;
     #[cfg(target_os = "windows")]
     use wavry_media::WindowsProbe;
     use wavry_media::{
@@ -59,6 +70,11 @@ mod host {
     const DEFAULT_RESOLUTION_HEIGHT: u16 = 720;
     const MIN_STREAM_DIMENSION: u32 = 320;
     const MAX_STREAM_DIMENSION: u32 = 8192;
+    const FILE_TRANSFER_TICK_MS: u64 = 2;
+    const FILE_TRANSFER_PROGRESS_CHUNK_INTERVAL: u32 = 64;
+    const DEFAULT_FILE_TRANSFER_SHARE_PERCENT: f32 = 15.0;
+    const DEFAULT_FILE_TRANSFER_MIN_KBPS: u32 = 256;
+    const DEFAULT_FILE_TRANSFER_MAX_KBPS: u32 = 4096;
 
     #[derive(Parser, Debug)]
     #[command(name = "wavry-server")]
@@ -138,6 +154,50 @@ mod host {
         /// Recording quality (high, standard, low)
         #[arg(long, env = "WAVRY_RECORD_QUALITY", default_value = "standard")]
         record_quality: String,
+
+        /// Send file to client after session establishment (repeatable)
+        #[arg(long = "send-file", value_name = "PATH")]
+        send_files: Vec<PathBuf>,
+
+        /// Directory for incoming transferred files
+        #[arg(long, env = "WAVRY_FILE_OUT_DIR", default_value = "received-files")]
+        file_out_dir: PathBuf,
+
+        /// Maximum incoming file size in bytes
+        #[arg(
+            long,
+            env = "WAVRY_FILE_MAX_BYTES",
+            default_value_t = DEFAULT_MAX_FILE_BYTES
+        )]
+        file_max_bytes: u64,
+
+        /// Max share of current video bitrate that file transfer may consume (1-100).
+        #[arg(
+            long,
+            env = "WAVRY_FILE_TRANSFER_SHARE_PERCENT",
+            default_value_t = DEFAULT_FILE_TRANSFER_SHARE_PERCENT
+        )]
+        file_transfer_share_percent: f32,
+
+        /// Floor for transfer budget in kbps.
+        #[arg(
+            long,
+            env = "WAVRY_FILE_TRANSFER_MIN_KBPS",
+            default_value_t = DEFAULT_FILE_TRANSFER_MIN_KBPS
+        )]
+        file_transfer_min_kbps: u32,
+
+        /// Ceiling for transfer budget in kbps.
+        #[arg(
+            long,
+            env = "WAVRY_FILE_TRANSFER_MAX_KBPS",
+            default_value_t = DEFAULT_FILE_TRANSFER_MAX_KBPS
+        )]
+        file_transfer_max_kbps: u32,
+
+        /// Audio source route (`system`, `microphone`, `app:<name>`, `disabled`)
+        #[arg(long, env = "WAVRY_AUDIO_SOURCE", default_value = "system")]
+        audio_source: String,
     }
 
     #[derive(Clone, Copy, Debug)]
@@ -149,6 +209,9 @@ mod host {
         max_peers: usize,
         peer_idle_timeout: Duration,
         stats_log_interval: Duration,
+        file_transfer_share_percent: f32,
+        file_transfer_min_kbps: u32,
+        file_transfer_max_kbps: u32,
     }
 
     fn env_bool(name: &str, default: bool) -> bool {
@@ -214,6 +277,107 @@ mod host {
         client_name: Option<String>,
     }
 
+    #[derive(Debug, Clone)]
+    enum AudioRouteSource {
+        SystemMix,
+        Microphone,
+        Application(String),
+        Disabled,
+    }
+
+    impl AudioRouteSource {
+        fn parse(value: &str) -> Self {
+            let trimmed = value.trim();
+            if trimmed.eq_ignore_ascii_case("disabled") || trimmed.eq_ignore_ascii_case("off") {
+                return Self::Disabled;
+            }
+            if trimmed.eq_ignore_ascii_case("microphone") || trimmed.eq_ignore_ascii_case("mic") {
+                return Self::Microphone;
+            }
+            if let Some(app) = trimmed.strip_prefix("app:") {
+                let app = app.trim();
+                if !app.is_empty() {
+                    return Self::Application(app.to_string());
+                }
+            }
+            Self::SystemMix
+        }
+    }
+
+    struct FileTransferState {
+        outgoing: VecDeque<OutgoingFile>,
+        incoming: HashMap<u64, IncomingFile>,
+        output_dir: PathBuf,
+        max_file_bytes: u64,
+    }
+
+    impl FileTransferState {
+        fn new(send_files: &[PathBuf], output_dir: PathBuf, max_file_bytes: u64) -> Self {
+            let mut outgoing = VecDeque::new();
+            for path in send_files {
+                let file_id = random_file_id();
+                match OutgoingFile::from_path(path, file_id, DEFAULT_CHUNK_SIZE, max_file_bytes) {
+                    Ok(file) => {
+                        info!("queued file for transfer to client: {}", path.display());
+                        outgoing.push_back(file);
+                    }
+                    Err(err) => warn!("skipping file {}: {}", path.display(), err),
+                }
+            }
+            Self {
+                outgoing,
+                incoming: HashMap::new(),
+                output_dir,
+                max_file_bytes,
+            }
+        }
+    }
+
+    fn random_file_id() -> u64 {
+        loop {
+            let id = rand::random::<u64>();
+            if id != 0 {
+                return id;
+            }
+        }
+    }
+
+    fn offer_to_proto(offer: &FileOffer) -> rift_core::FileHeader {
+        rift_core::FileHeader {
+            file_id: offer.file_id,
+            filename: offer.filename.clone(),
+            file_size: offer.file_size,
+            checksum_sha256: offer.checksum_sha256.clone(),
+            chunk_size: offer.chunk_size,
+            total_chunks: offer.total_chunks,
+        }
+    }
+
+    fn offer_from_proto(header: rift_core::FileHeader, max_file_bytes: u64) -> Result<FileOffer> {
+        let offer = FileOffer {
+            file_id: header.file_id,
+            filename: header.filename,
+            file_size: header.file_size,
+            checksum_sha256: header.checksum_sha256.to_ascii_lowercase(),
+            chunk_size: header.chunk_size,
+            total_chunks: header.total_chunks,
+        };
+        wavry_common::file_transfer::validate_offer(&offer, max_file_bytes)?;
+        Ok(offer)
+    }
+
+    fn file_status_message(
+        file_id: u64,
+        status: rift_core::file_status::Status,
+        message: impl Into<String>,
+    ) -> rift_core::FileStatus {
+        rift_core::FileStatus {
+            file_id,
+            status: status as i32,
+            message: message.into(),
+        }
+    }
+
     async fn ensure_encoder(
         frame_rx: &mut Option<mpsc::Receiver<FrameIn>>,
         selected_codec: &mut Option<Codec>,
@@ -258,6 +422,82 @@ mod host {
             codec, base.display_id
         );
         Ok(())
+    }
+
+    #[cfg(target_os = "linux")]
+    fn next_audio_packet(capturer: &mut AudioCapturer) -> Result<EncodedFrame> {
+        capturer.next_packet()
+    }
+
+    #[cfg(target_os = "macos")]
+    fn next_audio_packet(capturer: &mut AudioCapturer) -> Result<EncodedFrame> {
+        capturer.next_packet()
+    }
+
+    #[cfg(target_os = "windows")]
+    fn next_audio_packet(capturer: &mut AudioCapturer) -> Result<EncodedFrame> {
+        capturer.next_frame()
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
+    async fn start_audio_capture(source: AudioRouteSource) -> Result<mpsc::Receiver<EncodedFrame>> {
+        let mut capturer = {
+            #[cfg(target_os = "macos")]
+            {
+                match source {
+                    AudioRouteSource::Disabled => return Err(anyhow!("audio source disabled")),
+                    AudioRouteSource::SystemMix => {
+                        AudioCapturer::new_with_route(MacAudioRoute::SystemMix).await?
+                    }
+                    AudioRouteSource::Microphone => {
+                        AudioCapturer::new_with_route(MacAudioRoute::Microphone).await?
+                    }
+                    AudioRouteSource::Application(app) => {
+                        AudioCapturer::new_with_route(MacAudioRoute::Application(app)).await?
+                    }
+                }
+            }
+
+            #[cfg(any(target_os = "linux", target_os = "windows"))]
+            {
+                match source {
+                    AudioRouteSource::Disabled => return Err(anyhow!("audio source disabled")),
+                    AudioRouteSource::Microphone => {
+                        warn!("microphone route requested but not yet supported, using system mix");
+                    }
+                    AudioRouteSource::Application(app) => {
+                        warn!(
+                            "application audio route '{}' requested but not yet supported, using system mix",
+                            app
+                        );
+                    }
+                    AudioRouteSource::SystemMix => {}
+                }
+                AudioCapturer::new().await?
+            }
+        };
+        let (tx, rx) = mpsc::channel(16);
+        std::thread::spawn(move || loop {
+            match next_audio_packet(&mut capturer) {
+                Ok(packet) => {
+                    if tx.blocking_send(packet).is_err() {
+                        break;
+                    }
+                }
+                Err(err) => {
+                    debug!("audio capture iteration error: {}", err);
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+            }
+        });
+        Ok(rx)
+    }
+
+    #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
+    async fn start_audio_capture(
+        _source: AudioRouteSource,
+    ) -> Result<mpsc::Receiver<EncodedFrame>> {
+        Err(anyhow!("audio capture is not supported on this platform"))
     }
 
     fn choose_codec_for_hello(hello: &rift_core::Hello, local_supported: &[Codec]) -> Codec {
@@ -507,6 +747,186 @@ mod host {
         }
     }
 
+    #[derive(Debug)]
+    struct FileTransferLimiter {
+        rate_kbps: u32,
+        tokens: f64,
+        capacity: f64,
+        last_refill: time::Instant,
+    }
+
+    impl FileTransferLimiter {
+        fn new(rate_kbps: u32) -> Self {
+            let now = time::Instant::now();
+            let capacity = Self::capacity_for(rate_kbps.max(1));
+            Self {
+                rate_kbps: rate_kbps.max(1),
+                tokens: capacity,
+                capacity,
+                last_refill: now,
+            }
+        }
+
+        fn capacity_for(rate_kbps: u32) -> f64 {
+            // Keep up to 500ms of burst budget while still constraining sustained rate.
+            let bytes_per_second = rate_kbps as f64 * 1000.0 / 8.0;
+            (bytes_per_second * 0.5).max((DEFAULT_CHUNK_SIZE as f64) * 4.0)
+        }
+
+        fn set_rate_kbps(&mut self, rate_kbps: u32) {
+            let rate_kbps = rate_kbps.max(1);
+            if self.rate_kbps == rate_kbps {
+                return;
+            }
+            self.refill();
+            self.rate_kbps = rate_kbps;
+            self.capacity = Self::capacity_for(rate_kbps);
+            self.tokens = self.tokens.min(self.capacity);
+        }
+
+        fn refill(&mut self) {
+            let now = time::Instant::now();
+            let elapsed = (now - self.last_refill).as_secs_f64();
+            self.last_refill = now;
+            let bytes_per_second = self.rate_kbps as f64 * 1000.0 / 8.0;
+            self.tokens = (self.tokens + elapsed * bytes_per_second).min(self.capacity);
+        }
+
+        fn try_take(&mut self, bytes: usize) -> bool {
+            self.refill();
+            let needed = bytes as f64;
+            if self.tokens >= needed {
+                self.tokens -= needed;
+                true
+            } else {
+                false
+            }
+        }
+    }
+
+    fn file_transfer_budget_kbps(runtime: HostRuntimeConfig, video_bitrate_kbps: u32) -> u32 {
+        let shared = (video_bitrate_kbps as f32 * (runtime.file_transfer_share_percent / 100.0))
+            .round() as u32;
+        shared.clamp(
+            runtime.file_transfer_min_kbps,
+            runtime.file_transfer_max_kbps,
+        )
+    }
+
+    fn parse_resume_chunk(message: &str) -> Option<u32> {
+        message
+            .split(|c: char| c == ',' || c == ';' || c.is_whitespace())
+            .find_map(|part| {
+                let token = part.trim();
+                token
+                    .strip_prefix("resume_chunk=")
+                    .and_then(|raw| raw.parse::<u32>().ok())
+            })
+    }
+
+    fn parse_transfer_command(message: &str) -> Option<&'static str> {
+        let token = message.trim().to_ascii_lowercase();
+        match token.as_str() {
+            "pause" => Some("pause"),
+            "resume" => Some("resume"),
+            "cancel" | "canceled" => Some("cancel"),
+            "retry" => Some("retry"),
+            _ => None,
+        }
+    }
+
+    fn apply_file_status_to_outgoing(
+        outgoing: &mut VecDeque<OutgoingFile>,
+        status: &rift_core::FileStatus,
+    ) {
+        let Some(idx) = outgoing
+            .iter()
+            .position(|f| f.offer().file_id == status.file_id)
+        else {
+            return;
+        };
+
+        let status_kind = rift_core::file_status::Status::try_from(status.status).ok();
+        let message = status.message.trim();
+
+        let mut remove_file = false;
+        {
+            let file = outgoing
+                .get_mut(idx)
+                .expect("position came from current VecDeque");
+
+            if let Some(chunk) = parse_resume_chunk(message) {
+                if chunk < file.next_chunk_index() {
+                    if let Err(err) = file.set_next_chunk(chunk) {
+                        warn!(
+                            "invalid resume request for file_id={} chunk={}: {}",
+                            status.file_id, chunk, err
+                        );
+                    } else {
+                        info!(
+                            "rewinding outgoing file_id={} to chunk {}",
+                            status.file_id, chunk
+                        );
+                    }
+                }
+                file.resume();
+            }
+
+            if let Some(cmd) = parse_transfer_command(message) {
+                match cmd {
+                    "pause" => {
+                        file.pause();
+                        info!("paused outgoing file transfer file_id={}", status.file_id);
+                    }
+                    "resume" => {
+                        file.resume();
+                        info!("resumed outgoing file transfer file_id={}", status.file_id);
+                    }
+                    "retry" => {
+                        file.restart_from_beginning();
+                        file.resume();
+                        info!("retry requested for outgoing file_id={}", status.file_id);
+                    }
+                    "cancel" => {
+                        remove_file = true;
+                    }
+                    _ => {}
+                }
+            }
+
+            match status_kind {
+                Some(rift_core::file_status::Status::Pending)
+                | Some(rift_core::file_status::Status::InProgress) => {
+                    file.resume();
+                }
+                Some(rift_core::file_status::Status::Complete) => {
+                    remove_file = true;
+                }
+                Some(rift_core::file_status::Status::Error) => {
+                    if message.contains("no matching file offer") {
+                        file.restart_from_beginning();
+                        file.resume();
+                        info!(
+                            "receiver missing offer for file_id={}, restarting transfer",
+                            status.file_id
+                        );
+                    } else if !message.is_empty() {
+                        warn!(
+                            "stopping outgoing file_id={} after remote error: {}",
+                            status.file_id, message
+                        );
+                        remove_file = true;
+                    }
+                }
+                None => {}
+            }
+        }
+
+        if remove_file {
+            let _ = outgoing.remove(idx);
+        }
+    }
+
     pub async fn run() -> Result<()> {
         let args = Args::parse();
         tracing_subscriber::fmt().with_env_filter("info").init();
@@ -591,6 +1011,26 @@ mod host {
             None
         };
 
+        let audio_source = AudioRouteSource::parse(&args.audio_source);
+        let mut audio_rx = match start_audio_capture(audio_source.clone()).await {
+            Ok(rx) => {
+                info!("audio capture enabled ({:?})", audio_source);
+                Some(rx)
+            }
+            Err(err) => {
+                warn!("audio capture disabled: {}", err);
+                None
+            }
+        };
+
+        let mut file_transfer = FileTransferState::new(
+            &args.send_files,
+            args.file_out_dir.clone(),
+            args.file_max_bytes.max(1),
+        );
+        let mut file_transfer_limiter =
+            FileTransferLimiter::new(runtime.file_transfer_min_kbps.max(1));
+
         let mut buf = vec![0u8; 64 * 1024];
         let mut peers: HashMap<SocketAddr, PeerState> = HashMap::new();
         let mut active_peer: Option<SocketAddr> = None;
@@ -603,6 +1043,7 @@ mod host {
         let mut peer_cleanup_interval =
             time::interval(Duration::from_secs(PEER_CLEANUP_INTERVAL_SECS));
         let mut clipboard_poll_interval = time::interval(Duration::from_millis(500));
+        let mut file_transfer_tick = time::interval(Duration::from_millis(FILE_TRANSFER_TICK_MS));
 
         if args.enable_webrtc && selected_codec.is_none() {
             ensure_encoder(
@@ -650,6 +1091,22 @@ mod host {
                         }
                     }
                 }
+                _ = file_transfer_tick.tick() => {
+                    if let Some(peer) = active_peer {
+                        if let Some(peer_state) = peers.get_mut(&peer) {
+                            if let Err(err) = send_next_file_chunk(
+                                &socket,
+                                runtime,
+                                peer_state,
+                                peer,
+                                &mut file_transfer_limiter,
+                                &mut file_transfer.outgoing,
+                            ).await {
+                                warn!("file transfer send error: {}", err);
+                            }
+                        }
+                    }
+                }
                 Some(frame) = async {
                     if let Some(rx) = frame_rx.as_mut() {
                         rx.recv().await
@@ -676,6 +1133,21 @@ mod host {
                             let result = send_video_frame(&socket, peer, peer_state, frame).await;
                             if let Err(err) = result {
                                 warn!("failed to send video frame to {}: {}", peer, err);
+                            }
+                        }
+                    }
+                }
+                Some(audio_packet) = async {
+                    if let Some(rx) = audio_rx.as_mut() {
+                        rx.recv().await
+                    } else {
+                        None
+                    }
+                } => {
+                    if let Some(peer) = active_peer {
+                        if let Some(peer_state) = peers.get_mut(&peer) {
+                            if let Err(err) = send_audio_packet(&socket, peer, peer_state, audio_packet).await {
+                                debug!("failed to send audio packet to {}: {}", peer, err);
                             }
                         }
                     }
@@ -708,6 +1180,7 @@ mod host {
                         &mut base_config,
                         &mut clipboard,
                         &mut last_clipboard_text,
+                        &mut file_transfer,
                     )
                     .await
                     {
@@ -741,6 +1214,7 @@ mod host {
         base_config: &mut EncodeConfig,
         clipboard: &mut Option<ArboardClipboard>,
         last_clipboard_text: &mut Option<String>,
+        file_transfer: &mut FileTransferState,
     ) -> Result<Option<Codec>> {
         peer_state.last_seen = time::Instant::now();
         let phys = PhysicalPacket::decode(Bytes::copy_from_slice(raw))
@@ -762,6 +1236,7 @@ mod host {
                     base_config,
                     clipboard,
                     last_clipboard_text,
+                    file_transfer,
                 )
                 .await
             }
@@ -831,6 +1306,7 @@ mod host {
                     base_config,
                     clipboard,
                     last_clipboard_text,
+                    file_transfer,
                 )
                 .await
             }
@@ -850,6 +1326,7 @@ mod host {
         base_config: &mut EncodeConfig,
         clipboard: &mut Option<ArboardClipboard>,
         last_clipboard_text: &mut Option<String>,
+        file_transfer: &mut FileTransferState,
     ) -> Result<Option<Codec>> {
         use rift_core::message::Content;
 
@@ -1067,6 +1544,127 @@ mod host {
                             }
                         }
                     }
+                    rift_core::control_message::Content::FileHeader(header) => {
+                        let file_id = header.file_id;
+                        match offer_from_proto(header, file_transfer.max_file_bytes) {
+                            Ok(offer) => {
+                                if let Some(existing) = file_transfer.incoming.get(&file_id) {
+                                    if existing.offer() == &offer {
+                                        let resume_chunk = existing.next_missing_chunk();
+                                        let _ = send_rift_msg(
+                                            socket,
+                                            peer_state,
+                                            peer,
+                                            ProtoMessage {
+                                                content: Some(Content::Control(ProtoControl {
+                                                    content: Some(
+                                                        rift_core::control_message::Content::FileStatus(
+                                                            file_status_message(
+                                                                file_id,
+                                                                rift_core::file_status::Status::InProgress,
+                                                                format!("resume_chunk={resume_chunk}"),
+                                                            ),
+                                                        ),
+                                                    ),
+                                                })),
+                                            },
+                                        )
+                                        .await;
+                                        return Ok(None);
+                                    }
+
+                                    let _ = send_rift_msg(
+                                        socket,
+                                        peer_state,
+                                        peer,
+                                        ProtoMessage {
+                                            content: Some(Content::Control(ProtoControl {
+                                                content: Some(
+                                                    rift_core::control_message::Content::FileStatus(
+                                                        file_status_message(
+                                                            file_id,
+                                                            rift_core::file_status::Status::Error,
+                                                            "file_id conflict with different offer",
+                                                        ),
+                                                    ),
+                                                ),
+                                            })),
+                                        },
+                                    )
+                                    .await;
+                                    return Ok(None);
+                                }
+
+                                match IncomingFile::new(
+                                    &file_transfer.output_dir,
+                                    offer,
+                                    file_transfer.max_file_bytes,
+                                ) {
+                                    Ok(incoming) => {
+                                        info!(
+                                            "receiving file {} from client",
+                                            incoming.offer().filename
+                                        );
+                                        file_transfer.incoming.insert(file_id, incoming);
+                                        let _ = send_rift_msg(
+                                            socket,
+                                            peer_state,
+                                            peer,
+                                            ProtoMessage {
+                                                content: Some(Content::Control(ProtoControl {
+                                                    content: Some(
+                                                        rift_core::control_message::Content::FileStatus(
+                                                            file_status_message(
+                                                                file_id,
+                                                                rift_core::file_status::Status::Pending,
+                                                                "ready",
+                                                            ),
+                                                        ),
+                                                    ),
+                                                })),
+                                            },
+                                        )
+                                        .await;
+                                    }
+                                    Err(err) => {
+                                        warn!("rejecting incoming file {}: {}", file_id, err);
+                                        let _ = send_rift_msg(
+                                            socket,
+                                            peer_state,
+                                            peer,
+                                            ProtoMessage {
+                                                content: Some(Content::Control(ProtoControl {
+                                                    content: Some(
+                                                        rift_core::control_message::Content::FileStatus(
+                                                            file_status_message(
+                                                                file_id,
+                                                                rift_core::file_status::Status::Error,
+                                                                err.to_string(),
+                                                            ),
+                                                        ),
+                                                    ),
+                                                })),
+                                            },
+                                        )
+                                        .await;
+                                    }
+                                }
+                            }
+                            Err(err) => {
+                                warn!("invalid file offer {}: {}", file_id, err);
+                            }
+                        }
+                    }
+                    rift_core::control_message::Content::FileStatus(status) => {
+                        let status_name = rift_core::file_status::Status::try_from(status.status)
+                            .map(|s| format!("{:?}", s))
+                            .unwrap_or_else(|_| format!("UNKNOWN({})", status.status));
+                        info!(
+                            "client file transfer status file_id={} status={} message={}",
+                            status.file_id, status_name, status.message
+                        );
+                        apply_file_status_to_outgoing(&mut file_transfer.outgoing, &status);
+                    }
                     _ => {}
                 }
             }
@@ -1075,7 +1673,18 @@ mod host {
                     handle_input_event(injector, event)?;
                 }
             }
-            _ => {}
+            Content::Media(media) => {
+                if let Some(rift_core::media_message::Content::FileChunk(chunk)) = media.content {
+                    handle_incoming_file_chunk(
+                        socket,
+                        peer_state,
+                        peer,
+                        &mut file_transfer.incoming,
+                        chunk,
+                    )
+                    .await?;
+                }
+            }
         }
         Ok(None)
     }
@@ -1144,6 +1753,19 @@ mod host {
         if args.stats_log_interval_secs == 0 {
             return Err(anyhow!("--stats-log-interval-secs must be at least 1"));
         }
+        if !(1.0..=100.0).contains(&args.file_transfer_share_percent) {
+            return Err(anyhow!(
+                "--file-transfer-share-percent must be between 1 and 100"
+            ));
+        }
+        if args.file_transfer_min_kbps == 0 {
+            return Err(anyhow!("--file-transfer-min-kbps must be at least 1"));
+        }
+        if args.file_transfer_min_kbps > args.file_transfer_max_kbps {
+            return Err(anyhow!(
+                "--file-transfer-min-kbps must be <= --file-transfer-max-kbps"
+            ));
+        }
 
         Ok(HostRuntimeConfig {
             default_resolution: MediaResolution {
@@ -1156,6 +1778,9 @@ mod host {
             max_peers: args.max_peers,
             peer_idle_timeout: Duration::from_secs(args.peer_idle_timeout_secs),
             stats_log_interval: Duration::from_secs(args.stats_log_interval_secs),
+            file_transfer_share_percent: args.file_transfer_share_percent,
+            file_transfer_min_kbps: args.file_transfer_min_kbps,
+            file_transfer_max_kbps: args.file_transfer_max_kbps,
         })
     }
 
@@ -1270,6 +1895,195 @@ mod host {
             peer_state.pacer.wait().await;
             send_rift_msg(socket, peer_state, peer, msg).await?;
         }
+        Ok(())
+    }
+
+    async fn send_audio_packet(
+        socket: &UdpSocket,
+        peer: SocketAddr,
+        peer_state: &mut PeerState,
+        packet: EncodedFrame,
+    ) -> Result<()> {
+        let msg = ProtoMessage {
+            content: Some(rift_core::message::Content::Media(
+                rift_core::MediaMessage {
+                    content: Some(rift_core::media_message::Content::Audio(
+                        rift_core::AudioPacket {
+                            timestamp_us: packet.timestamp_us,
+                            payload: packet.data,
+                        },
+                    )),
+                },
+            )),
+        };
+        send_rift_msg(socket, peer_state, peer, msg).await
+    }
+
+    async fn send_next_file_chunk(
+        socket: &UdpSocket,
+        runtime: HostRuntimeConfig,
+        peer_state: &mut PeerState,
+        peer: SocketAddr,
+        limiter: &mut FileTransferLimiter,
+        outgoing: &mut VecDeque<OutgoingFile>,
+    ) -> Result<()> {
+        let Some(front) = outgoing.front_mut() else {
+            return Ok(());
+        };
+
+        if !front.header_sent() {
+            let header = offer_to_proto(front.offer());
+            let msg = ProtoMessage {
+                content: Some(rift_core::message::Content::Control(ProtoControl {
+                    content: Some(rift_core::control_message::Content::FileHeader(header)),
+                })),
+            };
+            send_rift_msg(socket, peer_state, peer, msg).await?;
+            front.mark_header_sent();
+            info!(
+                "started sending file {} to client ({} bytes)",
+                front.offer().filename,
+                front.offer().file_size
+            );
+            return Ok(());
+        }
+
+        if front.paused() {
+            return Ok(());
+        }
+
+        let file_budget_kbps = file_transfer_budget_kbps(runtime, peer_state.target_bitrate_kbps);
+        limiter.set_rate_kbps(file_budget_kbps);
+
+        if front.finished() {
+            return Ok(());
+        }
+
+        let current_chunk = front.next_chunk_index();
+        match front.next_chunk()? {
+            Some(chunk) => {
+                if !limiter.try_take(chunk.payload.len()) {
+                    front.set_next_chunk(current_chunk)?;
+                    return Ok(());
+                }
+                let msg = ProtoMessage {
+                    content: Some(rift_core::message::Content::Media(
+                        rift_core::MediaMessage {
+                            content: Some(rift_core::media_message::Content::FileChunk(
+                                rift_core::FileChunk {
+                                    file_id: chunk.file_id,
+                                    chunk_index: chunk.chunk_index,
+                                    payload: chunk.payload,
+                                },
+                            )),
+                        },
+                    )),
+                };
+                send_rift_msg(socket, peer_state, peer, msg).await?;
+            }
+            None => {
+                // Either paused or already complete; completion is finalized on peer status.
+            }
+        }
+        Ok(())
+    }
+
+    async fn handle_incoming_file_chunk(
+        socket: &UdpSocket,
+        peer_state: &mut PeerState,
+        peer: SocketAddr,
+        incoming: &mut HashMap<u64, IncomingFile>,
+        chunk: rift_core::FileChunk,
+    ) -> Result<()> {
+        let file_id = chunk.file_id;
+        let mut progress_update: Option<(u32, u32, u32)> = None;
+        let complete = if let Some(entry) = incoming.get_mut(&file_id) {
+            let complete = entry.write_chunk(chunk.chunk_index, &chunk.payload)?;
+            if !complete {
+                let resume_chunk = entry.next_missing_chunk();
+                let received = entry.received_count();
+                let total = entry.offer().total_chunks;
+                let remaining = total.saturating_sub(received);
+                let gap_detected = resume_chunk < chunk.chunk_index;
+                let progress_due = received % FILE_TRANSFER_PROGRESS_CHUNK_INTERVAL == 0;
+                if gap_detected || progress_due || remaining <= 2 {
+                    progress_update = Some((resume_chunk, received, total));
+                }
+            }
+            complete
+        } else {
+            let msg = ProtoMessage {
+                content: Some(rift_core::message::Content::Control(ProtoControl {
+                    content: Some(rift_core::control_message::Content::FileStatus(
+                        file_status_message(
+                            file_id,
+                            rift_core::file_status::Status::Error,
+                            "no matching file offer",
+                        ),
+                    )),
+                })),
+            };
+            let _ = send_rift_msg(socket, peer_state, peer, msg).await;
+            return Ok(());
+        };
+
+        if !complete {
+            if let Some((resume_chunk, received, total)) = progress_update {
+                let msg = ProtoMessage {
+                    content: Some(rift_core::message::Content::Control(ProtoControl {
+                        content: Some(rift_core::control_message::Content::FileStatus(
+                            file_status_message(
+                                file_id,
+                                rift_core::file_status::Status::InProgress,
+                                format!("resume_chunk={resume_chunk} received={received}/{total}"),
+                            ),
+                        )),
+                    })),
+                };
+                let _ = send_rift_msg(socket, peer_state, peer, msg).await;
+            }
+            return Ok(());
+        }
+
+        if let Some(entry) = incoming.remove(&file_id) {
+            match entry.finalize() {
+                Ok(path) => {
+                    info!(
+                        "received file from client file_id={} path={}",
+                        file_id,
+                        path.display()
+                    );
+                    let msg = ProtoMessage {
+                        content: Some(rift_core::message::Content::Control(ProtoControl {
+                            content: Some(rift_core::control_message::Content::FileStatus(
+                                file_status_message(
+                                    file_id,
+                                    rift_core::file_status::Status::Complete,
+                                    path.display().to_string(),
+                                ),
+                            )),
+                        })),
+                    };
+                    let _ = send_rift_msg(socket, peer_state, peer, msg).await;
+                }
+                Err(err) => {
+                    warn!("failed to finalize incoming file {}: {}", file_id, err);
+                    let msg = ProtoMessage {
+                        content: Some(rift_core::message::Content::Control(ProtoControl {
+                            content: Some(rift_core::control_message::Content::FileStatus(
+                                file_status_message(
+                                    file_id,
+                                    rift_core::file_status::Status::Error,
+                                    err.to_string(),
+                                ),
+                            )),
+                        })),
+                    };
+                    let _ = send_rift_msg(socket, peer_state, peer, msg).await;
+                }
+            }
+        }
+
         Ok(())
     }
 

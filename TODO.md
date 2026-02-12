@@ -1,8 +1,8 @@
 # Wavry Project TODOs
 
 **Current Version**: v0.0.3-rc1
-**Last Updated**: 2026-02-10
-**Build Status**: ✅ Clean (0 warnings, 155+ tests passing)
+**Last Updated**: 2026-02-11
+**Build Status**: ✅ Clean (0 warnings, 160+ tests passing)
 
 ---
 
@@ -12,6 +12,14 @@
 - [x] **Resolve Clippy Warnings** - Zero compiler warnings across all crates
 - [x] **Fix GitHub Actions** - Matrix variable interpolation in workflow job names
 - [x] **Update Version** - v0.0.1-unstable → v0.0.2-canary across entire workspace
+
+### ✅ Security + Reliability Follow-up (2026-02-11)
+- [x] **RIFT File Transfer Protocol** - Added `FileHeader`, `FileChunk`, and `FileStatus` messages.
+- [x] **File Transfer Runtime Integration** - Client/server send + receive paths with checksum validation and safe filename handling.
+- [x] **Audio Route Selection** - Added server `--audio-source` path selection with safe fallback to system mix where app/mic routing is not available.
+- [x] **Admin Audit Logging** - Added `admin_audit_log` table, DB APIs, and `/admin/api/audit` endpoint.
+- [x] **Post-auth Rate Limiting** - Added logout post-auth limiter path in gateway auth flow.
+- [x] **Quality Gates Workflow** - Added CI workflow for fmt/clippy/tests/coverage/fuzz-smoke checks.
 
 ### ✅ Code Coverage (132 tests total)
 - [x] **rift-core** - 42 tests (FEC, physical packets, DELTA congestion control)
@@ -169,9 +177,18 @@ All infrastructure and core functionality is complete. Next phase focuses on new
 - [x] `MappedInjector<I>` wrapper — applies map to any `InputInjector` at runtime
 - [x] 6 unit tests covering passthrough, remap, block, and gamepad button mapping
 
-### v0.0.4+ Candidates
-- **Audio Routing** (Medium complexity, 6-8 hours)
-- **File Transfer** (High complexity, 12-16 hours)
+### ✅ v0.0.3-rc1 Feature: File Transfer (MVP)
+**Status**: Implemented
+- [x] File transfer protobuf messages in RIFT control/media channels
+- [x] Shared transfer manager with SHA-256 verification and safe filename normalization
+- [x] Host/client transfer loop integration and status exchange
+- [ ] Resume/cancel controls and adaptive congestion-aware bandwidth shaping
+
+### ✅ v0.0.3-rc1 Feature: Audio Routing (Phase 1)
+**Status**: Partially implemented
+- [x] Server-side `--audio-source` route selector
+- [x] Live audio packet forwarding in main streaming path
+- [ ] Per-application routing and full microphone route support per platform
 
 ---
 
@@ -181,8 +198,9 @@ All infrastructure and core functionality is complete. Next phase focuses on new
 - [x] ~~**Recording**~~ - Shipped in v0.0.3-canary
 - [x] ~~**Clipboard Sync**~~ - Shipped in v0.0.3-canary
 - [x] ~~**Input Mapping**~~ - Shipped in v0.0.3-canary
-- [ ] **File Transfer** - Secure file transfer over RIFT protocol
-- [ ] **Audio Routing** - Per-application audio capture and routing
+- [x] **File Transfer (MVP)** - Secure chunked transfer with integrity checks
+- [ ] **File Transfer (Advanced)** - Resume/cancel and congestion-aware fairness
+- [ ] **Audio Routing (Advanced)** - Per-application and microphone parity across platforms
 
 ### Platform Support
 - [ ] **iOS Client** - WebTransport or native app
@@ -192,8 +210,9 @@ All infrastructure and core functionality is complete. Next phase focuses on new
 
 ### Security Enhancements
 - [ ] **E2E Encryption** - End-to-end encryption for relayed connections
-- [ ] **Audit Logging** - Comprehensive audit trail for admin actions
-- [ ] **Rate Limiting** - Per-IP and per-user rate limits on all APIs
+- [x] **Audit Logging (Admin Actions)** - Persisted admin audit events with API access
+- [x] **Rate Limiting (Auth + Post-auth paths)** - Added pre-auth and post-auth limiter coverage
+- [ ] **Rate Limiting (Global)** - Extend limiter strategy to all public APIs
 - [ ] **Certificate Pinning** - TLS certificate validation for relay servers
 
 ### Advanced Networking
@@ -219,19 +238,20 @@ rift-crypto      21 tests + 1 doctest ✅
 wavry-client     26 tests ✅
 wavry-common      4 tests ✅
 wavry-gateway    14 tests ✅
-wavry-gateway    10 integration tests (admin_dashboard) ✅
+wavry-gateway    11 integration tests (admin_dashboard) ✅
 wavry-master      3 tests ✅
 wavry-media      25 tests ✅
 wavry-server      1 test ✅
+rift-core fuzz     3 tests ✅
 ─────────────────────────────
-TOTAL          147+ tests ✅
+TOTAL          160+ tests ✅
 ```
 
 ### Testing Gaps (Future)
 - [ ] Integration tests (end-to-end client-server)
 - [ ] Network simulation tests (high-loss, high-latency scenarios)
 - [ ] Stress tests (long-duration streaming, memory stability)
-- [ ] Fuzz testing (malformed packet handling)
+- [ ] Protocol fuzzing (broader corpus + CI-time budget tuning)
 - [ ] Performance benchmarks (throughput, latency, CPU/GPU usage)
 
 ---
@@ -240,10 +260,10 @@ TOTAL          147+ tests ✅
 
 ### Code Quality
 - **Clippy Warnings**: 0/0 ✅
-- **Test Coverage**: 147+ passing tests across 9 crates ✅
+- **Test Coverage**: 160+ passing tests across workspace crates ✅
 - **Build Time**: ~10 seconds (dev), ~2 minutes (release)
 - **Binary Size**: ~30 MB (server), ~25 MB (client)
-- **CI/CD Status**: ✅ All workflows operational (Docker builds, platform builds, tests, rate limiting fixed)
+- **CI/CD Status**: ✅ All workflows operational (platform builds, Docker builds, and quality-gates checks)
 
 ### Performance Targets (v0.0.2)
 - **Local Network**: <10ms latency, ±20% bitrate variance
@@ -277,6 +297,11 @@ TOTAL          147+ tests ✅
 - [x] Recording capability (VideoRecorder, MP4 muxing)
 - [x] Clipboard sync (bidirectional, 1 MiB cap)
 - [x] Input mapping (key/button remap + block profiles)
+- [x] File transfer MVP (chunked transfer + checksum + status messaging)
+- [x] Audio route selector and live audio forwarding path
+- [x] Admin audit event storage + `/admin/api/audit` API
+- [x] Post-auth logout rate limiting
+- [x] Quality-gates workflow (fmt, clippy, tests, coverage, fuzz-smoke)
 - [x] Android Gradle wrapper (deterministic builds)
 - [x] Windows crate upgrade to 0.62.2
 - [x] VR architecture decoupled (wavry-vr-openxr crate)
@@ -284,10 +309,10 @@ TOTAL          147+ tests ✅
 - [ ] AV1 validation on M4 MacBook Air & RTX 3070 Ti (hardware testing via HWTODO.md)
 
 ### v0.0.4 (Proposed)
-- [ ] File transfer
+- [ ] File transfer resume/cancel/fair-share controls
 - [ ] iOS support
 - [ ] Performance benchmarking suite
-- [ ] Audio routing
+- [ ] Full audio routing parity (app + mic capture across platforms)
 
 ---
 
@@ -299,8 +324,8 @@ TOTAL          147+ tests ✅
 - **CI/CD**: ✅ GitHub Actions workflows fully operational
   - Platform Builds: Tests and builds run on every push
   - Docker Images: Multi-platform builds (linux/amd64, linux/arm64)
-  - Rate limiting: Fixed (authenticated GitHub API tokens)
+  - Quality Gates: fmt/clippy/tests/coverage/fuzz-smoke workflow added
 - **Platform Support**: macOS, Linux, Windows, Android (ready); iOS (planned)
-- **Next Phase**: v0.0.3 feature implementation (Recording recommended as first feature)
+- **Next Phase**: v0.4 hardening (file transfer resume/fairness and advanced audio routing)
 
 See [CHANGELOG.md](./CHANGELOG.md) for detailed version history.

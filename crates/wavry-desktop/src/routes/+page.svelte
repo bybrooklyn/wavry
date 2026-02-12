@@ -17,6 +17,10 @@
   let saveFeedback = $state("");
   let saveFeedbackType = $state<"success" | "error">("success");
   let baselineSettingsFingerprint = $state("");
+  let fileTransferIdInput = $state("");
+  let isFileTransferCommandPending = $state(false);
+  let fileTransferCommandFeedback = $state("");
+  let fileTransferCommandFeedbackType = $state<"success" | "error">("success");
 
   let showAdvancedSettings = $state(false);
   const USERNAME_PATTERN = /^[a-zA-Z0-9_.-]{3,32}$/;
@@ -198,6 +202,37 @@
     appState.resetSettingsToDefaults();
     saveFeedbackType = "success";
     saveFeedback = "Defaults restored";
+  }
+
+  function parsePositiveFileId(value: string): number | null {
+    const trimmed = value.trim();
+    if (!/^\d+$/.test(trimmed)) return null;
+    const parsed = Number(trimmed);
+    if (!Number.isSafeInteger(parsed) || parsed <= 0) return null;
+    return parsed;
+  }
+
+  let selectedTransferFileId = $derived(parsePositiveFileId(fileTransferIdInput));
+
+  async function sendTransferCommand(action: "pause" | "resume" | "cancel" | "retry") {
+    const fileId = selectedTransferFileId;
+    if (fileId == null) {
+      fileTransferCommandFeedbackType = "error";
+      fileTransferCommandFeedback = "Enter a valid positive file ID first.";
+      return;
+    }
+
+    isFileTransferCommandPending = true;
+    try {
+      const message = await appState.sendFileTransferCommand(fileId, action);
+      fileTransferCommandFeedbackType = "success";
+      fileTransferCommandFeedback = message;
+    } catch (e) {
+      fileTransferCommandFeedbackType = "error";
+      fileTransferCommandFeedback = normalizeError(e);
+    } finally {
+      isFileTransferCommandPending = false;
+    }
   }
 </script>
 
@@ -400,6 +435,61 @@
                       <span>Estimated Throughput</span>
                       <strong>{(appState.ccBitrate / 1000).toFixed(1)} Mbps</strong>
                     </div>
+                    {#if !appState.isHosting}
+                      <div class="transfer-controls">
+                        <span class="transfer-label">File Transfer Control</span>
+                        <p class="field-help">
+                          Enter a file ID, then send pause/resume/cancel/retry to the host transfer loop.
+                        </p>
+                        <div class="field-row">
+                          <input
+                            id="file-transfer-id"
+                            type="text"
+                            inputmode="numeric"
+                            placeholder="File ID (e.g. 42)"
+                            bind:value={fileTransferIdInput}
+                            oninput={() => {
+                              fileTransferCommandFeedback = "";
+                            }}
+                          />
+                        </div>
+                        <div class="transfer-actions">
+                          <button
+                            class="ghost-btn transfer-btn"
+                            onclick={() => sendTransferCommand("pause")}
+                            disabled={isFileTransferCommandPending || selectedTransferFileId === null}
+                          >
+                            Pause
+                          </button>
+                          <button
+                            class="ghost-btn transfer-btn"
+                            onclick={() => sendTransferCommand("resume")}
+                            disabled={isFileTransferCommandPending || selectedTransferFileId === null}
+                          >
+                            Resume
+                          </button>
+                          <button
+                            class="ghost-btn transfer-btn"
+                            onclick={() => sendTransferCommand("retry")}
+                            disabled={isFileTransferCommandPending || selectedTransferFileId === null}
+                          >
+                            Retry
+                          </button>
+                          <button
+                            class="danger-btn transfer-btn transfer-cancel"
+                            onclick={() => sendTransferCommand("cancel")}
+                            disabled={isFileTransferCommandPending || selectedTransferFileId === null}
+                          >
+                            Cancel
+                          </button>
+                        </div>
+                        {#if fileTransferCommandFeedback}
+                          <div class={fileTransferCommandFeedbackType === "error" ? "error" : "success"}>
+                            {fileTransferCommandFeedback}
+                          </div>
+                        {/if}
+                      </div>
+                    {/if}
                     <button class="danger-btn" onclick={disconnectSession}>Disconnect</button>
                   </div>
                 {:else}
@@ -945,6 +1035,40 @@
     display: flex;
     flex-direction: column;
     gap: 10px;
+  }
+
+  .transfer-controls {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 10px;
+    border-radius: 8px;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    background: rgba(0, 0, 0, 0.2);
+  }
+
+  .transfer-label {
+    display: block;
+    font-size: 11px;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--colors-text-secondary);
+    font-weight: var(--font-weight-bold);
+  }
+
+  .transfer-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+
+  .transfer-btn {
+    padding: 8px 10px;
+    font-size: 11px;
+  }
+
+  .transfer-cancel {
+    margin-top: 0;
   }
 
   .session-line {

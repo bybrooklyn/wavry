@@ -1,8 +1,8 @@
 # Wavry Backlog Roadmap (v0.0.3+)
 
-**Status**: Prioritized Feature Candidates
-**Current Version**: v0.0.2-canary
-**Next Release**: v0.0.3
+**Status**: Updated After v0.0.3-rc1 Implementation
+**Current Version**: v0.0.3-rc1
+**Next Release**: v0.0.4
 
 ---
 
@@ -10,15 +10,15 @@
 
 | Feature | Complexity | Impact | Dependencies | Est. Hours | Status |
 |---------|-----------|--------|--------------|-----------|--------|
-| **Recording** | Medium | High | wavry-media | 6-8 | 🔴 Not Started |
-| **Clipboard Sync** | Low | Medium | signal channel | 4-6 | 🔴 Not Started |
-| **File Transfer** | High | High | RIFT protocol | 12-16 | 🔴 Not Started |
-| **Audio Routing** | Medium | Medium | wavry-media | 6-8 | 🔴 Not Started |
-| **Input Mapping** | Low | Low | config | 3-4 | 🔴 Not Started |
+| **Recording** | Medium | High | wavry-media | 6-8 | ✅ Shipped (v0.0.3-rc1) |
+| **Clipboard Sync** | Low | Medium | signal channel | 4-6 | ✅ Shipped (v0.0.3-rc1) |
+| **File Transfer** | High | High | RIFT protocol | 12-16 | 🟡 MVP Implemented |
+| **Audio Routing** | Medium | Medium | wavry-media | 6-8 | 🟡 Phase 1 Implemented |
+| **Input Mapping** | Low | Low | config | 3-4 | ✅ Shipped (v0.0.3-rc1) |
 
 ---
 
-## v0.0.3 Candidate Features (Next Release)
+## v0.0.3 Delivered + v0.4 Carry-Over Features
 
 ### 🎬 1. Recording - LOCAL MP4 RECORDING
 
@@ -26,6 +26,7 @@
 **Where**: Client-side and/or server-side
 **Why**: Audit, training, content creation, local archive
 **Time**: 6-8 hours
+**Status**: ✅ Shipped in v0.0.3-rc1
 
 **Key Features**:
 - Configurable quality (High/Standard/Low)
@@ -51,6 +52,7 @@
 **Where**: Input control channel (signal)
 **Why**: Seamless workflow, copy/paste between machines
 **Time**: 4-6 hours
+**Status**: ✅ Shipped in v0.0.3-rc1
 
 **Protocol**:
 ```protobuf
@@ -94,6 +96,7 @@ Host Clipboard ←→ [signal channel] ←→ Client Clipboard
 **Where**: New RIFT media message type
 **Why**: Application deployment, document sharing, data transfer
 **Time**: 12-16 hours
+**Status**: 🟡 MVP implemented in v0.0.3-rc1 (resume/cancel/fair-share pending)
 
 **Protocol**:
 ```protobuf
@@ -181,6 +184,7 @@ message FileStatus {
 **Where**: wavry-media + platform modules
 **Why**: Game audio, selective streaming, audio conferencing
 **Time**: 6-8 hours
+**Status**: 🟡 Phase 1 implemented in v0.0.3-rc1 (`--audio-source` route select + system mix forwarding)
 
 **Architecture**:
 ```
@@ -244,6 +248,7 @@ pub struct AudioConfig {
 **Where**: wavry-platform + client config
 **Why**: Consistency across platforms, accessibility, game-specific layouts
 **Time**: 3-4 hours
+**Status**: ✅ Shipped in v0.0.3-rc1
 
 **Configuration**:
 ```rust
@@ -345,14 +350,15 @@ Docs: FILE_TRANSFER.md
 - ✅ Control channel exists
 
 ### File Transfer
-- 🔴 New RIFT message types required
-- 🔴 Media channel extension
+- ✅ RIFT message types implemented (`FileHeader`, `FileChunk`, `FileStatus`)
+- ✅ Media channel extension implemented
 - ✅ Crypto already in place
 - ✅ FEC can be reused
 
 ### Audio Routing
-- 🔴 Audio enumeration APIs required
-- 🔴 App-specific capture (OS-dependent)
+- 🟡 Audio source routing selector implemented (`--audio-source`)
+- 🟡 System mix capture integrated in host streaming path
+- 🔴 App-specific capture (OS-dependent) still pending
 - ✅ Audio encoding infrastructure exists
 - ⚠️ May need Opus codec updates
 
@@ -422,12 +428,12 @@ Docs: FILE_TRANSFER.md
 ## Next Steps
 
 1. ✅ Design completed (this document)
-2. ⏳ Pick feature for v0.0.3 (recommend: Recording)
-3. ⏳ Create detailed task list
-4. ⏳ Begin implementation
-5. ⏳ Testing + integration
-6. ⏳ Documentation
-7. ⏳ Release v0.0.3
+2. ✅ v0.0.3 features implemented (recording, clipboard, input mapping)
+3. ✅ File transfer MVP integrated across protocol + client/server
+4. ✅ Audio routing phase 1 integrated (`--audio-source` + forwarding)
+5. 🟡 v0.4 hardening: transfer resume/cancel + congestion-aware fairness
+6. 🟡 v0.4 hardening: per-app and microphone routing parity
+7. ⏳ Release v0.0.4
 
 ---
 

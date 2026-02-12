@@ -1,6 +1,9 @@
 use anyhow::{anyhow, Result};
 use bytes::Bytes;
+use rand::Rng as _;
+use std::collections::{HashMap, VecDeque};
 use std::net::SocketAddr;
+use std::path::PathBuf;
 use std::sync::{
     atomic::{AtomicU64, Ordering},
     Arc, Mutex,
@@ -27,9 +30,11 @@ use crate::media::{
     FRAME_TIMEOUT_US, NACK_WINDOW_SIZE,
 };
 use crate::types::{
-    ClientConfig, ClientRuntimeStats, CryptoState, RelayInfo, RendererFactory, VrOutbound,
+    ClientConfig, ClientRuntimeStats, CryptoState, FileTransferCommand, RelayInfo, RendererFactory,
+    VrOutbound,
 };
 
+use wavry_common::file_transfer::{FileOffer, IncomingFile, OutgoingFile, DEFAULT_CHUNK_SIZE};
 #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
 use wavry_media::CapabilityProbe;
 #[cfg(not(target_os = "linux"))]
@@ -50,6 +55,11 @@ use wavry_vr::{VrAdapter, VrAdapterCallbacks};
 const CRYPTO_HANDSHAKE_ATTEMPTS: u32 = 6;
 const CRYPTO_HANDSHAKE_STEP_TIMEOUT: Duration = Duration::from_secs(2);
 const DSCP_EF: u32 = 0x2E;
+const FILE_TRANSFER_TICK_MS: u64 = 2;
+const FILE_TRANSFER_PROGRESS_CHUNK_INTERVAL: u32 = 64;
+const FILE_TRANSFER_SHARE_PERCENT: f32 = 15.0;
+const FILE_TRANSFER_MIN_KBPS: u32 = 256;
+const FILE_TRANSFER_MAX_KBPS: u32 = 4096;
 
 fn probe_supported_codecs() -> Vec<Codec> {
     #[cfg(target_os = "windows")]
@@ -182,6 +192,289 @@ impl Drop for RuntimeStatsGuard {
     fn drop(&mut self) {
         if let Some(stats) = self.stats.as_ref() {
             stats.connected.store(false, Ordering::Relaxed);
+        }
+    }
+}
+
+struct FileTransferState {
+    outgoing: VecDeque<OutgoingFile>,
+    incoming: HashMap<u64, IncomingFile>,
+    output_dir: PathBuf,
+    max_file_bytes: u64,
+}
+
+impl FileTransferState {
+    fn new(send_files: &[PathBuf], output_dir: PathBuf, max_file_bytes: u64) -> Self {
+        let mut outgoing = VecDeque::new();
+        for path in send_files {
+            let file_id = random_file_id();
+            match OutgoingFile::from_path(path, file_id, DEFAULT_CHUNK_SIZE, max_file_bytes) {
+                Ok(file) => {
+                    info!("queued file for transfer to host: {}", path.display());
+                    outgoing.push_back(file);
+                }
+                Err(err) => warn!("skipping file {}: {}", path.display(), err),
+            }
+        }
+        Self {
+            outgoing,
+            incoming: HashMap::new(),
+            output_dir,
+            max_file_bytes,
+        }
+    }
+}
+
+fn random_file_id() -> u64 {
+    loop {
+        let id = rand::thread_rng().gen::<u64>();
+        if id != 0 {
+            return id;
+        }
+    }
+}
+
+fn offer_to_proto(offer: &FileOffer) -> rift_core::FileHeader {
+    rift_core::FileHeader {
+        file_id: offer.file_id,
+        filename: offer.filename.clone(),
+        file_size: offer.file_size,
+        checksum_sha256: offer.checksum_sha256.clone(),
+        chunk_size: offer.chunk_size,
+        total_chunks: offer.total_chunks,
+    }
+}
+
+fn offer_from_proto(header: rift_core::FileHeader, max_file_bytes: u64) -> Result<FileOffer> {
+    let offer = FileOffer {
+        file_id: header.file_id,
+        filename: header.filename,
+        file_size: header.file_size,
+        checksum_sha256: header.checksum_sha256.to_ascii_lowercase(),
+        chunk_size: header.chunk_size,
+        total_chunks: header.total_chunks,
+    };
+    wavry_common::file_transfer::validate_offer(&offer, max_file_bytes)?;
+    Ok(offer)
+}
+
+fn file_status_message(
+    file_id: u64,
+    status: rift_core::file_status::Status,
+    message: impl Into<String>,
+) -> rift_core::FileStatus {
+    rift_core::FileStatus {
+        file_id,
+        status: status as i32,
+        message: message.into(),
+    }
+}
+
+#[derive(Debug)]
+struct FileTransferLimiter {
+    rate_kbps: u32,
+    tokens: f64,
+    capacity: f64,
+    last_refill: time::Instant,
+}
+
+impl FileTransferLimiter {
+    fn new(rate_kbps: u32) -> Self {
+        let now = time::Instant::now();
+        let capacity = Self::capacity_for(rate_kbps.max(1));
+        Self {
+            rate_kbps: rate_kbps.max(1),
+            tokens: capacity,
+            capacity,
+            last_refill: now,
+        }
+    }
+
+    fn capacity_for(rate_kbps: u32) -> f64 {
+        let bytes_per_second = rate_kbps as f64 * 1000.0 / 8.0;
+        (bytes_per_second * 0.5).max((DEFAULT_CHUNK_SIZE as f64) * 4.0)
+    }
+
+    fn set_rate_kbps(&mut self, rate_kbps: u32) {
+        let rate_kbps = rate_kbps.max(1);
+        if self.rate_kbps == rate_kbps {
+            return;
+        }
+        self.refill();
+        self.rate_kbps = rate_kbps;
+        self.capacity = Self::capacity_for(rate_kbps);
+        self.tokens = self.tokens.min(self.capacity);
+    }
+
+    fn refill(&mut self) {
+        let now = time::Instant::now();
+        let elapsed = (now - self.last_refill).as_secs_f64();
+        self.last_refill = now;
+        let bytes_per_second = self.rate_kbps as f64 * 1000.0 / 8.0;
+        self.tokens = (self.tokens + elapsed * bytes_per_second).min(self.capacity);
+    }
+
+    fn try_take(&mut self, bytes: usize) -> bool {
+        self.refill();
+        let needed = bytes as f64;
+        if self.tokens >= needed {
+            self.tokens -= needed;
+            true
+        } else {
+            false
+        }
+    }
+}
+
+fn file_transfer_budget_kbps(video_bitrate_kbps: u32) -> u32 {
+    let shared = (video_bitrate_kbps as f32 * (FILE_TRANSFER_SHARE_PERCENT / 100.0)).round() as u32;
+    shared.clamp(FILE_TRANSFER_MIN_KBPS, FILE_TRANSFER_MAX_KBPS)
+}
+
+fn parse_resume_chunk(message: &str) -> Option<u32> {
+    message
+        .split(|c: char| c == ',' || c == ';' || c.is_whitespace())
+        .find_map(|part| {
+            let token = part.trim();
+            token
+                .strip_prefix("resume_chunk=")
+                .and_then(|raw| raw.parse::<u32>().ok())
+        })
+}
+
+fn parse_transfer_command(message: &str) -> Option<&'static str> {
+    let token = message.trim().to_ascii_lowercase();
+    match token.as_str() {
+        "pause" => Some("pause"),
+        "resume" => Some("resume"),
+        "cancel" | "canceled" => Some("cancel"),
+        "retry" => Some("retry"),
+        _ => None,
+    }
+}
+
+fn apply_file_status_to_outgoing(
+    outgoing: &mut VecDeque<OutgoingFile>,
+    status: &rift_core::FileStatus,
+) {
+    let Some(idx) = outgoing
+        .iter()
+        .position(|f| f.offer().file_id == status.file_id)
+    else {
+        return;
+    };
+
+    let status_kind = rift_core::file_status::Status::try_from(status.status).ok();
+    let message = status.message.trim();
+
+    let mut remove_file = false;
+    {
+        let file = outgoing
+            .get_mut(idx)
+            .expect("position came from current VecDeque");
+
+        if let Some(chunk) = parse_resume_chunk(message) {
+            if chunk < file.next_chunk_index() {
+                if let Err(err) = file.set_next_chunk(chunk) {
+                    warn!(
+                        "invalid resume request for file_id={} chunk={}: {}",
+                        status.file_id, chunk, err
+                    );
+                } else {
+                    info!(
+                        "rewinding outgoing file_id={} to chunk {}",
+                        status.file_id, chunk
+                    );
+                }
+            }
+            file.resume();
+        }
+
+        if let Some(cmd) = parse_transfer_command(message) {
+            match cmd {
+                "pause" => {
+                    file.pause();
+                    info!("paused outgoing file transfer file_id={}", status.file_id);
+                }
+                "resume" => {
+                    file.resume();
+                    info!("resumed outgoing file transfer file_id={}", status.file_id);
+                }
+                "retry" => {
+                    file.restart_from_beginning();
+                    file.resume();
+                    info!("retry requested for outgoing file_id={}", status.file_id);
+                }
+                "cancel" => {
+                    remove_file = true;
+                }
+                _ => {}
+            }
+        }
+
+        match status_kind {
+            Some(rift_core::file_status::Status::Pending)
+            | Some(rift_core::file_status::Status::InProgress) => {
+                file.resume();
+            }
+            Some(rift_core::file_status::Status::Complete) => {
+                remove_file = true;
+            }
+            Some(rift_core::file_status::Status::Error) => {
+                if message.contains("no matching file offer") {
+                    file.restart_from_beginning();
+                    file.resume();
+                    info!(
+                        "host missing offer for file_id={}, restarting transfer",
+                        status.file_id
+                    );
+                } else if !message.is_empty() {
+                    warn!(
+                        "stopping outgoing file_id={} after host error: {}",
+                        status.file_id, message
+                    );
+                    remove_file = true;
+                }
+            }
+            None => {}
+        }
+    }
+
+    if remove_file {
+        let _ = outgoing.remove(idx);
+    }
+}
+
+fn apply_file_status_to_incoming(
+    incoming: &mut HashMap<u64, IncomingFile>,
+    status: &rift_core::FileStatus,
+) {
+    let message = status.message.trim();
+
+    if let Some(cmd) = parse_transfer_command(message) {
+        if matches!(cmd, "cancel" | "retry") {
+            if let Some(partial) = incoming.remove(&status.file_id) {
+                if let Err(err) = partial.abort() {
+                    warn!(
+                        "failed to discard incoming file_id={} after {} command: {}",
+                        status.file_id, cmd, err
+                    );
+                }
+            }
+        }
+    }
+
+    if matches!(
+        rift_core::file_status::Status::try_from(status.status).ok(),
+        Some(rift_core::file_status::Status::Complete | rift_core::file_status::Status::Error)
+    ) {
+        if let Some(partial) = incoming.remove(&status.file_id) {
+            if let Err(err) = partial.abort() {
+                warn!(
+                    "failed to clean up incoming file_id={} after terminal status: {}",
+                    status.file_id, err
+                );
+            }
         }
     }
 }
@@ -478,12 +771,14 @@ async fn run_client_inner(
     let packet_counter = Arc::new(AtomicU64::new(1));
     let next_packet_id = || packet_counter.fetch_add(1, Ordering::Relaxed);
 
+    // Alias 0 is reserved for physical handshake framing in rift-core decode.
+    // Use a non-zero bootstrap alias until HelloAck provides the negotiated alias.
     send_rift_msg(
         &socket,
         &mut crypto,
         connect_addr,
         msg,
-        None,
+        Some(1),
         next_packet_id(),
         relay_info,
     )
@@ -533,6 +828,15 @@ async fn run_client_inner(
 
     let mut stream_codec: Option<Codec> = None;
     let mut stream_resolution: Option<MediaResolution> = None;
+    let mut file_transfer = FileTransferState::new(
+        &config.send_files,
+        config.file_out_dir.clone(),
+        config.file_max_bytes.max(1),
+    );
+    let mut file_command_rx = config.file_command_bus.as_ref().map(|bus| bus.subscribe());
+    let mut transfer_budget_kbps = FILE_TRANSFER_MAX_KBPS;
+    let mut file_transfer_limiter = FileTransferLimiter::new(FILE_TRANSFER_MIN_KBPS);
+    let mut file_transfer_tick = time::interval(Duration::from_millis(FILE_TRANSFER_TICK_MS));
 
     loop {
         tokio::select! {
@@ -578,6 +882,57 @@ async fn run_client_inner(
                     };
                     if let Err(e) = send_rift_msg(&socket, &mut crypto, connect_addr, msg, Some(alias), next_packet_id(), relay_info).await {
                         warn!("SelectMonitor send error: {}", e);
+                    }
+                }
+            }
+
+            // User-initiated file-transfer command channel.
+            maybe_cmd = async {
+                if let Some(rx) = file_command_rx.as_mut() {
+                    match rx.recv().await {
+                        Ok(cmd) => Some(cmd),
+                        Err(tokio::sync::broadcast::error::RecvError::Lagged(skipped)) => {
+                            warn!("dropped {} queued file-transfer command(s)", skipped);
+                            None
+                        }
+                        Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                            std::future::pending::<Option<FileTransferCommand>>().await
+                        }
+                    }
+                } else {
+                    std::future::pending::<Option<FileTransferCommand>>().await
+                }
+            } => {
+                if let Some(cmd) = maybe_cmd {
+                    let status = file_status_message(
+                        cmd.file_id,
+                        rift_core::file_status::Status::InProgress,
+                        cmd.action.as_protocol_message(),
+                    );
+
+                    // Apply immediately for local-outgoing/local-incoming state.
+                    apply_file_status_to_outgoing(&mut file_transfer.outgoing, &status);
+                    apply_file_status_to_incoming(&mut file_transfer.incoming, &status);
+
+                    if let Some(alias) = session_alias {
+                        let msg = ProtoMessage {
+                            content: Some(rift_core::message::Content::Control(ProtoControl {
+                                content: Some(rift_core::control_message::Content::FileStatus(status)),
+                            })),
+                        };
+                        if let Err(e) = send_rift_msg(
+                            &socket,
+                            &mut crypto,
+                            connect_addr,
+                            msg,
+                            Some(alias),
+                            next_packet_id(),
+                            relay_info,
+                        ).await {
+                            warn!("failed to send file transfer command: {}", e);
+                        }
+                    } else {
+                        warn!("file transfer command ignored: session not established yet");
                     }
                 }
             }
@@ -695,6 +1050,24 @@ async fn run_client_inner(
                                 }
                             }
                         }
+                    }
+                }
+            }
+
+            _ = file_transfer_tick.tick() => {
+                if let Some(alias) = session_alias {
+                    if let Err(e) = send_next_file_chunk(
+                        &socket,
+                        &mut crypto,
+                        connect_addr,
+                        alias,
+                        next_packet_id(),
+                        relay_info,
+                        transfer_budget_kbps,
+                        &mut file_transfer_limiter,
+                        &mut file_transfer.outgoing,
+                    ).await {
+                        warn!("file transfer send error: {}", e);
                     }
                 }
             }
@@ -825,6 +1198,9 @@ async fn run_client_inner(
                                     info!("session established with {}", peer);
                                     _session_id = Some(ack.session_id.clone());
                                     session_alias = Some(ack.session_alias);
+                                    transfer_budget_kbps =
+                                        file_transfer_budget_kbps(ack.initial_bitrate_kbps.max(1));
+                                    file_transfer_limiter.set_rate_kbps(transfer_budget_kbps);
                                     if let Some(stats) = runtime_stats.as_ref() {
                                         stats.connected.store(true, Ordering::Relaxed);
                                     }
@@ -986,6 +1362,116 @@ async fn run_client_inner(
                                         }
                                     }
                                 }
+                                rift_core::control_message::Content::FileHeader(header) => {
+                                    let file_id = header.file_id;
+                                    match offer_from_proto(header, file_transfer.max_file_bytes) {
+                                        Ok(offer) => {
+                                            if let Some(existing) = file_transfer.incoming.get(&file_id) {
+                                                if existing.offer() == &offer {
+                                                    let resume_chunk = existing.next_missing_chunk();
+                                                    let status_msg = ProtoMessage {
+                                                        content: Some(rift_core::message::Content::Control(ProtoControl {
+                                                            content: Some(rift_core::control_message::Content::FileStatus(
+                                                                file_status_message(
+                                                                    file_id,
+                                                                    rift_core::file_status::Status::InProgress,
+                                                                    format!("resume_chunk={resume_chunk}"),
+                                                                ),
+                                                            )),
+                                                        })),
+                                                    };
+                                                    if let Some(alias) = session_alias {
+                                                        let _ = send_rift_msg(
+                                                            &socket,
+                                                            &mut crypto,
+                                                            connect_addr,
+                                                            status_msg,
+                                                            Some(alias),
+                                                            next_packet_id(),
+                                                            relay_info,
+                                                        )
+                                                        .await;
+                                                    }
+                                                    continue;
+                                                }
+
+                                                let status_msg = ProtoMessage {
+                                                    content: Some(rift_core::message::Content::Control(ProtoControl {
+                                                        content: Some(rift_core::control_message::Content::FileStatus(
+                                                            file_status_message(
+                                                                file_id,
+                                                                rift_core::file_status::Status::Error,
+                                                                "file_id conflict with different offer",
+                                                            ),
+                                                        )),
+                                                    })),
+                                                };
+                                                if let Some(alias) = session_alias {
+                                                    let _ = send_rift_msg(
+                                                        &socket,
+                                                        &mut crypto,
+                                                        connect_addr,
+                                                        status_msg,
+                                                        Some(alias),
+                                                        next_packet_id(),
+                                                        relay_info,
+                                                    )
+                                                    .await;
+                                                }
+                                                continue;
+                                            }
+
+                                            match IncomingFile::new(
+                                                &file_transfer.output_dir,
+                                                offer,
+                                                file_transfer.max_file_bytes,
+                                            ) {
+                                                Ok(incoming) => {
+                                                    info!("receiving file {} from host", incoming.offer().filename);
+                                                    file_transfer.incoming.insert(file_id, incoming);
+                                                    let status_msg = ProtoMessage {
+                                                        content: Some(rift_core::message::Content::Control(ProtoControl {
+                                                            content: Some(rift_core::control_message::Content::FileStatus(
+                                                                file_status_message(
+                                                                    file_id,
+                                                                    rift_core::file_status::Status::Pending,
+                                                                    "ready",
+                                                                ),
+                                                            )),
+                                                        })),
+                                                    };
+                                                    if let Some(alias) = session_alias {
+                                                        let _ = send_rift_msg(
+                                                            &socket,
+                                                            &mut crypto,
+                                                            connect_addr,
+                                                            status_msg,
+                                                            Some(alias),
+                                                            next_packet_id(),
+                                                            relay_info,
+                                                        )
+                                                        .await;
+                                                    }
+                                                }
+                                                Err(err) => {
+                                                    warn!("rejecting file {}: {}", file_id, err);
+                                                }
+                                            }
+                                        }
+                                        Err(err) => warn!("invalid file offer {}: {}", file_id, err),
+                                    }
+                                }
+                                rift_core::control_message::Content::FileStatus(status) => {
+                                    let status_name = rift_core::file_status::Status::try_from(status.status)
+                                        .map(|s| format!("{:?}", s))
+                                        .unwrap_or_else(|_| format!("UNKNOWN({})", status.status));
+                                    info!(
+                                        "host file transfer status file_id={} status={} message={}",
+                                        status.file_id, status_name, status.message
+                                    );
+                                    apply_file_status_to_outgoing(&mut file_transfer.outgoing, &status);
+                                    apply_file_status_to_incoming(&mut file_transfer.incoming, &status);
+                                }
                                 _ => {}
                             }
                         }
@@ -1078,9 +1564,41 @@ async fn run_client_inner(
                                                         }
                                                     }
                                                 }
+                                                Some(rift_core::media_message::Content::FileChunk(chunk)) => {
+                                                    if let Some(alias) = session_alias {
+                                                        if let Err(err) = handle_incoming_file_chunk(
+                                                            &socket,
+                                                            &mut crypto,
+                                                            connect_addr,
+                                                            alias,
+                                                            next_packet_id(),
+                                                            relay_info,
+                                                            &mut file_transfer.incoming,
+                                                            chunk,
+                                                        ).await {
+                                                            warn!("file chunk handling error: {}", err);
+                                                        }
+                                                    }
+                                                }
                                                 _ => {}
                                             }
                                         }
+                                    }
+                                }
+                            }
+                            Some(rift_core::media_message::Content::FileChunk(chunk)) => {
+                                if let Some(alias) = session_alias {
+                                    if let Err(err) = handle_incoming_file_chunk(
+                                        &socket,
+                                        &mut crypto,
+                                        connect_addr,
+                                        alias,
+                                        next_packet_id(),
+                                        relay_info,
+                                        &mut file_transfer.incoming,
+                                        chunk,
+                                    ).await {
+                                        warn!("file chunk handling error: {}", err);
                                     }
                                 }
                             }
@@ -1153,6 +1671,233 @@ async fn run_client_inner(
 
     if let Some(mut rec) = recorder {
         let _ = rec.finalize();
+    }
+
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn send_next_file_chunk(
+    socket: &UdpSocket,
+    crypto: &mut CryptoState,
+    connect_addr: SocketAddr,
+    alias: u32,
+    packet_id: u64,
+    relay_info: Option<&RelayInfo>,
+    budget_kbps: u32,
+    limiter: &mut FileTransferLimiter,
+    outgoing: &mut VecDeque<OutgoingFile>,
+) -> Result<()> {
+    let Some(front) = outgoing.front_mut() else {
+        return Ok(());
+    };
+
+    if !front.header_sent() {
+        let header = offer_to_proto(front.offer());
+        let msg = ProtoMessage {
+            content: Some(rift_core::message::Content::Control(ProtoControl {
+                content: Some(rift_core::control_message::Content::FileHeader(header)),
+            })),
+        };
+        send_rift_msg(
+            socket,
+            crypto,
+            connect_addr,
+            msg,
+            Some(alias),
+            packet_id,
+            relay_info,
+        )
+        .await?;
+        front.mark_header_sent();
+        info!(
+            "started sending file {} ({} bytes)",
+            front.offer().filename,
+            front.offer().file_size
+        );
+        return Ok(());
+    }
+
+    if front.paused() {
+        return Ok(());
+    }
+
+    limiter.set_rate_kbps(budget_kbps);
+
+    if front.finished() {
+        return Ok(());
+    }
+
+    let current_chunk = front.next_chunk_index();
+    match front.next_chunk()? {
+        Some(chunk) => {
+            if !limiter.try_take(chunk.payload.len()) {
+                front.set_next_chunk(current_chunk)?;
+                return Ok(());
+            }
+            let msg = ProtoMessage {
+                content: Some(rift_core::message::Content::Media(
+                    rift_core::MediaMessage {
+                        content: Some(rift_core::media_message::Content::FileChunk(
+                            rift_core::FileChunk {
+                                file_id: chunk.file_id,
+                                chunk_index: chunk.chunk_index,
+                                payload: chunk.payload,
+                            },
+                        )),
+                    },
+                )),
+            };
+            send_rift_msg(
+                socket,
+                crypto,
+                connect_addr,
+                msg,
+                Some(alias),
+                packet_id,
+                relay_info,
+            )
+            .await?;
+            Ok(())
+        }
+        None => Ok(()),
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn handle_incoming_file_chunk(
+    socket: &UdpSocket,
+    crypto: &mut CryptoState,
+    connect_addr: SocketAddr,
+    alias: u32,
+    packet_id: u64,
+    relay_info: Option<&RelayInfo>,
+    incoming: &mut HashMap<u64, IncomingFile>,
+    chunk: rift_core::FileChunk,
+) -> Result<()> {
+    let file_id = chunk.file_id;
+    let mut progress_update: Option<(u32, u32, u32)> = None;
+    let complete = if let Some(entry) = incoming.get_mut(&file_id) {
+        let complete = entry.write_chunk(chunk.chunk_index, &chunk.payload)?;
+        if !complete {
+            let resume_chunk = entry.next_missing_chunk();
+            let received = entry.received_count();
+            let total = entry.offer().total_chunks;
+            let remaining = total.saturating_sub(received);
+            let gap_detected = resume_chunk < chunk.chunk_index;
+            let progress_due = received % FILE_TRANSFER_PROGRESS_CHUNK_INTERVAL == 0;
+            if gap_detected || progress_due || remaining <= 2 {
+                progress_update = Some((resume_chunk, received, total));
+            }
+        }
+        complete
+    } else {
+        let msg = ProtoMessage {
+            content: Some(rift_core::message::Content::Control(ProtoControl {
+                content: Some(rift_core::control_message::Content::FileStatus(
+                    file_status_message(
+                        file_id,
+                        rift_core::file_status::Status::Error,
+                        "no matching file offer",
+                    ),
+                )),
+            })),
+        };
+        let _ = send_rift_msg(
+            socket,
+            crypto,
+            connect_addr,
+            msg,
+            Some(alias),
+            packet_id,
+            relay_info,
+        )
+        .await;
+        return Ok(());
+    };
+
+    if !complete {
+        if let Some((resume_chunk, received, total)) = progress_update {
+            let msg = ProtoMessage {
+                content: Some(rift_core::message::Content::Control(ProtoControl {
+                    content: Some(rift_core::control_message::Content::FileStatus(
+                        file_status_message(
+                            file_id,
+                            rift_core::file_status::Status::InProgress,
+                            format!("resume_chunk={resume_chunk} received={received}/{total}"),
+                        ),
+                    )),
+                })),
+            };
+            let _ = send_rift_msg(
+                socket,
+                crypto,
+                connect_addr,
+                msg,
+                Some(alias),
+                packet_id,
+                relay_info,
+            )
+            .await;
+        }
+        return Ok(());
+    }
+
+    if let Some(entry) = incoming.remove(&file_id) {
+        match entry.finalize() {
+            Ok(path) => {
+                info!(
+                    "received file from host file_id={} path={}",
+                    file_id,
+                    path.display()
+                );
+                let msg = ProtoMessage {
+                    content: Some(rift_core::message::Content::Control(ProtoControl {
+                        content: Some(rift_core::control_message::Content::FileStatus(
+                            file_status_message(
+                                file_id,
+                                rift_core::file_status::Status::Complete,
+                                path.display().to_string(),
+                            ),
+                        )),
+                    })),
+                };
+                let _ = send_rift_msg(
+                    socket,
+                    crypto,
+                    connect_addr,
+                    msg,
+                    Some(alias),
+                    packet_id,
+                    relay_info,
+                )
+                .await;
+            }
+            Err(err) => {
+                warn!("failed to finalize incoming file {}: {}", file_id, err);
+                let msg = ProtoMessage {
+                    content: Some(rift_core::message::Content::Control(ProtoControl {
+                        content: Some(rift_core::control_message::Content::FileStatus(
+                            file_status_message(
+                                file_id,
+                                rift_core::file_status::Status::Error,
+                                err.to_string(),
+                            ),
+                        )),
+                    })),
+                };
+                let _ = send_rift_msg(
+                    socket,
+                    crypto,
+                    connect_addr,
+                    msg,
+                    Some(alias),
+                    packet_id,
+                    relay_info,
+                )
+                .await;
+            }
+        }
     }
 
     Ok(())

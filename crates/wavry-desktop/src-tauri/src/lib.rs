@@ -19,6 +19,7 @@ pub fn run() {
             commands::set_signaling_token,
             commands::start_session,
             commands::stop_session,
+            commands::send_file_transfer_command,
             commands::list_monitors,
             commands::connect_via_id,
             commands::start_host,

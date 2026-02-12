@@ -2,6 +2,8 @@ use anyhow::Result;
 use rift_crypto::connection::SecureClient;
 use std::fmt;
 use std::net::SocketAddr;
+use std::path::PathBuf;
+use std::str::FromStr;
 use std::sync::{
     atomic::{AtomicBool, AtomicU64},
     Arc, Mutex,
@@ -24,6 +26,55 @@ pub struct ClientConfig {
     pub vr_adapter: Option<Arc<Mutex<dyn VrAdapter>>>,
     pub runtime_stats: Option<Arc<ClientRuntimeStats>>,
     pub recorder_config: Option<wavry_media::RecorderConfig>,
+    pub send_files: Vec<PathBuf>,
+    pub file_out_dir: PathBuf,
+    pub file_max_bytes: u64,
+    pub file_command_bus: Option<tokio::sync::broadcast::Sender<FileTransferCommand>>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FileTransferAction {
+    Pause,
+    Resume,
+    Cancel,
+    Retry,
+}
+
+impl FileTransferAction {
+    pub const fn as_protocol_message(self) -> &'static str {
+        match self {
+            Self::Pause => "pause",
+            Self::Resume => "resume",
+            Self::Cancel => "cancel",
+            Self::Retry => "retry",
+        }
+    }
+}
+
+impl fmt::Display for FileTransferAction {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_protocol_message())
+    }
+}
+
+impl FromStr for FileTransferAction {
+    type Err = &'static str;
+
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "pause" => Ok(Self::Pause),
+            "resume" => Ok(Self::Resume),
+            "cancel" | "canceled" => Ok(Self::Cancel),
+            "retry" => Ok(Self::Retry),
+            _ => Err("expected one of: pause, resume, cancel, retry"),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FileTransferCommand {
+    pub file_id: u64,
+    pub action: FileTransferAction,
 }
 
 #[derive(Debug, Clone)]
@@ -89,6 +140,10 @@ mod tests {
             vr_adapter: None,
             runtime_stats: None,
             recorder_config: None,
+            send_files: Vec::new(),
+            file_out_dir: PathBuf::from("received-files"),
+            file_max_bytes: wavry_common::file_transfer::DEFAULT_MAX_FILE_BYTES,
+            file_command_bus: None,
         };
 
         assert_eq!(config.client_name, "TestClient");
@@ -115,6 +170,10 @@ mod tests {
             vr_adapter: None,
             runtime_stats: None,
             recorder_config: None,
+            send_files: Vec::new(),
+            file_out_dir: PathBuf::from("received-files"),
+            file_max_bytes: wavry_common::file_transfer::DEFAULT_MAX_FILE_BYTES,
+            file_command_bus: None,
         };
 
         let config2 = config1.clone();
