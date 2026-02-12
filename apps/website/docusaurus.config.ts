@@ -4,7 +4,7 @@ import type * as Preset from '@docusaurus/preset-classic';
 
 const config: Config = {
   title: 'Wavry',
-  tagline: 'Latency-first remote desktop, game streaming, and cloud delivery.',
+  tagline: 'Latency-first remote sessions for desktop control, game streaming, and cloud apps.',
   favicon: 'img/favicon.ico',
 
   future: {
@@ -63,7 +63,13 @@ const config: Config = {
           type: 'docSidebar',
           sidebarId: 'docsSidebar',
           position: 'left',
-          label: 'Documentation',
+          label: 'Docs',
+        },
+        {
+          type: 'doc',
+          docId: 'overview',
+          position: 'left',
+          label: 'What Is Wavry',
         },
         {
           type: 'doc',

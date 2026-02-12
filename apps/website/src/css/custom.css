@@ -1,55 +1,189 @@
-@import url('https://fonts.googleapis.com/css2?family=Public+Sans:wght@400;500;600;700&family=Space+Grotesk:wght@600;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=IBM+Plex+Mono:wght@400;500;600&display=swap');
 
 :root {
-  --ifm-color-primary: #0b8c8f;
-  --ifm-color-primary-dark: #0a7f82;
-  --ifm-color-primary-darker: #087072;
-  --ifm-color-primary-darkest: #065b5c;
-  --ifm-color-primary-light: #11a1a3;
-  --ifm-color-primary-lighter: #18b3b5;
-  --ifm-color-primary-lightest: #27c9cb;
-  --ifm-background-color: #fbfcfd;
-  --ifm-font-family-base: 'Public Sans', 'Segoe UI', sans-serif;
-  --ifm-heading-font-family: 'Space Grotesk', 'Segoe UI', sans-serif;
-  --ifm-heading-font-weight: 700;
-  --ifm-code-font-size: 94%;
-  --ifm-line-height-base: 1.7;
+  --ifm-color-primary: #0d7f95;
+  --ifm-color-primary-dark: #0b7084;
+  --ifm-color-primary-darker: #086173;
+  --ifm-color-primary-darkest: #054a58;
+  --ifm-color-primary-light: #1696ad;
+  --ifm-color-primary-lighter: #23acc1;
+  --ifm-color-primary-lightest: #41c1d4;
+
+  --ifm-background-color: #f9fcfe;
+  --ifm-navbar-background-color: rgba(249, 252, 254, 0.94);
+  --ifm-footer-background-color: #051922;
+
+  --ifm-font-family-base: 'Manrope', 'Segoe UI', sans-serif;
+  --ifm-font-family-monospace: 'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+  --ifm-heading-font-family: 'Manrope', 'Segoe UI', sans-serif;
+  --ifm-heading-font-weight: 800;
+
+  --ifm-line-height-base: 1.72;
+  --ifm-code-font-size: 93%;
   --ifm-container-width: 1140px;
   --ifm-container-width-xl: 1240px;
-  --ifm-navbar-height: 4.25rem;
-  --ifm-navbar-background-color: rgba(251, 252, 253, 0.94);
-  --ifm-footer-background-color: #061b24;
-  --docusaurus-highlighted-code-line-bg: rgba(0, 0, 0, 0.06);
+  --ifm-navbar-height: 4.2rem;
+
+  --ifm-menu-color-active: #0a5a6d;
+  --ifm-menu-color-background-active: rgba(17, 127, 152, 0.12);
+
+  --ifm-heading-color: #082b39;
+  --ifm-font-color-base: #143848;
+  --ifm-link-color: #0b6e85;
+  --ifm-link-hover-color: #08596d;
+
+  --ifm-toc-border-color: rgba(12, 84, 102, 0.2);
+  --ifm-toc-link-color: #265362;
+
+  --doc-border: rgba(9, 76, 93, 0.18);
+  --doc-surface: #ffffff;
+  --doc-shadow: 0 10px 30px rgba(7, 32, 40, 0.06);
+
+  --docusaurus-highlighted-code-line-bg: rgba(6, 80, 102, 0.1);
 }
 
 [data-theme='dark'] {
-  --ifm-color-primary: #2bd0d2;
-  --ifm-color-primary-dark: #23bbbc;
-  --ifm-color-primary-darker: #1ca6a8;
-  --ifm-color-primary-darkest: #157f81;
-  --ifm-color-primary-light: #3de0e1;
-  --ifm-color-primary-lighter: #57e8e9;
-  --ifm-color-primary-lightest: #7ff1f1;
-  --ifm-background-color: #071820;
-  --ifm-navbar-background-color: rgba(9, 28, 36, 0.94);
-  --ifm-footer-background-color: #030f15;
-  --docusaurus-highlighted-code-line-bg: rgba(255, 255, 255, 0.08);
+  --ifm-color-primary: #4dd1df;
+  --ifm-color-primary-dark: #33becc;
+  --ifm-color-primary-darker: #20aab8;
+  --ifm-color-primary-darkest: #177f89;
+  --ifm-color-primary-light: #66dde8;
+  --ifm-color-primary-lighter: #80e6ee;
+  --ifm-color-primary-lightest: #a2f0f4;
+
+  --ifm-background-color: #071a24;
+  --ifm-navbar-background-color: rgba(7, 26, 36, 0.92);
+  --ifm-footer-background-color: #040f15;
+
+  --ifm-menu-color-active: #9deaf1;
+  --ifm-menu-color-background-active: rgba(99, 203, 216, 0.15);
+
+  --ifm-heading-color: #e4f6ff;
+  --ifm-font-color-base: #c4dbe6;
+  --ifm-link-color: #79dbe7;
+  --ifm-link-hover-color: #9beaf3;
+
+  --ifm-toc-border-color: rgba(142, 204, 218, 0.22);
+  --ifm-toc-link-color: #b6d6e1;
+
+  --doc-border: rgba(128, 190, 204, 0.22);
+  --doc-surface: #0b2531;
+  --doc-shadow: 0 10px 34px rgba(0, 0, 0, 0.35);
+
+  --docusaurus-highlighted-code-line-bg: rgba(110, 208, 222, 0.14);
+}
+
+html {
+  scroll-behavior: smooth;
 }
 
 .navbar {
   backdrop-filter: blur(10px);
-  border-bottom: 1px solid rgba(8, 85, 103, 0.12);
+  border-bottom: 1px solid var(--doc-border);
+  box-shadow: 0 6px 20px rgba(4, 21, 28, 0.06);
+}
+
+.footer {
+  border-top: 1px solid rgba(90, 151, 171, 0.25);
+}
+
+.footer__title {
+  font-weight: 700;
+}
+
+.main-wrapper {
+  overflow-x: clip;
+}
+
+.markdown > h1,
+.markdown > h2,
+.markdown > h3 {
+  letter-spacing: -0.01em;
 }
 
 .markdown > h1 {
-  margin-bottom: 1.1rem;
+  margin-bottom: 1rem;
 }
 
 .markdown > h2 {
-  margin-top: 2.6rem;
+  margin-top: 2.4rem;
+  padding-top: 0.25rem;
+  border-top: 1px solid var(--doc-border);
+}
+
+.markdown p,
+.markdown ul,
+.markdown ol,
+.markdown table,
+.markdown pre,
+.markdown blockquote {
+  max-width: 78ch;
 }
 
 .markdown table {
   display: table;
   width: 100%;
+  border-collapse: collapse;
+  background: var(--doc-surface);
+  border: 1px solid var(--doc-border);
+  box-shadow: var(--doc-shadow);
+  border-radius: 0.7rem;
+  overflow: hidden;
+}
+
+.markdown table th,
+.markdown table td {
+  border-color: var(--doc-border);
+}
+
+.markdown table th {
+  background: rgba(13, 127, 149, 0.1);
+  font-weight: 700;
+}
+
+.markdown code {
+  border: 1px solid var(--doc-border);
+}
+
+.markdown pre {
+  border: 1px solid var(--doc-border);
+  box-shadow: var(--doc-shadow);
+}
+
+.theme-doc-sidebar-container {
+  border-right: 1px solid var(--doc-border);
+}
+
+.theme-doc-toc-desktop {
+  border-left: 1px solid var(--ifm-toc-border-color);
+}
+
+.pagination-nav__link {
+  border: 1px solid var(--doc-border);
+  background: var(--doc-surface);
+  box-shadow: var(--doc-shadow);
+}
+
+.alert {
+  border: 1px solid var(--doc-border);
+  box-shadow: var(--doc-shadow);
+}
+
+@media (max-width: 996px) {
+  .theme-doc-sidebar-container {
+    border-right: none;
+  }
+
+  .theme-doc-toc-desktop {
+    border-left: none;
+  }
+
+  .markdown p,
+  .markdown ul,
+  .markdown ol,
+  .markdown table,
+  .markdown pre,
+  .markdown blockquote {
+    max-width: 100%;
+  }
 }

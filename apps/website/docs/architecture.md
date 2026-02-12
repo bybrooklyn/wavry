@@ -1,48 +1,89 @@
 ---
 title: Architecture
-description: System layout, data flow, and transport strategy.
+description: How Wavry is structured across protocol, crypto, media runtime, and control plane.
 ---
 
-## System Shape
+Wavry is built as a modular stack with explicit trust boundaries between signaling and encrypted media traffic.
 
-Wavry uses a modular architecture with clear control-plane and data-plane boundaries.
+## Architectural Layers
 
-- Control plane: signaling, auth coordination, relay selection.
-- Data plane: encrypted media/input traffic over P2P or relay fallback.
-
-## Primary Components
-
-| Layer | Component | Responsibility |
+| Layer | Components | Purpose |
 |---|---|---|
-| Protocol | `rift-core` | Framing, DELTA control, FEC |
-| Crypto | `rift-crypto` | Noise XX + ChaCha20-Poly1305 |
-| Session runtime | `wavry-server`, `wavry-client` | Capture/encode/send and receive/decode/input |
-| Control plane | `wavry-gateway` | Signaling, operator APIs |
-| Transport fallback | `wavry-relay` | Blind forwarding only |
-| UX surfaces | Desktop/mobile/web apps | User workflows and platform integration |
+| Protocol + control | `rift-core` | Frame/packet model, DELTA congestion control, FEC, control messages |
+| Cryptography | `rift-crypto` | Identity keys, handshake, replay protection, authenticated encryption |
+| Session runtime | `wavry-server`, `wavry-client` | Capture/encode/send and receive/decode/render/input loops |
+| Control plane | `wavry-gateway` | Session signaling, coordination APIs, operator-facing controls |
+| Transport fallback | `wavry-relay` | Blind forwarding for encrypted UDP payloads |
+| User surfaces | Desktop/mobile/web apps | UX and platform-specific interaction paths |
 
-## Connection Strategy
+## Control Plane vs Data Plane
 
-1. Attempt direct peer-to-peer connectivity.
-2. Use relay only when direct path fails or is blocked.
-3. Keep relay blind to decrypted payload content.
+### Control plane
 
-## Media/Input Path
+Used to coordinate session setup and routing decisions:
+
+- Peer signaling
+- Session metadata exchange
+- Relay allocation when needed
+
+### Data plane
+
+Carries encrypted real-time traffic:
+
+- Media payloads (video/audio)
+- Input/control traffic
+- Reliability/correction metadata (for low-latency recovery)
+
+Wavry keeps these concerns separate so relay/gateway services do not need decrypted payload access.
+
+## Session Lifecycle
+
+1. **Discovery and signaling**
+   - Client resolves host (direct or gateway-assisted).
+2. **Crypto handshake**
+   - Peers establish shared secrets and authenticated transport state.
+3. **Media/input loop start**
+   - Host sends encoded media; client sends encrypted input events.
+4. **Adaptive runtime control**
+   - DELTA adjusts bitrate/FEC based on RTT/loss/jitter.
+5. **Path fallback (if required)**
+   - Session uses relay only if direct transport is not viable.
+
+## Data Flow (Simplified)
 
 ```text
-Host Capture -> Encode -> Packetize (RIFT) -> Encrypt -> UDP Transport
-Client UDP Receive -> Decrypt -> Reorder/FEC -> Decode -> Present
-Client Input -> Encrypted Control Path -> Host Injection
+Host capture -> encode -> packetize (RIFT) -> encrypt -> UDP transport
+Client receive -> decrypt -> reorder/FEC -> decode -> present
+Client input -> encrypt -> control path -> host injection
 ```
 
-## Performance Principles
+## Latency Strategy
 
-- Keep queues short; drop stale frames over growing latency.
-- Keep input processing on high-priority paths.
-- Use hardware encode/decode where available.
-- Track RTT/jitter continuously and adapt bitrate quickly.
+Wavry favors responsiveness by design:
 
-## Deep Specs
+- Keep buffers/queues short
+- Prefer dropping stale work over building delay
+- Adapt bitrate quickly when congestion appears
+- Use FEC/retransmit strategy tuned for interactive deadlines
+
+## Security Boundaries
+
+- Relay forwards encrypted blobs and should not require payload visibility.
+- Keys and identity material stay in trusted host/client context.
+- Gateway control APIs should be hardened and audited separately.
+
+For deeper security details, see [Security](/docs/security).
+
+## Extension Points
+
+Teams usually extend Wavry in these areas:
+
+- Platform capture/render backends
+- Session admission/auth integrations
+- Policy controls for routing and relay usage
+- Product-specific UI and provisioning workflows
+
+## Detailed Specs
 
 - [WAVRY_ARCHITECTURE.md](https://github.com/bybrooklyn/wavry/blob/main/docs/WAVRY_ARCHITECTURE.md)
 - [RIFT_SPEC_V1.md](https://github.com/bybrooklyn/wavry/blob/main/docs/RIFT_SPEC_V1.md)
