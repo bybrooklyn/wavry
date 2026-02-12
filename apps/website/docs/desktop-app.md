@@ -65,6 +65,6 @@ If packaged app loads a localhost error, confirm:
 
 ## Related Docs
 
-- [Getting Started](/docs/getting-started)
-- [Troubleshooting](/docs/troubleshooting)
-- [Operations](/docs/operations)
+- [Getting Started](/getting-started)
+- [Troubleshooting](/troubleshooting)
+- [Operations](/operations)

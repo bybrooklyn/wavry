@@ -19,7 +19,7 @@ const sidebars: SidebarsConfig = {
     {
       type: 'category',
       label: 'Deploy and Operate',
-      items: ['deployment-modes', 'security', 'operations', 'troubleshooting'],
+      items: ['deployment-modes', 'pricing', 'security', 'operations', 'troubleshooting'],
     },
     'roadmap',
     'faq',

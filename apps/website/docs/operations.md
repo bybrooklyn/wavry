@@ -87,6 +87,6 @@ Before major rollout:
 
 ## Related Docs
 
-- [Troubleshooting](/docs/troubleshooting)
-- [Security](/docs/security)
-- [Configuration Reference](/docs/configuration-reference)
+- [Troubleshooting](/troubleshooting)
+- [Security](/security)
+- [Configuration Reference](/configuration-reference)

@@ -72,7 +72,7 @@ Wavry favors responsiveness by design:
 - Keys and identity material stay in trusted host/client context.
 - Gateway control APIs should be hardened and audited separately.
 
-For deeper security details, see [Security](/docs/security).
+For deeper security details, see [Security](/security).
 
 ## Extension Points
 

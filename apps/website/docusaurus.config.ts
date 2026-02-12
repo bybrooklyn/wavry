@@ -34,10 +34,11 @@ const config: Config = {
       'classic',
       {
         docs: {
-          routeBasePath: 'docs',
+          routeBasePath: '/',
           sidebarPath: './sidebars.ts',
           editUrl: 'https://github.com/bybrooklyn/wavry/edit/main/apps/website/',
         },
+        pages: false,
         blog: false,
         theme: {
           customCss: './src/css/custom.css',
@@ -50,6 +51,7 @@ const config: Config = {
     image: 'img/logo.png',
     colorMode: {
       defaultMode: 'dark',
+      disableSwitch: true,
       respectPrefersColorScheme: false,
     },
     navbar: {
@@ -60,16 +62,16 @@ const config: Config = {
       },
       items: [
         {
-          type: 'docSidebar',
-          sidebarId: 'docsSidebar',
-          position: 'left',
-          label: 'Docs',
-        },
-        {
           type: 'doc',
           docId: 'overview',
           position: 'left',
-          label: 'What Is Wavry',
+          label: 'Overview',
+        },
+        {
+          type: 'doc',
+          docId: 'getting-started',
+          position: 'left',
+          label: 'Getting Started',
         },
         {
           to: '/pricing',
@@ -92,15 +94,15 @@ const config: Config = {
           items: [
             {
               label: 'Overview',
-              to: '/docs/overview',
+              to: '/',
             },
             {
               label: 'Getting Started',
-              to: '/docs/getting-started',
+              to: '/getting-started',
             },
             {
               label: 'Deployment Modes',
-              to: '/docs/deployment-modes',
+              to: '/deployment-modes',
             },
             {
               label: 'Pricing',
@@ -113,25 +115,33 @@ const config: Config = {
           items: [
             {
               label: 'Architecture',
-              to: '/docs/architecture',
+              to: '/architecture',
+            },
+            {
+              label: 'Lifecycle',
+              to: '/lifecycle',
+            },
+            {
+              label: 'Networking',
+              to: '/networking-and-relay',
             },
             {
               label: 'Security',
-              to: '/docs/security',
+              to: '/security',
             },
             {
               label: 'Operations',
-              to: '/docs/operations',
-            },
-            {
-              label: 'Troubleshooting',
-              to: '/docs/troubleshooting',
+              to: '/operations',
             },
           ],
         },
         {
-          title: 'Commercial',
+          title: 'Licensing',
           items: [
+            {
+              label: 'RIFT / AGPL-3.0 License',
+              href: 'https://github.com/bybrooklyn/wavry/blob/main/LICENSE',
+            },
             {
               label: 'Commercial Terms',
               href: 'https://github.com/bybrooklyn/wavry/blob/main/COMMERCIAL.md',
@@ -141,12 +151,8 @@ const config: Config = {
               href: 'https://github.com/bybrooklyn/wavry/blob/main/TERMS.md',
             },
             {
-              label: 'Pricing',
-              to: '/pricing',
-            },
-            {
-              label: 'License',
-              href: 'https://github.com/bybrooklyn/wavry/blob/main/LICENSE',
+              label: 'contact@wavry.dev',
+              href: 'mailto:contact@wavry.dev',
             },
           ],
         },
@@ -154,7 +160,7 @@ const config: Config = {
       copyright: `Copyright © ${new Date().getFullYear()} Wavry.`,
     },
     prism: {
-      theme: prismThemes.github,
+      theme: prismThemes.dracula,
       darkTheme: prismThemes.dracula,
     },
   } satisfies Preset.ThemeConfig,

@@ -92,7 +92,7 @@ This page maps Wavry capabilities to real product scenarios so you can evaluate 
 | Private/proprietary product integration | Commercial deployment planning |
 | Fastest launch with less ops burden | Hosted control-plane usage |
 
-See [Deployment Modes](/docs/deployment-modes) for the full model comparison.
+See [Deployment Modes](/deployment-modes) for the full model comparison.
 
 ## Evaluation Checklist
 
@@ -100,4 +100,4 @@ See [Deployment Modes](/docs/deployment-modes) for the full model comparison.
 2. Confirm your license/commercial constraints.
 3. Confirm your control-plane ownership requirements.
 4. Confirm your required OS/platform support paths.
-5. Run a pilot using [Getting Started](/docs/getting-started) before making architecture commitments.
+5. Run a pilot using [Getting Started](/getting-started) before making architecture commitments.

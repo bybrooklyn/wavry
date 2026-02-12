@@ -84,6 +84,6 @@ Deployment configuration should define:
 
 ## Related Docs
 
-- [Getting Started](/docs/getting-started)
-- [Networking and Relay](/docs/networking-and-relay)
-- [Operations](/docs/operations)
+- [Getting Started](/getting-started)
+- [Networking and Relay](/networking-and-relay)
+- [Operations](/operations)

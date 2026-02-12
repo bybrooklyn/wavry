@@ -21,7 +21,7 @@ function normalizeBasePath(input) {
 
 const BASE_PATH = normalizeBasePath(process.env.STYLE_CHECK_BASE_PATH ?? '/');
 const ROOT_URL = new URL(BASE_PATH, BASE_URL).toString();
-const OVERVIEW_DOC_URL = new URL(`${BASE_PATH}docs/overview`, BASE_URL).toString();
+const PRICING_URL = new URL(`${BASE_PATH}pricing`, BASE_URL).toString();
 
 function startServer() {
   const child = spawn(
@@ -63,42 +63,6 @@ function assert(condition, message) {
   }
 }
 
-async function getLayoutMetrics(page) {
-  return page.evaluate(() => {
-    const hero = document.querySelector('[class*="hero"]');
-    const cardGrid = document.querySelector('[class*="cardGrid"]');
-    const trackGrid = document.querySelector('[class*="trackGrid"]');
-
-    const heroStyle = hero ? window.getComputedStyle(hero) : null;
-
-    const cardColumns = cardGrid
-      ? new Set(
-          Array.from(cardGrid.children, (node) =>
-            Math.round(node.getBoundingClientRect().left),
-          ),
-        ).size
-      : 0;
-
-    const trackColumns = trackGrid
-      ? new Set(
-          Array.from(trackGrid.children, (node) =>
-            Math.round(node.getBoundingClientRect().left),
-          ),
-        ).size
-      : 0;
-
-    const doc = document.documentElement;
-
-    return {
-      heroPaddingTop: heroStyle ? parseFloat(heroStyle.paddingTop) : 0,
-      heroPaddingBottom: heroStyle ? parseFloat(heroStyle.paddingBottom) : 0,
-      cardColumns,
-      trackColumns,
-      hasHorizontalOverflow: doc.scrollWidth > doc.clientWidth + 1,
-    };
-  });
-}
-
 async function runChecks() {
   const browser = await chromium.launch({headless: true});
 
@@ -106,44 +70,99 @@ async function runChecks() {
     const desktop = await browser.newPage({viewport: {width: 1366, height: 900}});
     await desktop.goto(ROOT_URL, {waitUntil: 'networkidle'});
 
-    const desktopMetrics = await getLayoutMetrics(desktop);
+    const desktopMetrics = await desktop.evaluate(() => {
+      const doc = document.documentElement;
+      const heading = document.querySelector('h1')?.textContent ?? '';
+      const bodyText = document.body.textContent ?? '';
+      const bodyBg = window.getComputedStyle(document.body).backgroundColor;
+      const footerContainer = document.querySelector('.footer .container');
+      const footerRect = footerContainer?.getBoundingClientRect();
+
+      const footerCenterDelta = footerRect
+        ? Math.abs((footerRect.left + footerRect.width / 2) - window.innerWidth / 2)
+        : Number.POSITIVE_INFINITY;
+
+      return {
+        heading,
+        bodyText,
+        bodyBg,
+        hasHorizontalOverflow: doc.scrollWidth > doc.clientWidth + 1,
+        footerCenterDelta,
+      };
+    });
+
     assert(
-      desktopMetrics.heroPaddingTop >= 100,
-      `Desktop hero top padding too small: ${desktopMetrics.heroPaddingTop}px`,
+      desktopMetrics.heading.includes('Wavry') || desktopMetrics.bodyText.includes('Wavry Overview'),
+      `Root docs page did not render expected content. Found heading: ${desktopMetrics.heading}`,
     );
+    assert(!desktopMetrics.hasHorizontalOverflow, 'Desktop docs page has horizontal overflow');
+    assert(desktopMetrics.bodyBg !== 'rgb(255, 255, 255)', 'Background rendered as white');
     assert(
-      desktopMetrics.heroPaddingBottom >= 90,
-      `Desktop hero bottom padding too small: ${desktopMetrics.heroPaddingBottom}px`,
+      desktopMetrics.footerCenterDelta <= 8,
+      `Footer container is not centered. Delta: ${desktopMetrics.footerCenterDelta.toFixed(2)}px`,
     );
-    assert(
-      desktopMetrics.cardColumns >= 3,
-      `Desktop card grid expected >=3 columns, got ${desktopMetrics.cardColumns}`,
-    );
-    assert(
-      desktopMetrics.trackColumns >= 2,
-      `Desktop track grid expected >=2 columns, got ${desktopMetrics.trackColumns}`,
-    );
-    assert(!desktopMetrics.hasHorizontalOverflow, 'Desktop page has horizontal overflow');
+
+    const deploymentLink = desktop.locator('a[href="/deployment-modes"]').first();
+    if ((await deploymentLink.count()) > 0) {
+      await deploymentLink.hover();
+      const hoverColor = await deploymentLink.evaluate(
+        (node) => window.getComputedStyle(node).color,
+      );
+      assert(hoverColor !== 'rgb(0, 0, 0)', 'Deployment Modes link turns black on hover');
+    }
+
+    const licenseLink = desktop.locator('a[href="https://github.com/bybrooklyn/wavry/blob/main/LICENSE"]').first();
+    if ((await licenseLink.count()) > 0) {
+      await licenseLink.hover();
+      const hoverColor = await licenseLink.evaluate(
+        (node) => window.getComputedStyle(node).color,
+      );
+      assert(hoverColor !== 'rgb(0, 0, 0)', 'AGPL/RIFT license link turns black on hover');
+    }
 
     const mobile = await browser.newPage({viewport: {width: 390, height: 844}});
     await mobile.goto(ROOT_URL, {waitUntil: 'networkidle'});
-    const mobileMetrics = await getLayoutMetrics(mobile);
-    assert(
-      mobileMetrics.cardColumns === 1,
-      `Mobile card grid expected 1 column, got ${mobileMetrics.cardColumns}`,
-    );
-    assert(
-      mobileMetrics.trackColumns === 1,
-      `Mobile track grid expected 1 column, got ${mobileMetrics.trackColumns}`,
-    );
-    assert(!mobileMetrics.hasHorizontalOverflow, 'Mobile page has horizontal overflow');
 
-    const docsPage = await browser.newPage({viewport: {width: 1366, height: 900}});
-    await docsPage.goto(OVERVIEW_DOC_URL, {waitUntil: 'networkidle'});
-    const headingText = await docsPage.textContent('h1');
+    const mobileMetrics = await mobile.evaluate(() => {
+      const doc = document.documentElement;
+      const selectors = [
+        '.navbar__toggle',
+        'button[aria-label="Open navigation bar"]',
+        'button[aria-label="Open sidebar"]',
+        '.theme-doc-sidebar-menu',
+      ];
+
+      const hasVisibleToggle = selectors.some((selector) => {
+        const node = document.querySelector(selector);
+        if (!node) {
+          return false;
+        }
+        const style = window.getComputedStyle(node);
+        const rect = node.getBoundingClientRect();
+        return (
+          style.display !== 'none' &&
+          style.visibility !== 'hidden' &&
+          parseFloat(style.opacity || '1') > 0 &&
+          rect.width > 0 &&
+          rect.height > 0
+        );
+      });
+
+      return {
+        hasHorizontalOverflow: doc.scrollWidth > doc.clientWidth + 1,
+        hasVisibleToggle,
+      };
+    });
+
+    assert(!mobileMetrics.hasHorizontalOverflow, 'Mobile docs page has horizontal overflow');
+    assert(!mobileMetrics.hasVisibleToggle, 'Mobile sidebar toggle is visible');
+
+    const pricingPage = await browser.newPage({viewport: {width: 1366, height: 900}});
+    await pricingPage.goto(PRICING_URL, {waitUntil: 'networkidle'});
+    const pricingHeading = await pricingPage.textContent('h1');
     assert(
-      typeof headingText === 'string' && headingText.includes('Wavry Overview'),
-      'Docs overview page did not render expected heading',
+      typeof pricingHeading === 'string' && pricingHeading.includes('Pricing'),
+      'Pricing docs page did not render expected heading',
     );
   } finally {
     await browser.close();

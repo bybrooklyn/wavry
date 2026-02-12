@@ -104,7 +104,7 @@ For each lifecycle phase, operators should track:
 
 ## Related Docs
 
-- [Architecture](/docs/architecture)
-- [Networking and Relay](/docs/networking-and-relay)
-- [Security](/docs/security)
-- [Troubleshooting](/docs/troubleshooting)
+- [Architecture](/architecture)
+- [Networking and Relay](/networking-and-relay)
+- [Security](/security)
+- [Troubleshooting](/troubleshooting)

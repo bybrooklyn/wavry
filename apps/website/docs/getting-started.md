@@ -112,8 +112,8 @@ When testing locally, confirm:
 
 ## Next Steps
 
-1. Read [Deployment Modes](/docs/deployment-modes) to pick OSS/commercial/hosted usage.
-2. Read [Architecture](/docs/architecture) to understand boundaries and extension points.
-3. Read [Session Lifecycle](/docs/lifecycle) and [Networking and Relay](/docs/networking-and-relay) to understand behavior under real network conditions.
-4. Read [Security](/docs/security) before internet-facing deployment.
-5. Use [Operations](/docs/operations) and [Troubleshooting](/docs/troubleshooting) to define your production runbook.
+1. Read [Deployment Modes](/deployment-modes) to pick OSS/commercial/hosted usage.
+2. Read [Architecture](/architecture) to understand boundaries and extension points.
+3. Read [Session Lifecycle](/lifecycle) and [Networking and Relay](/networking-and-relay) to understand behavior under real network conditions.
+4. Read [Security](/security) before internet-facing deployment.
+5. Use [Operations](/operations) and [Troubleshooting](/troubleshooting) to define your production runbook.

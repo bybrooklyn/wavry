@@ -37,7 +37,7 @@ No. Relay forwards encrypted packets and should not require payload decryption t
 
 ## Where should I start for evaluation?
 
-1. Read [Overview](/docs/overview).
-2. Follow [Getting Started](/docs/getting-started).
-3. Compare [Deployment Modes](/docs/deployment-modes).
-4. Review [Security](/docs/security) before internet exposure.
+1. Read [Overview](/).
+2. Follow [Getting Started](/getting-started).
+3. Compare [Deployment Modes](/deployment-modes).
+4. Review [Security](/security) before internet exposure.

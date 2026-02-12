@@ -73,6 +73,6 @@ During incident analysis, capture:
 
 ## Related Docs
 
-- [Session Lifecycle](/docs/lifecycle)
-- [Security](/docs/security)
-- [Operations](/docs/operations)
+- [Session Lifecycle](/lifecycle)
+- [Security](/security)
+- [Operations](/operations)

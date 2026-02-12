@@ -104,7 +104,7 @@ Use this page as a first-pass runbook when sessions fail or degrade.
 
 ## Related Docs
 
-- [Getting Started](/docs/getting-started)
-- [Session Lifecycle](/docs/lifecycle)
-- [Networking and Relay](/docs/networking-and-relay)
-- [Operations](/docs/operations)
+- [Getting Started](/getting-started)
+- [Session Lifecycle](/lifecycle)
+- [Networking and Relay](/networking-and-relay)
+- [Operations](/operations)
