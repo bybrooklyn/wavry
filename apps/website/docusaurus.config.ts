@@ -47,7 +47,7 @@ const config: Config = {
   ],
 
   themeConfig: {
-    image: 'img/logo.svg',
+    image: 'img/logo.png',
     colorMode: {
       defaultMode: 'light',
       respectPrefersColorScheme: true,
@@ -56,7 +56,7 @@ const config: Config = {
       title: 'Wavry',
       logo: {
         alt: 'Wavry Logo',
-        src: 'img/logo.svg',
+        src: 'img/logo.png',
       },
       items: [
         {
