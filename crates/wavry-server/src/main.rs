@@ -439,7 +439,7 @@ mod host {
         capturer.next_frame()
     }
 
-    #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     async fn start_audio_capture(source: AudioRouteSource) -> Result<mpsc::Receiver<EncodedFrame>> {
         let mut capturer = {
             #[cfg(target_os = "macos")]
@@ -458,7 +458,7 @@ mod host {
                 }
             }
 
-            #[cfg(any(target_os = "linux", target_os = "windows"))]
+            #[cfg(target_os = "linux")]
             {
                 match source {
                     AudioRouteSource::Disabled => return Err(anyhow!("audio source disabled")),
@@ -490,6 +490,64 @@ mod host {
                 }
             }
         });
+        Ok(rx)
+    }
+
+    #[cfg(target_os = "windows")]
+    async fn start_audio_capture(source: AudioRouteSource) -> Result<mpsc::Receiver<EncodedFrame>> {
+        match source {
+            AudioRouteSource::Disabled => return Err(anyhow!("audio source disabled")),
+            AudioRouteSource::Microphone => {
+                warn!("microphone route requested but not yet supported, using system mix");
+            }
+            AudioRouteSource::Application(app) => {
+                warn!(
+                    "application audio route '{}' requested but not yet supported, using system mix",
+                    app
+                );
+            }
+            AudioRouteSource::SystemMix => {}
+        }
+
+        let (tx, rx) = mpsc::channel(16);
+        std::thread::spawn(move || {
+            let runtime = match tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+            {
+                Ok(runtime) => runtime,
+                Err(err) => {
+                    error!(
+                        "failed to initialize audio capture runtime on Windows thread: {}",
+                        err
+                    );
+                    return;
+                }
+            };
+
+            let mut capturer = match runtime.block_on(AudioCapturer::new()) {
+                Ok(capturer) => capturer,
+                Err(err) => {
+                    error!("failed to initialize Windows audio capturer: {}", err);
+                    return;
+                }
+            };
+
+            loop {
+                match next_audio_packet(&mut capturer) {
+                    Ok(packet) => {
+                        if tx.blocking_send(packet).is_err() {
+                            break;
+                        }
+                    }
+                    Err(err) => {
+                        debug!("audio capture iteration error: {}", err);
+                        std::thread::sleep(Duration::from_millis(10));
+                    }
+                }
+            }
+        });
+
         Ok(rx)
     }
 
