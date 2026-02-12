@@ -43,8 +43,10 @@ Use this model when AGPL obligations do not fit your product or organizational r
 - Shipping Wavry-derived functionality in proprietary products
 - Private forks with restricted source disclosure
 - Enterprise procurement/compliance requirements
+- Running Wavry as a SaaS offering or deep service integration (direct discussion required)
 
 Commercial pricing details are listed on [Pricing](/pricing).
+For SaaS/integration commercial terms, contact `contact@wavry.dev`.
 
 ## 3. Official Hosted Services
 

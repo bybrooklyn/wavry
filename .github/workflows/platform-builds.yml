@@ -127,7 +127,7 @@ jobs:
           ./scripts/master-relay-smoke.sh
 
   rust-backend:
-    name: Build backend (${{ matrix.suffix }})
+    name: Build backend (${{ matrix.suffix }}-${{ matrix.arch }})
     needs: pre-build
     runs-on: ${{ matrix.os }}
     strategy:
@@ -136,12 +136,15 @@ jobs:
         include:
           - os: ubuntu-latest
             suffix: linux
+            arch: x86_64
             exe: ""
           - os: macos-14
             suffix: macos
+            arch: arm64
             exe: ""
           - os: windows-latest
             suffix: windows
+            arch: x86_64
             exe: ".exe"
     steps:
       - name: Checkout
@@ -162,25 +165,29 @@ jobs:
         with:
           shared-key: rust-${{ runner.os }}-workspace
       - name: Build
-        run: cargo build --release --locked -p wavry-master -p wavry-gateway -p wavry-relay -p wavry-server -p wavry-client -p wavry-cli -p wavry-ffi
+        run: cargo build --release --locked -p wavry-master -p wavry-gateway -p wavry-relay -p wavry-server
       - name: Stage
         shell: bash
         run: |
           mkdir -p ci-artifacts/backend
-          bins=(wavry-master wavry-gateway wavry-relay wavry-server wavry-client wavry)
+          bins=(wavry-master wavry-gateway wavry-relay wavry-server)
           for b in "${bins[@]}"; do
-            if [[ -f "target/release/${b}${{ matrix.exe }}" ]]; then
-              cp "target/release/${b}${{ matrix.exe }}" "ci-artifacts/backend/${b}-${{ matrix.suffix }}${{ matrix.exe }}"
+            src="target/release/${b}${{ matrix.exe }}"
+            dst="ci-artifacts/backend/${b}-${{ matrix.suffix }}-${{ matrix.arch }}${{ matrix.exe }}"
+            if [[ ! -f "$src" ]]; then
+              echo "Expected backend binary missing: $src" >&2
+              exit 1
             fi
+            cp "$src" "$dst"
           done
       - name: Upload
         uses: actions/upload-artifact@v4
         with:
-          name: backend-${{ matrix.suffix }}-v${{ needs.pre-build.outputs.wavry_version }}
+          name: backend-${{ matrix.suffix }}-${{ matrix.arch }}-v${{ needs.pre-build.outputs.wavry_version }}
           path: ci-artifacts/backend/
 
   desktop-tauri:
-    name: Desktop build (${{ matrix.suffix }})
+    name: Desktop build (${{ matrix.suffix }}-${{ matrix.arch }})
     needs: pre-build
     runs-on: ${{ matrix.os }}
     strategy:
@@ -189,12 +196,15 @@ jobs:
         include:
           - os: ubuntu-latest
             suffix: linux
+            arch: x86_64
             exe: ""
           - os: macos-14
             suffix: macos
+            arch: arm64
             exe: ""
           - os: windows-latest
             suffix: windows
+            arch: x86_64
             exe: ".exe"
     steps:
       - name: Checkout
@@ -241,19 +251,44 @@ jobs:
         run: |
           mkdir -p ci-artifacts/desktop
           dmg_path=""
+          app_path=""
           for root in "target/release" "crates/wavry-desktop/src-tauri/target/release"; do
             if [[ -d "$root/bundle/dmg" ]]; then
-              dmg_path="$(find "$root/bundle/dmg" -maxdepth 1 -type f -name "*.dmg" | head -n 1)"
+              dmg_path="$(find "$root/bundle/dmg" -maxdepth 1 -type f -name "*.dmg" 2>/dev/null | head -n 1 || true)"
               if [[ -n "$dmg_path" ]]; then
                 break
               fi
             fi
+            if [[ -z "$app_path" && -d "$root/bundle/macos" ]]; then
+              app_path="$(find "$root/bundle/macos" -maxdepth 1 -type d -name "*.app" 2>/dev/null | head -n 1 || true)"
+            fi
           done
-          if [[ -z "$dmg_path" ]]; then
-            echo "No desktop DMG found in bundle output" >&2
-            exit 1
+
+          out_dmg="ci-artifacts/desktop/wavry-desktop-tauri-${{ matrix.suffix }}-${{ matrix.arch }}.dmg"
+          if [[ -n "$dmg_path" ]]; then
+            cp "$dmg_path" "$out_dmg"
+            exit 0
           fi
-          cp "$dmg_path" "ci-artifacts/desktop/wavry-desktop-macos.dmg"
+
+          if [[ -n "$app_path" ]]; then
+            echo "No bundled DMG found; creating DMG from app bundle: $app_path"
+            hdiutil create \
+              -volname "Wavry Desktop" \
+              -srcfolder "$app_path" \
+              -ov \
+              -format UDZO \
+              "$out_dmg"
+            exit 0
+          fi
+
+          echo "No desktop DMG or .app bundle found in expected output paths" >&2
+          for root in "target/release" "crates/wavry-desktop/src-tauri/target/release"; do
+            if [[ -d "$root/bundle" ]]; then
+              echo "Bundle contents under $root/bundle:" >&2
+              find "$root/bundle" -maxdepth 2 -print >&2 || true
+            fi
+          done
+          exit 1
       - name: Stage non-macOS desktop binary
         if: runner.os != 'macOS'
         shell: bash
@@ -276,10 +311,12 @@ jobs:
             echo "No desktop binary found in expected output paths" >&2
             exit 1
           fi
+          mv "ci-artifacts/desktop/wavry-desktop-${{ matrix.suffix }}${{ matrix.exe }}" \
+             "ci-artifacts/desktop/wavry-desktop-tauri-${{ matrix.suffix }}-${{ matrix.arch }}${{ matrix.exe }}"
       - name: Upload
         uses: actions/upload-artifact@v4
         with:
-          name: desktop-${{ matrix.suffix }}-v${{ needs.pre-build.outputs.wavry_version }}
+          name: desktop-${{ matrix.suffix }}-${{ matrix.arch }}-v${{ needs.pre-build.outputs.wavry_version }}
           path: ci-artifacts/desktop/
 
   android:
@@ -338,13 +375,29 @@ jobs:
       - name: Build
         run: ./scripts/dev-android.sh --both --release --no-install --no-ndk-install
       - name: Stage
+        shell: bash
         run: |
+          set -euo pipefail
+          shopt -s nullglob
           mkdir -p ci-artifacts/android
-          find apps/android/app/build/outputs -name "*.apk" -exec cp {} ci-artifacts/android/ \;
+          mobile_apk="$(find apps/android/app/build/outputs -type f -name "app-mobile-release.apk" | head -n 1 || true)"
+          quest_apk="$(find apps/android/app/build/outputs -type f -name "app-quest-release.apk" | head -n 1 || true)"
+
+          if [[ -n "$mobile_apk" ]]; then
+            cp "$mobile_apk" "ci-artifacts/android/wavry-mobile-android-arm64-release.apk"
+          fi
+          if [[ -n "$quest_apk" ]]; then
+            cp "$quest_apk" "ci-artifacts/android/wavry-quest-android-arm64-release.apk"
+          fi
+
+          if [[ -z "$mobile_apk" && -z "$quest_apk" ]]; then
+            echo "No expected Android release APKs were produced." >&2
+            exit 1
+          fi
       - name: Upload
         uses: actions/upload-artifact@v4
         with:
-          name: android-v${{ needs.pre-build.outputs.wavry_version }}
+          name: android-arm64-v${{ needs.pre-build.outputs.wavry_version }}
           path: ci-artifacts/android/
 
   macos-swift:
@@ -376,7 +429,7 @@ jobs:
             -srcfolder "$app_path" \
             -ov \
             -format UDZO \
-            "ci-artifacts/macos-app/Wavry-native-macos.dmg"
+            "ci-artifacts/macos-app/wavry-desktop-native-macos-arm64.dmg"
       - name: Upload
         uses: actions/upload-artifact@v4
         with:
@@ -410,7 +463,7 @@ jobs:
           shopt -s nullglob
           mkdir -p release-assets
 
-          # Infrastructure/service binaries (exclude dev/client CLI artifacts).
+          # Infrastructure/service binaries.
           for file in artifacts/backend-*/*; do
             base="$(basename "$file")"
             case "$base" in
@@ -420,29 +473,47 @@ jobs:
             esac
           done
 
-          # Desktop app artifacts.
+          # Desktop app artifacts (Tauri).
           for file in artifacts/desktop-*/*; do
             base="$(basename "$file")"
             case "$base" in
-              wavry-desktop-linux|wavry-desktop-windows.exe|wavry-desktop-macos.dmg)
+              wavry-desktop-tauri-*)
                 cp "$file" "release-assets/$base"
                 ;;
             esac
           done
 
-          # Native macOS app bundle.
-          for file in artifacts/macos-app-*/*.dmg; do
-            cp "$file" "release-assets/$(basename "$file")"
+          # Native macOS app bundle artifacts.
+          for file in artifacts/macos-app-*/*; do
+            base="$(basename "$file")"
+            case "$base" in
+              wavry-desktop-native-macos-*.dmg)
+                cp "$file" "release-assets/$base"
+                ;;
+            esac
           done
 
-          # Android release APKs only.
+          # Android release APKs.
           for file in artifacts/android-*/*.apk; do
             base="$(basename "$file")"
             case "$base" in
-              app-mobile-release.apk|app-quest-release.apk)
+              wavry-mobile-android-arm64-release.apk|wavry-quest-android-arm64-release.apk)
                 cp "$file" "release-assets/$base"
                 ;;
             esac
+          done
+
+          required=(
+            "release-assets/wavry-master-*"
+            "release-assets/wavry-gateway-*"
+            "release-assets/wavry-relay-*"
+            "release-assets/wavry-server-*"
+          )
+          for pattern in "${required[@]}"; do
+            if ! compgen -G "$pattern" > /dev/null; then
+              echo "Missing required release asset matching: $pattern" >&2
+              exit 1
+            fi
           done
 
           count="$(find release-assets -type f | wc -l | tr -d ' ')"
@@ -454,6 +525,31 @@ jobs:
         run: |
           cd release-assets
           find . -type f -exec sha256sum {} + > ../SHA256SUMS.txt
+      - name: Generate asset manifest
+        shell: bash
+        run: |
+          {
+            echo "# Wavry Release Assets"
+            echo
+            echo "| File | Description |"
+            echo "|---|---|"
+            while IFS= read -r file; do
+              desc="Release artifact"
+              case "$file" in
+                wavry-master-*) desc="Master coordination service binary" ;;
+                wavry-gateway-*) desc="Gateway control-plane service binary" ;;
+                wavry-relay-*) desc="Relay forwarding service binary" ;;
+                wavry-server-*) desc="Host runtime service binary" ;;
+                wavry-desktop-tauri-linux-*) desc="Desktop app (Tauri) for Linux" ;;
+                wavry-desktop-tauri-windows-*.exe) desc="Desktop app (Tauri) for Windows" ;;
+                wavry-desktop-tauri-macos-*.dmg) desc="Desktop app (Tauri) for macOS (DMG)" ;;
+                wavry-desktop-native-macos-*.dmg) desc="Native Swift desktop app for macOS (DMG)" ;;
+                wavry-mobile-android-arm64-release.apk) desc="Android mobile client (arm64 release APK)" ;;
+                wavry-quest-android-arm64-release.apk) desc="Android Quest client (arm64 release APK)" ;;
+              esac
+              echo "| \`$file\` | $desc |"
+            done < <(find release-assets -maxdepth 1 -type f -printf '%f\n' | sort)
+          } > RELEASE_ASSETS.md
       - name: Delete existing release assets
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -478,3 +574,4 @@ jobs:
           files: |
             release-assets/*
             SHA256SUMS.txt
+            RELEASE_ASSETS.md

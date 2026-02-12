@@ -1,9 +1,13 @@
+.pageMain {
+  background: linear-gradient(180deg, #081926 0%, #0b2230 52%, #0d2734 100%);
+}
+
 .hero {
   position: relative;
   padding: 7.2rem 1.25rem 6.2rem;
   background:
-    radial-gradient(circle at 10% 10%, rgba(92, 175, 195, 0.22), transparent 34%),
-    linear-gradient(150deg, #0d2533 0%, #13384a 58%, #1a5263 100%);
+    radial-gradient(circle at 10% 10%, rgba(93, 193, 199, 0.18), transparent 34%),
+    linear-gradient(150deg, #081c29 0%, #0f2f3f 58%, #164c5d 100%);
 }
 
 .heroShell {
@@ -45,11 +49,14 @@
 
 .section {
   padding: 4.8rem 1.25rem 3.4rem;
+  background: transparent;
 }
 
 .sectionAlt {
   padding: 3rem 1.25rem;
-  background: linear-gradient(180deg, #f3f9fc 0%, #f8fcfe 100%);
+  background: rgba(5, 19, 28, 0.26);
+  border-top: 1px solid rgba(125, 178, 194, 0.12);
+  border-bottom: 1px solid rgba(125, 178, 194, 0.12);
 }
 
 .sectionInner {
@@ -66,11 +73,12 @@
   margin: 0;
   font-size: clamp(1.5rem, 3vw, 2.15rem);
   line-height: 1.2;
+  color: #e7f6ff;
 }
 
 .sectionText {
   margin: 0.72rem 0 0;
-  color: #2d4f5f;
+  color: #bdd6e2;
   line-height: 1.65;
 }
 
@@ -81,30 +89,31 @@
 }
 
 .card {
-  border: 1px solid rgba(10, 78, 95, 0.2);
+  border: 1px solid rgba(125, 178, 194, 0.24);
   border-radius: 0.95rem;
   padding: 1.25rem;
-  background: #ffffff;
-  box-shadow: 0 8px 24px rgba(8, 36, 45, 0.06);
+  background: #102c3a;
+  box-shadow: 0 8px 24px rgba(3, 12, 18, 0.35);
 }
 
 .cardTitle {
   margin: 0;
   font-size: 1.12rem;
+  color: #e7f6ff;
 }
 
 .cardBody {
   margin: 0.65rem 0 0;
-  color: #2d4f5f;
+  color: #bdd6e2;
   line-height: 1.6;
 }
 
 .licenseCard {
-  border: 1px solid rgba(10, 78, 95, 0.24);
+  border: 1px solid rgba(125, 178, 194, 0.3);
   border-radius: 1rem;
   padding: 1.3rem;
-  background: #ffffff;
-  box-shadow: 0 10px 28px rgba(8, 36, 45, 0.08);
+  background: #102f3f;
+  box-shadow: 0 10px 28px rgba(3, 12, 18, 0.4);
 }
 
 .licenseEyebrow {
@@ -112,7 +121,7 @@
   font-size: 0.77rem;
   text-transform: uppercase;
   letter-spacing: 0.16em;
-  color: #0f7e92;
+  color: #8de1d5;
   font-weight: 700;
 }
 
@@ -120,11 +129,12 @@
   margin: 0.55rem 0 0;
   font-size: clamp(1.25rem, 2.8vw, 1.8rem);
   line-height: 1.25;
+  color: #e7f6ff;
 }
 
 .licenseText {
   margin: 0.7rem 0 0;
-  color: #2d4f5f;
+  color: #bdd6e2;
   line-height: 1.66;
   max-width: 62rem;
 }
@@ -145,29 +155,29 @@
 .trackCard {
   text-decoration: none;
   border-radius: 0.9rem;
-  border: 1px solid rgba(10, 78, 95, 0.22);
-  background: #ffffff;
+  border: 1px solid rgba(125, 178, 194, 0.24);
+  background: #102c3a;
   padding: 1.1rem;
   transition: transform 0.14s ease, box-shadow 0.14s ease, border-color 0.14s ease;
-  box-shadow: 0 8px 22px rgba(8, 36, 45, 0.05);
+  box-shadow: 0 8px 22px rgba(3, 12, 18, 0.34);
 }
 
 .trackCard:hover {
   text-decoration: none;
   transform: translateY(-2px);
-  box-shadow: 0 12px 28px rgba(8, 36, 45, 0.1);
-  border-color: rgba(10, 78, 95, 0.44);
+  box-shadow: 0 12px 28px rgba(3, 12, 18, 0.46);
+  border-color: rgba(145, 203, 221, 0.54);
 }
 
 .trackTitle {
   margin: 0;
   font-size: 1.05rem;
-  color: #123846;
+  color: #e7f6ff;
 }
 
 .trackBody {
   margin: 0.58rem 0 0;
-  color: #2d4f5f;
+  color: #bdd6e2;
   line-height: 1.56;
 }
 

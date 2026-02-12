@@ -77,7 +77,7 @@ export default function Home(): ReactNode {
       title="Wavry"
       description="Wavry documentation for low-latency remote desktop and interactive streaming infrastructure.">
       <HomepageHeader />
-      <main>
+      <main className={styles.pageMain}>
         <section className={styles.section}>
           <div className={styles.sectionInner}>
             <div className={styles.sectionHeader}>

@@ -49,8 +49,8 @@ const config: Config = {
   themeConfig: {
     image: 'img/logo.png',
     colorMode: {
-      defaultMode: 'light',
-      respectPrefersColorScheme: true,
+      defaultMode: 'dark',
+      respectPrefersColorScheme: false,
     },
     navbar: {
       title: 'Wavry',

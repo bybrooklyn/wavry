@@ -5,6 +5,8 @@ import Link from '@docusaurus/Link';
 
 import styles from './pricing.module.css';
 
+const CONTACT_EMAIL = 'contact@wavry.dev';
+
 const commercialPlans = [
   {
     name: 'Small Team',
@@ -26,6 +28,13 @@ const commercialPlans = [
     annual: '$100 base/year + $5 per seat/year',
     alternate: 'Minimum 21 seats',
     formula: 'Yearly total = $100 + ($5 × seat count)',
+  },
+  {
+    name: 'SaaS / Integration Tier',
+    size: 'Custom agreement',
+    annual: 'Mandatory direct discussion',
+    alternate: 'For SaaS operation or deep product integration',
+    formula: `You must contact ${CONTACT_EMAIL} to discuss terms.`,
   },
 ];
 
@@ -49,6 +58,9 @@ export default function PricingPage(): ReactNode {
           <p className={styles.subtitle}>
             If you release your source under AGPL-3.0 terms, you can use Wavry for free.
             Commercial pricing applies when you want exclusion from AGPL obligations and want to use the Wavry cloud service.
+          </p>
+          <p className={styles.contactLine}>
+            Contact: <a href={`mailto:${CONTACT_EMAIL}`}>{CONTACT_EMAIL}</a>
           </p>
           <div className={styles.actions}>
             <Link className="button button--primary" to="/docs/deployment-modes">
@@ -81,6 +93,8 @@ export default function PricingPage(): ReactNode {
           </Heading>
           <p className={styles.sectionIntro}>
             Pricing below covers the commercial licensing side described above.
+            If a company wants to run Wavry as a SaaS service or integrate it directly into a service offering,
+            direct contact is required.
           </p>
           <div className={styles.grid}>
             {commercialPlans.map((plan) => (
@@ -130,6 +144,9 @@ export default function PricingPage(): ReactNode {
             <p className={styles.noticeBody}>
               If your organization is using Wavry for nonprofit or public-good work, message the project owner.
               A yearly commercial license can be granted for free.
+            </p>
+            <p className={styles.noticeBody}>
+              Contact: <a href={`mailto:${CONTACT_EMAIL}`}>{CONTACT_EMAIL}</a>
             </p>
           </article>
         </section>
