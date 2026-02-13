@@ -788,105 +788,6 @@ jobs:
             ' release-manifest.tsv > release-manifest.json
 
           rm -f release-manifest.tsv
-      - name: Generate asset manifest
-        shell: bash
-        run: |
-          {
-            echo "# Wavry Release Assets"
-            echo
-            echo "| File | Category | Platform | Architecture | Purpose |"
-            echo "|---|---|---|---|---|"
-            while IFS= read -r file; do
-              category="Other"
-              platform="Unknown"
-              arch="Unknown"
-              purpose="Release artifact"
-              case "$file" in
-                wavry-master-*)
-                  category="Backend Service"
-                  platform="${file#wavry-master-}"
-                  platform="${platform%-*}"
-                  arch="${file##*-}"
-                  arch="${arch%.exe}"
-                  purpose="Master coordination service binary"
-                  ;;
-                wavry-server-*)
-                  category="Backend Service"
-                  platform="${file#wavry-server-}"
-                  platform="${platform%-*}"
-                  arch="${file##*-}"
-                  arch="${arch%.exe}"
-                  purpose="Host runtime service binary"
-                  ;;
-                wavry-desktop-tauri-linux-*.AppImage)
-                  category="Desktop App"
-                  platform="Linux"
-                  arch="${file#wavry-desktop-tauri-linux-}"
-                  arch="${arch%.AppImage}"
-                  purpose="Portable Tauri desktop build (AppImage)"
-                  ;;
-                wavry-desktop-tauri-linux-*.deb)
-                  category="Desktop App"
-                  platform="Linux"
-                  arch="${file#wavry-desktop-tauri-linux-}"
-                  arch="${arch%.deb}"
-                  purpose="Debian/Ubuntu installable package (.deb)"
-                  ;;
-                wavry-desktop-tauri-linux-*.rpm)
-                  category="Desktop App"
-                  platform="Linux"
-                  arch="${file#wavry-desktop-tauri-linux-}"
-                  arch="${arch%.rpm}"
-                  purpose="Fedora/RHEL installable package (.rpm)"
-                  ;;
-                wavry-desktop-tauri-windows-*.exe)
-                  category="Desktop App"
-                  platform="Windows"
-                  arch="${file#wavry-desktop-tauri-windows-}"
-                  arch="${arch%.exe}"
-                  purpose="Tauri desktop executable"
-                  ;;
-                wavry-desktop-native-macos-*.dmg)
-                  category="Desktop App"
-                  platform="macOS"
-                  arch="${file#wavry-desktop-native-macos-}"
-                  arch="${arch%.dmg}"
-                  purpose="Native Swift desktop disk image (DMG)"
-                  ;;
-                wavry-mobile-android-arm64-release.apk)
-                  category="Android App"
-                  platform="Android"
-                  arch="arm64"
-                  purpose="Mobile Android client release APK"
-                  ;;
-                wavry-quest-android-arm64-release.apk)
-                  category="Android App"
-                  platform="Android (Quest)"
-                  arch="arm64"
-                  purpose="Quest Android client release APK"
-                  ;;
-              esac
-              echo "| \`$file\` | $category | $platform | $arch | $purpose |"
-            done < <(find release-assets -maxdepth 1 -type f -print | sed 's|^release-assets/||' | sort)
-          } > RELEASE_ASSETS.md
-      - name: Generate docker image manifest
-        shell: bash
-        run: |
-          {
-            echo "# Wavry Docker Images"
-            echo
-            echo "Control-plane services are Docker-only."
-            echo
-            echo "## Images"
-            echo
-            echo "- \`ghcr.io/${{ github.repository }}/gateway\`"
-            echo "- \`ghcr.io/${{ github.repository }}/relay\`"
-            echo
-            echo "## Recommended Tags"
-            echo
-            echo "- Release-pinned: \`v${{ needs.pre-build.outputs.wavry_version }}\`"
-            echo "- Mainline environments: \`main\` or \`latest\`"
-          } > DOCKER_IMAGES.md
       - name: Delete existing release assets
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -932,10 +833,7 @@ jobs:
             ## Integrity and Catalog
             - `SHA256SUMS` contains checksums for every shipped file.
             - `release-manifest.json` provides machine-readable file/platform/arch/checksum metadata.
-            - `RELEASE_ASSETS.md` is the full labeled asset catalog.
           files: |
             release-assets/*
             SHA256SUMS
             release-manifest.json
-            RELEASE_ASSETS.md
-            DOCKER_IMAGES.md

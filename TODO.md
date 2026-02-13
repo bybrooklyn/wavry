@@ -16,7 +16,7 @@ Last updated: 2026-02-13
 - [ ] Ensure release artifacts are deterministic, minimal, and consistently named across all platforms.
 - [x] Generate and publish checksums (`SHA256SUMS`) for every release artifact.
 - [x] Generate and publish a machine-readable release manifest (`release-manifest.json`) listing file name, platform, arch, and checksum.
-- [ ] Remove unnecessary release artifacts from CI upload/publish jobs.
+- [x] Remove unnecessary release artifacts from CI upload/publish jobs.
 - [ ] Fix macOS desktop artifact workflow to handle missing DMG directories safely without failing unrelated jobs.
 - [ ] Confirm no macOS Tauri release artifacts are produced if Swift-only macOS policy is adopted.
 

@@ -45,7 +45,6 @@ Metadata:
 
 - `SHA256SUMS`
 - `release-manifest.json`
-- `RELEASE_ASSETS.md`
 
 ## Excluded Files
 
