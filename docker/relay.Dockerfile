@@ -1,6 +1,9 @@
 # syntax=docker/dockerfile:1.7
 
-FROM lukemathwalker/cargo-chef:latest-rust-1-bookworm AS chef-base
+# Base image pinned by digest for security and reproducibility
+# Tag: lukemathwalker/cargo-chef:latest-rust-1-bookworm
+# Last updated: 2026-02-13
+FROM lukemathwalker/cargo-chef:latest-rust-1-bookworm@sha256:68c8f8b92cca1647e7622e8d76754b922412915e556e687d797667171fd7ef23 AS chef-base
 WORKDIR /app
 
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
@@ -26,7 +29,10 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
     --mount=type=cache,target=/app/target,sharing=locked \
     cargo build --locked --release -p wavry-relay --bin wavry-relay
 
-FROM debian:bookworm-slim AS runtime
+# Runtime base image pinned by digest for security
+# Tag: debian:bookworm-slim
+# Last updated: 2026-02-13
+FROM debian:bookworm-slim@sha256:98f4b71de414932439ac6ac690d7060df1f27161073c5036a7553723881bffbe AS runtime
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     tzdata \
