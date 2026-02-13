@@ -9,8 +9,8 @@ Last updated: 2026-02-13
 - [ ] Add robust Wayland capture fallback flow: portal readiness checks, clearer user-facing error states, and safe retry behavior.
 - [ ] Validate Linux streaming + capture + input on KDE Plasma, GNOME, and Sway/Hyprland with test evidence documented.
 - [ ] Close remaining Windows build regressions (including thread-safety around Windows audio capture types) and keep Windows CI green.
-- [ ] Enforce prerelease policy in tooling and CI so only `-canary` is accepted for prerelease tags.
-- [ ] Keep `-unstable` for internal/development versioning only (not release tag channels).
+- [x] Enforce prerelease policy in tooling and CI so only `-canary` is accepted for prerelease tags.
+- [x] Keep `-unstable` for internal/development versioning only (not release tag channels).
 - [ ] Ensure `cargo fmt --all`, `cargo clippy --workspace --all-targets -- -D warnings`, and `cargo test --workspace` are required CI gates for merge.
 - [x] Add a CI step that fails if release packaging emits unnamed or ambiguous artifacts.
 - [ ] Ensure release artifacts are deterministic, minimal, and consistently named across all platforms.
