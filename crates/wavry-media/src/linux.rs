@@ -170,6 +170,26 @@ fn available_h264_encoder_candidates() -> Vec<String> {
         .collect()
 }
 
+fn available_hevc_encoder_candidates() -> Vec<String> {
+    hardware_encoder_candidates(Codec::Hevc)
+        .iter()
+        .chain(software_encoder_candidates(Codec::Hevc).iter())
+        .copied()
+        .filter(|name| element_available(name))
+        .map(str::to_string)
+        .collect()
+}
+
+fn available_av1_encoder_candidates() -> Vec<String> {
+    hardware_encoder_candidates(Codec::Av1)
+        .iter()
+        .chain(software_encoder_candidates(Codec::Av1).iter())
+        .copied()
+        .filter(|name| element_available(name))
+        .map(str::to_string)
+        .collect()
+}
+
 fn detect_compositor_name() -> Option<String> {
     // Try to detect compositor from various environment variables and methods
     if let Ok(compositor) = env::var("WAYLAND_DISPLAY") {
@@ -255,6 +275,8 @@ pub struct LinuxRuntimeDiagnostics {
     pub required_video_source_available: bool,
     pub available_audio_sources: Vec<String>,
     pub available_h264_encoders: Vec<String>,
+    pub available_hevc_encoders: Vec<String>,
+    pub available_av1_encoders: Vec<String>,
     pub missing_gstreamer_elements: Vec<String>,
     pub recommendations: Vec<String>,
     pub compositor_name: Option<String>,
@@ -345,6 +367,8 @@ pub fn linux_runtime_diagnostics() -> Result<LinuxRuntimeDiagnostics> {
         .collect::<Vec<_>>();
 
     let available_h264_encoders = available_h264_encoder_candidates();
+    let available_hevc_encoders = available_hevc_encoder_candidates();
+    let available_av1_encoders = available_av1_encoder_candidates();
 
     let mut recommendations = Vec::new();
     if wayland_display {
@@ -373,6 +397,18 @@ pub fn linux_runtime_diagnostics() -> Result<LinuxRuntimeDiagnostics> {
     if available_h264_encoders.is_empty() {
         recommendations.push(
             "Install at least one H264 encoder plugin (x264enc, openh264enc, VAAPI, NVENC, or V4L2)."
+                .to_string(),
+        );
+    }
+    if available_hevc_encoders.is_empty() {
+        recommendations.push(
+            "HEVC/H.265 encoders not available. Install x265enc, vaapih265enc, nvh265enc, or v4l2h265enc for better compression."
+                .to_string(),
+        );
+    }
+    if available_av1_encoders.is_empty() {
+        recommendations.push(
+            "AV1 encoders not available. Install svtav1enc, vaapav1enc, or nvav1enc for best compression efficiency."
                 .to_string(),
         );
     }
@@ -412,6 +448,8 @@ pub fn linux_runtime_diagnostics() -> Result<LinuxRuntimeDiagnostics> {
         required_video_source_available,
         available_audio_sources,
         available_h264_encoders,
+        available_hevc_encoders,
+        available_av1_encoders,
         missing_gstreamer_elements,
         recommendations,
         compositor_name,
