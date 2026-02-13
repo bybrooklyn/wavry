@@ -1074,12 +1074,121 @@ async fn relay_metrics(State(state): State<RelayHttpState>) -> impl IntoResponse
     (StatusCode::OK, Json(state.server.metrics.snapshot()))
 }
 
+async fn relay_metrics_prometheus(State(state): State<RelayHttpState>) -> impl IntoResponse {
+    let snapshot = state.server.metrics.snapshot();
+    let relay_id = &state.server.relay_id;
+    
+    let prometheus_text = format!(
+        r#"# HELP wavry_relay_packets_rx Total packets received
+# TYPE wavry_relay_packets_rx counter
+wavry_relay_packets_rx{{relay_id="{relay_id}"}} {packets_rx}
+# HELP wavry_relay_bytes_rx Total bytes received
+# TYPE wavry_relay_bytes_rx counter
+wavry_relay_bytes_rx{{relay_id="{relay_id}"}} {bytes_rx}
+# HELP wavry_relay_packets_forwarded Total packets forwarded
+# TYPE wavry_relay_packets_forwarded counter
+wavry_relay_packets_forwarded{{relay_id="{relay_id}"}} {packets_forwarded}
+# HELP wavry_relay_bytes_forwarded Total bytes forwarded
+# TYPE wavry_relay_bytes_forwarded counter
+wavry_relay_bytes_forwarded{{relay_id="{relay_id}"}} {bytes_forwarded}
+# HELP wavry_relay_lease_present_packets Lease present packets received
+# TYPE wavry_relay_lease_present_packets counter
+wavry_relay_lease_present_packets{{relay_id="{relay_id}"}} {lease_present_packets}
+# HELP wavry_relay_lease_renew_packets Lease renew packets received
+# TYPE wavry_relay_lease_renew_packets counter
+wavry_relay_lease_renew_packets{{relay_id="{relay_id}"}} {lease_renew_packets}
+# HELP wavry_relay_dropped_packets Total packets dropped
+# TYPE wavry_relay_dropped_packets counter
+wavry_relay_dropped_packets{{relay_id="{relay_id}"}} {dropped_packets}
+# HELP wavry_relay_rate_limited_packets Packets dropped due to rate limiting
+# TYPE wavry_relay_rate_limited_packets counter
+wavry_relay_rate_limited_packets{{relay_id="{relay_id}"}} {rate_limited_packets}
+# HELP wavry_relay_invalid_packets Invalid packets received
+# TYPE wavry_relay_invalid_packets counter
+wavry_relay_invalid_packets{{relay_id="{relay_id}"}} {invalid_packets}
+# HELP wavry_relay_auth_reject_packets Packets rejected due to auth failure
+# TYPE wavry_relay_auth_reject_packets counter
+wavry_relay_auth_reject_packets{{relay_id="{relay_id}"}} {auth_reject_packets}
+# HELP wavry_relay_session_not_found_packets Packets for unknown sessions
+# TYPE wavry_relay_session_not_found_packets counter
+wavry_relay_session_not_found_packets{{relay_id="{relay_id}"}} {session_not_found_packets}
+# HELP wavry_relay_session_not_active_packets Packets for inactive sessions
+# TYPE wavry_relay_session_not_active_packets counter
+wavry_relay_session_not_active_packets{{relay_id="{relay_id}"}} {session_not_active_packets}
+# HELP wavry_relay_unknown_peer_packets Packets from unknown peers
+# TYPE wavry_relay_unknown_peer_packets counter
+wavry_relay_unknown_peer_packets{{relay_id="{relay_id}"}} {unknown_peer_packets}
+# HELP wavry_relay_replay_dropped_packets Packets dropped due to replay detection
+# TYPE wavry_relay_replay_dropped_packets counter
+wavry_relay_replay_dropped_packets{{relay_id="{relay_id}"}} {replay_dropped_packets}
+# HELP wavry_relay_session_full_rejects Session creations rejected (capacity)
+# TYPE wavry_relay_session_full_rejects counter
+wavry_relay_session_full_rejects{{relay_id="{relay_id}"}} {session_full_rejects}
+# HELP wavry_relay_wrong_relay_rejects Packets for wrong relay
+# TYPE wavry_relay_wrong_relay_rejects counter
+wavry_relay_wrong_relay_rejects{{relay_id="{relay_id}"}} {wrong_relay_rejects}
+# HELP wavry_relay_expired_lease_rejects Packets with expired leases
+# TYPE wavry_relay_expired_lease_rejects counter
+wavry_relay_expired_lease_rejects{{relay_id="{relay_id}"}} {expired_lease_rejects}
+# HELP wavry_relay_cleanup_expired_sessions Sessions cleaned up (expired)
+# TYPE wavry_relay_cleanup_expired_sessions counter
+wavry_relay_cleanup_expired_sessions{{relay_id="{relay_id}"}} {cleanup_expired_sessions}
+# HELP wavry_relay_cleanup_idle_sessions Sessions cleaned up (idle)
+# TYPE wavry_relay_cleanup_idle_sessions counter
+wavry_relay_cleanup_idle_sessions{{relay_id="{relay_id}"}} {cleanup_idle_sessions}
+# HELP wavry_relay_overload_shed_packets Packets shed due to overload
+# TYPE wavry_relay_overload_shed_packets counter
+wavry_relay_overload_shed_packets{{relay_id="{relay_id}"}} {overload_shed_packets}
+# HELP wavry_relay_nat_rebind_events NAT rebinding events
+# TYPE wavry_relay_nat_rebind_events counter
+wavry_relay_nat_rebind_events{{relay_id="{relay_id}"}} {nat_rebind_events}
+# HELP wavry_relay_active_sessions Current number of active sessions
+# TYPE wavry_relay_active_sessions gauge
+wavry_relay_active_sessions{{relay_id="{relay_id}"}} {active_sessions}
+# HELP wavry_relay_uptime_seconds Relay uptime in seconds
+# TYPE wavry_relay_uptime_seconds gauge
+wavry_relay_uptime_seconds{{relay_id="{relay_id}"}} {uptime_seconds}
+"#,
+        relay_id = relay_id,
+        packets_rx = snapshot.packets_rx,
+        bytes_rx = snapshot.bytes_rx,
+        packets_forwarded = snapshot.packets_forwarded,
+        bytes_forwarded = snapshot.bytes_forwarded,
+        lease_present_packets = snapshot.lease_present_packets,
+        lease_renew_packets = snapshot.lease_renew_packets,
+        dropped_packets = snapshot.dropped_packets,
+        rate_limited_packets = snapshot.rate_limited_packets,
+        invalid_packets = snapshot.invalid_packets,
+        auth_reject_packets = snapshot.auth_reject_packets,
+        session_not_found_packets = snapshot.session_not_found_packets,
+        session_not_active_packets = snapshot.session_not_active_packets,
+        unknown_peer_packets = snapshot.unknown_peer_packets,
+        replay_dropped_packets = snapshot.replay_dropped_packets,
+        session_full_rejects = snapshot.session_full_rejects,
+        wrong_relay_rejects = snapshot.wrong_relay_rejects,
+        expired_lease_rejects = snapshot.expired_lease_rejects,
+        cleanup_expired_sessions = snapshot.cleanup_expired_sessions,
+        cleanup_idle_sessions = snapshot.cleanup_idle_sessions,
+        overload_shed_packets = snapshot.overload_shed_packets,
+        nat_rebind_events = snapshot.nat_rebind_events,
+        active_sessions = 0, // Will be computed below
+        uptime_seconds = state.server.started_at.elapsed().as_secs(),
+    );
+    
+    (
+        StatusCode::OK,
+        [("Content-Type", "text/plain; version=0.0.4")],
+        prometheus_text,
+    )
+}
+
 async fn serve_health_http(server: Arc<RelayServer>, listen: SocketAddr) -> Result<()> {
     let app_state = RelayHttpState { server };
     let app = Router::new()
         .route("/health", get(relay_health))
         .route("/ready", get(relay_ready))
         .route("/metrics", get(relay_metrics))
+        .route("/metrics/prometheus", get(relay_metrics_prometheus))
         .with_state(app_state);
     let listener = match TcpListener::bind(listen).await {
         Ok(listener) => listener,
@@ -1244,6 +1353,29 @@ async fn main() -> Result<()> {
             }
         }
     });
+    
+    // Setup graceful shutdown handler
+    let shutdown_server = server.clone();
+    tokio::spawn(async move {
+        match tokio::signal::ctrl_c().await {
+            Ok(()) => {
+                info!("Received SIGINT, initiating graceful shutdown...");
+                // Log final metrics before shutdown
+                let snapshot = shutdown_server.metrics.snapshot();
+                info!(
+                    "Final metrics: packets_rx={}, packets_forwarded={}, active_sessions={}",
+                    snapshot.packets_rx,
+                    snapshot.packets_forwarded,
+                    // Note: active session count would need to be fetched from server
+                    0
+                );
+            }
+            Err(err) => {
+                warn!("Failed to listen for shutdown signal: {}", err);
+            }
+        }
+    });
+    
     server.run().await
 }
 

@@ -170,6 +170,77 @@ fn available_h264_encoder_candidates() -> Vec<String> {
         .collect()
 }
 
+fn detect_compositor_name() -> Option<String> {
+    // Try to detect compositor from various environment variables and methods
+    if let Ok(compositor) = env::var("WAYLAND_DISPLAY") {
+        // Check common Wayland compositors
+        if Command::new("pgrep")
+            .arg("-x")
+            .arg("kwin_wayland")
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false)
+        {
+            return Some("KWin (KDE Plasma)".to_string());
+        }
+        if Command::new("pgrep")
+            .arg("-x")
+            .arg("gnome-shell")
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false)
+        {
+            return Some("GNOME Shell (Mutter)".to_string());
+        }
+        if Command::new("pgrep")
+            .arg("-x")
+            .arg("sway")
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false)
+        {
+            return Some("Sway".to_string());
+        }
+        if Command::new("pgrep")
+            .arg("-x")
+            .arg("Hyprland")
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false)
+        {
+            return Some("Hyprland".to_string());
+        }
+        return Some(format!("Wayland ({})", compositor));
+    }
+    
+    // X11 fallback
+    if env::var("DISPLAY").is_ok() {
+        return Some("X11".to_string());
+    }
+    
+    None
+}
+
+fn check_pipewire_running() -> bool {
+    // Check if PipeWire daemon is running
+    Command::new("pgrep")
+        .arg("-x")
+        .arg("pipewire")
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+}
+
+fn check_portal_service_running() -> bool {
+    // Check if xdg-desktop-portal service is running
+    Command::new("pgrep")
+        .arg("-x")
+        .arg("xdg-desktop-portal")
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+}
+
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
 pub struct LinuxRuntimeDiagnostics {
     pub session_type: String,
@@ -186,6 +257,9 @@ pub struct LinuxRuntimeDiagnostics {
     pub available_h264_encoders: Vec<String>,
     pub missing_gstreamer_elements: Vec<String>,
     pub recommendations: Vec<String>,
+    pub compositor_name: Option<String>,
+    pub pipewire_running: bool,
+    pub portal_service_running: bool,
 }
 
 pub fn linux_runtime_diagnostics() -> Result<LinuxRuntimeDiagnostics> {
@@ -309,6 +383,19 @@ pub fn linux_runtime_diagnostics() -> Result<LinuxRuntimeDiagnostics> {
         ));
     }
 
+    // Check compositor and service status
+    let compositor_name = detect_compositor_name();
+    let pipewire_running = check_pipewire_running();
+    let portal_service_running = check_portal_service_running();
+    
+    // Add recommendations for missing services
+    if wayland_display && !pipewire_running {
+        recommendations.push("PipeWire service is not running. Start it with 'systemctl --user start pipewire'.".to_string());
+    }
+    if wayland_display && !portal_service_running {
+        recommendations.push("xdg-desktop-portal service is not running. Start it or install the portal backend for your desktop environment.".to_string());
+    }
+
     Ok(LinuxRuntimeDiagnostics {
         session_type: session_type.to_string(),
         wayland_display,
@@ -324,6 +411,9 @@ pub fn linux_runtime_diagnostics() -> Result<LinuxRuntimeDiagnostics> {
         available_h264_encoders,
         missing_gstreamer_elements,
         recommendations,
+        compositor_name,
+        pipewire_running,
+        portal_service_running,
     })
 }
 
