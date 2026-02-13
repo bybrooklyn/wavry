@@ -19,14 +19,17 @@ require_cmd python3
 TMP_DIR="$(mktemp -d)"
 MASTER_LOG="${TMP_DIR}/master.log"
 RELAY_LOG="${TMP_DIR}/relay.log"
+SECONDARY_RELAY_LOG="${TMP_DIR}/relay-secondary.log"
 PROXY_LOG="${TMP_DIR}/proxy.log"
 
 MASTER_PORT="${WAVRY_MASTER_RESILIENCE_PORT:-$(find_free_tcp_port)}"
 MASTER_URL="http://127.0.0.1:${MASTER_PORT}"
 
 RELAY_HEALTH_PORT=""
+SECONDARY_RELAY_HEALTH_PORT=""
 MASTER_PID=""
 RELAY_PID=""
+SECONDARY_RELAY_PID=""
 PROXY_PID=""
 PROXY_PORT=""
 
@@ -54,12 +57,15 @@ dump_logs() {
   tail -n 200 "${MASTER_LOG}" >&2 || true
   echo "--- relay log (tail) ---" >&2
   tail -n 200 "${RELAY_LOG}" >&2 || true
+  echo "--- secondary relay log (tail) ---" >&2
+  tail -n 200 "${SECONDARY_RELAY_LOG}" >&2 || true
   echo "--- proxy log (tail) ---" >&2
   tail -n 200 "${PROXY_LOG}" >&2 || true
 }
 
 cleanup() {
   local exit_code=$?
+  stop_process_var SECONDARY_RELAY_PID
   stop_process_var RELAY_PID
   stop_process_var PROXY_PID
   stop_process_var MASTER_PID
@@ -85,9 +91,10 @@ wait_for_http() {
   return 1
 }
 
-relay_health_field() {
-  local field="$1"
-  curl --silent --fail "http://127.0.0.1:${RELAY_HEALTH_PORT}/health" | \
+relay_health_field_for_port() {
+  local port="$1"
+  local field="$2"
+  curl --silent --fail "http://127.0.0.1:${port}/health" | \
     python3 -c '
 import json
 import sys
@@ -102,6 +109,11 @@ elif value is None:
 else:
     print(value)
 ' "${field}"
+}
+
+relay_health_field() {
+  local field="$1"
+  relay_health_field_for_port "${RELAY_HEALTH_PORT}" "${field}"
 }
 
 wait_for_relay_registration() {
@@ -185,6 +197,28 @@ start_relay() {
   fi
 }
 
+start_secondary_relay() {
+  local relay_master_url="$1"
+  SECONDARY_RELAY_HEALTH_PORT="$(find_free_tcp_port)"
+  echo "[resilience] starting secondary relay against ${relay_master_url}"
+  (
+    cd "${REPO_ROOT}"
+    exec env \
+      WAVRY_ALLOW_INSECURE_RELAY=1 \
+      RUST_LOG="wavry_relay=warn" \
+      ./target/debug/wavry-relay \
+      --listen "127.0.0.1:0" \
+      --master-url "${relay_master_url}" \
+      --allow-insecure-dev \
+      --health-listen "127.0.0.1:${SECONDARY_RELAY_HEALTH_PORT}" >"${SECONDARY_RELAY_LOG}" 2>&1
+  ) &
+  SECONDARY_RELAY_PID=$!
+  if ! wait_for_http "http://127.0.0.1:${SECONDARY_RELAY_HEALTH_PORT}/health" 60; then
+    echo "secondary relay failed to become healthy" >&2
+    return 1
+  fi
+}
+
 start_proxy() {
   local delay_ms="$1"
   local drop_every="${2:-0}"
@@ -253,6 +287,26 @@ if ! wait_for_relay_registration "${relay_id}" 20000 80; then
   echo "relay did not recover registration after outage" >&2
   exit 1
 fi
+
+echo "[resilience] phase: reconnect + migration failover"
+start_secondary_relay "${MASTER_URL}"
+secondary_relay_id="$(relay_health_field_for_port "${SECONDARY_RELAY_HEALTH_PORT}" relay_id)"
+if ! wait_for_relay_registration "${secondary_relay_id}" 20000 40; then
+  echo "secondary relay did not register" >&2
+  exit 1
+fi
+stop_process_var RELAY_PID
+if ! wait_for_relay_registration "${secondary_relay_id}" 20000 40; then
+  echo "secondary relay did not remain registered after primary relay loss" >&2
+  exit 1
+fi
+start_relay "${MASTER_URL}"
+relay_id="$(relay_health_field relay_id)"
+if ! wait_for_relay_registration "${relay_id}" 20000 40; then
+  echo "primary relay did not reconnect after failover phase" >&2
+  exit 1
+fi
+stop_process_var SECONDARY_RELAY_PID
 
 echo "[resilience] phase: high-latency simulation"
 start_proxy "${CHAOS_PROXY_DELAY_MS}" 0

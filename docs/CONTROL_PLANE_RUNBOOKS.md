@@ -129,6 +129,7 @@ It validates:
 - relay restart recovery
 - master restart recovery
 - outage/packet-loss style recovery
+- relay reconnect and failover migration behavior
 - high-latency control-plane behavior
 - load/soak success-rate and latency SLOs
 
