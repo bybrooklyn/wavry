@@ -121,6 +121,37 @@ jobs:
       - name: Relay session transition fuzz smoke
         run: cargo test -p wavry-relay fuzz_session_state_transitions_never_panic -- --nocapture
 
+  control-plane-resilience:
+    name: Control Plane Resilience
+    runs-on: ubuntu-latest
+    needs: rust-quality
+    env:
+      WAVRY_CHAOS_PROXY_DELAY_MS: 500
+      WAVRY_MASTER_OUTAGE_SECS: 6
+      WAVRY_SOAK_RELAY_COUNT: 24
+      WAVRY_SOAK_SECONDS: 20
+      WAVRY_SOAK_MIN_SUCCESS_RATE: 0.97
+      WAVRY_SOAK_MAX_REGISTER_P95_MS: 500
+      WAVRY_SOAK_MAX_HEARTBEAT_P95_MS: 550
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install protobuf compiler
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y protobuf-compiler
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: rust-${{ runner.os }}-quality-gates
+
+      - name: Control-plane chaos + soak gate
+        run: ./scripts/control-plane-resilience.sh
+
   supply-chain:
     name: Supply Chain Gate
     runs-on: ubuntu-latest

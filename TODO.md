@@ -23,12 +23,12 @@ Last updated: 2026-02-13
 ## Priority 0: Control Plane (Master + Relay + Auth)
 
 - [ ] Make relay and auth deployment Docker-first and production-supported only through containerized paths.
-- [ ] Harden relay session lifecycle: lease validation, expiration behavior, reconnect behavior, and cleanup under churn.
+- [x] Harden relay session lifecycle: lease validation, expiration behavior, reconnect behavior, and cleanup under churn.
 - [ ] Add relay overload protection: per-IP and per-identity rate limiting, bounded queues, and backpressure metrics.
 - [ ] Add stronger control-plane auth boundaries between gateway/master/relay (service identity validation and explicit trust model).
-- [ ] Add control-plane chaos/failure tests: relay restart, master restart, packet loss, and high latency.
-- [ ] Add load and soak tests for relay/master with success thresholds and regression baselines.
-- [ ] Document operational runbooks for relay/master incidents and recovery steps.
+- [x] Add control-plane chaos/failure tests: relay restart, master restart, packet loss, and high latency.
+- [x] Add load and soak tests for relay/master with success thresholds and regression baselines.
+- [x] Document operational runbooks for relay/master incidents and recovery steps.
 
 ## Priority 0: Docker Build/CI Speed + Reliability
 
@@ -92,7 +92,7 @@ Last updated: 2026-02-13
 ## Acceptance Criteria Before Next Public Release
 
 - [ ] Linux Wayland capture/session flow is stable across target compositors with documented test evidence.
-- [ ] Control-plane soak tests pass with defined SLOs.
+- [x] Control-plane soak tests pass with defined SLOs.
 - [ ] Release artifacts are clean, labeled, checksummed, and minimal.
 - [ ] CI is warning-free and green across required targets.
 - [ ] Docs are complete enough for install, operate, troubleshoot, and scale without source spelunking.

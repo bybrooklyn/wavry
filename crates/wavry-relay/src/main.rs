@@ -121,6 +121,56 @@ fn env_bool(name: &str, default: bool) -> bool {
     }
 }
 
+#[derive(Clone)]
+struct MasterRegistrationConfig {
+    register_url: String,
+    relay_id: String,
+    endpoints: Vec<String>,
+    region: Option<String>,
+    asn: Option<u32>,
+    max_sessions: usize,
+    max_bitrate_kbps: u32,
+}
+
+async fn register_with_master(
+    client: &reqwest::Client,
+    config: &MasterRegistrationConfig,
+) -> RelayRegisterResponse {
+    let mut retry_delay = Duration::from_secs(1);
+    let max_retry_delay = Duration::from_secs(60);
+    loop {
+        let request = RelayRegisterRequest {
+            relay_id: config.relay_id.clone(),
+            endpoints: config.endpoints.clone(),
+            region: config.region.clone(),
+            asn: config.asn,
+            max_sessions: Some(config.max_sessions as u32),
+            max_bitrate_kbps: Some(config.max_bitrate_kbps),
+            features: vec!["ipv4".into()],
+        };
+        match client
+            .post(&config.register_url)
+            .json(&request)
+            .send()
+            .await
+        {
+            Ok(resp) => {
+                if resp.status().is_success() {
+                    match resp.json::<RelayRegisterResponse>().await {
+                        Ok(data) => return data,
+                        Err(err) => warn!("failed to parse master registration response: {}", err),
+                    }
+                } else {
+                    warn!("master registration failed with status: {}", resp.status());
+                }
+            }
+            Err(err) => warn!("failed to connect to master: {}", err),
+        }
+        tokio::time::sleep(retry_delay).await;
+        retry_delay = std::cmp::min(retry_delay * 2, max_retry_delay);
+    }
+}
+
 /// Per-source-IP packet rate limiter to prevent abuse.
 ///
 /// Uses a simple fixed-window algorithm with a 1-second window.
@@ -1268,42 +1318,19 @@ async fn main() -> Result<()> {
     info!("Relay ID: {}", relay_id);
 
     let client = reqwest::Client::new();
-    let register_url = format!("{}/v1/relays/register", args.master_url);
     let endpoints = vec![bound_addr.to_string()];
-
-    let mut retry_delay = Duration::from_secs(1);
-    let max_retry_delay = Duration::from_secs(60);
-    info!("Registering with Master at {}...", args.master_url);
-    let reg_data = loop {
-        match client
-            .post(&register_url)
-            .json(&RelayRegisterRequest {
-                relay_id: relay_id.clone(),
-                endpoints: endpoints.clone(),
-                region: args.region.clone(),
-                asn: args.asn,
-                max_sessions: Some(args.max_sessions as u32),
-                max_bitrate_kbps: Some(args.max_bitrate_kbps),
-                features: vec!["ipv4".into()],
-            })
-            .send()
-            .await
-        {
-            Ok(resp) => {
-                if resp.status().is_success() {
-                    match resp.json::<RelayRegisterResponse>().await {
-                        Ok(data) => break data,
-                        Err(e) => warn!("Failed to parse registration response: {}", e),
-                    }
-                } else {
-                    warn!("Master registration failed with status: {}", resp.status());
-                }
-            }
-            Err(e) => warn!("Failed to connect to Master: {}", e),
-        }
-        tokio::time::sleep(retry_delay).await;
-        retry_delay = std::cmp::min(retry_delay * 2, max_retry_delay);
+    let registration = MasterRegistrationConfig {
+        register_url: format!("{}/v1/relays/register", args.master_url),
+        relay_id: relay_id.clone(),
+        endpoints: endpoints.clone(),
+        region: args.region.clone(),
+        asn: args.asn,
+        max_sessions: args.max_sessions,
+        max_bitrate_kbps: args.max_bitrate_kbps,
     };
+
+    info!("Registering with Master at {}...", args.master_url);
+    let reg_data = register_with_master(&client, &registration).await;
     info!(
         "Registered successfully. Heartbeat interval: {}ms",
         reg_data.heartbeat_interval_ms
@@ -1337,13 +1364,15 @@ async fn main() -> Result<()> {
 
     let server_clone = server.clone();
     let master_url = args.master_url.clone();
-    let hb_interval = Duration::from_millis(reg_data.heartbeat_interval_ms);
     let max_sessions = args.max_sessions;
-    let relay_id_for_hb = relay_id.clone();
+    let registration_for_hb = registration.clone();
     tokio::spawn(async move {
         let client = reqwest::Client::new();
         let heartbeat_url = format!("{}/v1/relays/heartbeat", master_url);
-        let mut interval = tokio::time::interval(hb_interval);
+        let mut interval = tokio::time::interval(Duration::from_millis(
+            reg_data.heartbeat_interval_ms.max(500),
+        ));
+        let mut consecutive_failures = 0u32;
         loop {
             interval.tick().await;
             let active = server_clone.active_session_count().await;
@@ -1353,26 +1382,66 @@ async fn main() -> Result<()> {
                 100.0
             } as u8;
             let req = RelayHeartbeatRequest {
-                relay_id: relay_id_for_hb.clone(),
+                relay_id: registration_for_hb.relay_id.clone(),
                 load_pct: load as f32,
             };
             match client.post(&heartbeat_url).json(&req).send().await {
                 Ok(resp) if resp.status().is_success() => {
+                    consecutive_failures = 0;
                     server_clone
                         .registered_with_master
                         .store(true, Ordering::Relaxed);
                 }
                 Ok(resp) => {
+                    consecutive_failures = consecutive_failures.saturating_add(1);
                     warn!("relay heartbeat failed with status {}", resp.status());
                     server_clone
                         .registered_with_master
                         .store(false, Ordering::Relaxed);
+                    if resp.status().as_u16() == 404 || consecutive_failures >= 6 {
+                        info!(
+                            "attempting relay re-registration after heartbeat failure (status={}, failures={})",
+                            resp.status(),
+                            consecutive_failures
+                        );
+                        let reg_data = register_with_master(&client, &registration_for_hb).await;
+                        let next_interval =
+                            Duration::from_millis(reg_data.heartbeat_interval_ms.max(500));
+                        interval = tokio::time::interval(next_interval);
+                        consecutive_failures = 0;
+                        server_clone
+                            .registered_with_master
+                            .store(true, Ordering::Relaxed);
+                        info!(
+                            "relay re-registered with master; heartbeat interval now {}ms",
+                            next_interval.as_millis()
+                        );
+                    }
                 }
                 Err(err) => {
+                    consecutive_failures = consecutive_failures.saturating_add(1);
                     warn!("relay heartbeat request failed: {}", err);
                     server_clone
                         .registered_with_master
                         .store(false, Ordering::Relaxed);
+                    if consecutive_failures >= 6 {
+                        info!(
+                            "attempting relay re-registration after heartbeat transport errors (failures={})",
+                            consecutive_failures
+                        );
+                        let reg_data = register_with_master(&client, &registration_for_hb).await;
+                        let next_interval =
+                            Duration::from_millis(reg_data.heartbeat_interval_ms.max(500));
+                        interval = tokio::time::interval(next_interval);
+                        consecutive_failures = 0;
+                        server_clone
+                            .registered_with_master
+                            .store(true, Ordering::Relaxed);
+                        info!(
+                            "relay re-registered with master; heartbeat interval now {}ms",
+                            next_interval.as_millis()
+                        );
+                    }
                 }
             }
         }
