@@ -22,6 +22,7 @@ function normalizeBasePath(input) {
 const BASE_PATH = normalizeBasePath(process.env.STYLE_CHECK_BASE_PATH ?? '/');
 const ROOT_URL = new URL(BASE_PATH, BASE_URL).toString();
 const PRICING_URL = new URL(`${BASE_PATH}pricing`, BASE_URL).toString();
+const CONTROL_PLANE_URL = new URL(`${BASE_PATH}control-plane-deep-dive`, BASE_URL).toString();
 
 function startServer() {
   const child = spawn(
@@ -75,6 +76,7 @@ async function runChecks() {
       const heading = document.querySelector('h1')?.textContent ?? '';
       const bodyText = document.body.textContent ?? '';
       const bodyBg = window.getComputedStyle(document.body).backgroundColor;
+      const theme = doc.getAttribute('data-theme') ?? '';
       const footerContainer = document.querySelector('.footer .container');
       const footerRect = footerContainer?.getBoundingClientRect();
 
@@ -86,6 +88,7 @@ async function runChecks() {
         heading,
         bodyText,
         bodyBg,
+        theme,
         hasHorizontalOverflow: doc.scrollWidth > doc.clientWidth + 1,
         footerCenterDelta,
       };
@@ -97,6 +100,7 @@ async function runChecks() {
     );
     assert(!desktopMetrics.hasHorizontalOverflow, 'Desktop docs page has horizontal overflow');
     assert(desktopMetrics.bodyBg !== 'rgb(255, 255, 255)', 'Background rendered as white');
+    assert(desktopMetrics.theme === 'dark', `Unexpected docs theme: ${desktopMetrics.theme || 'unset'}`);
     assert(
       desktopMetrics.footerCenterDelta <= 8,
       `Footer container is not centered. Delta: ${desktopMetrics.footerCenterDelta.toFixed(2)}px`,
@@ -157,12 +161,96 @@ async function runChecks() {
     assert(!mobileMetrics.hasHorizontalOverflow, 'Mobile docs page has horizontal overflow');
     assert(mobileMetrics.hasVisibleToggle, 'Mobile navigation/sidebar toggle is not visible');
 
+    const mobileToggle = mobile.locator(
+      '.navbar__toggle, button[aria-label="Open navigation bar"], button[aria-label="Open sidebar"], button[aria-label="Toggle navigation bar"]',
+    ).first();
+    await mobileToggle.click();
+    await mobile.locator('.navbar-sidebar').first().waitFor({state: 'visible'});
+    await mobile.waitForTimeout(300);
+    const mobileSidebarVisible = await mobile.evaluate(() => {
+      const sidebar = document.querySelector('.navbar-sidebar');
+      if (!sidebar) {
+        return false;
+      }
+      const style = window.getComputedStyle(sidebar);
+      const rect = sidebar.getBoundingClientRect();
+      return (
+        style.display !== 'none' &&
+        style.visibility !== 'hidden' &&
+        parseFloat(style.opacity || '0') >= 0.9 &&
+        rect.width > 0 &&
+        rect.left >= -1 &&
+        rect.height > 0
+      );
+    });
+    assert(mobileSidebarVisible, 'Mobile navigation toggle does not open a visible sidebar');
+
+    const controlPlanePage = await browser.newPage({viewport: {width: 1366, height: 900}});
+    await controlPlanePage.goto(CONTROL_PLANE_URL, {waitUntil: 'networkidle'});
+    const controlPlaneMetrics = await controlPlanePage.evaluate(() => {
+      const doc = document.documentElement;
+      const container = document.querySelector('.main-wrapper .container');
+      const containerRect = container?.getBoundingClientRect();
+      const article = document.querySelector('.theme-doc-markdown');
+      const heading = document.querySelector('.theme-doc-markdown h1');
+      const paragraph = document.querySelector('.theme-doc-markdown p');
+      const articleRect = article?.getBoundingClientRect();
+      const headingRect = heading?.getBoundingClientRect();
+      const paragraphRect = paragraph?.getBoundingClientRect();
+
+      const leftPositions = [articleRect?.left, headingRect?.left, paragraphRect?.left].filter(
+        (value) => typeof value === 'number' && Number.isFinite(value),
+      );
+      const leftAlignmentDelta = leftPositions.length > 0
+        ? Math.max(...leftPositions) - Math.min(...leftPositions)
+        : Number.POSITIVE_INFINITY;
+
+      const firstH2 = document.querySelector('.theme-doc-markdown h2');
+      const separatorStyle = firstH2 ? window.getComputedStyle(firstH2, '::before') : null;
+      const separatorVisible = Boolean(
+        separatorStyle &&
+          separatorStyle.borderTopStyle !== 'none' &&
+          parseFloat(separatorStyle.borderTopWidth || '0') > 0,
+      );
+
+      return {
+        hasHorizontalOverflow: doc.scrollWidth > doc.clientWidth + 1,
+        containerWithinViewport: Boolean(
+          containerRect &&
+            containerRect.left >= -1 &&
+            containerRect.right <= window.innerWidth + 1,
+        ),
+        leftAlignmentDelta,
+        separatorVisible,
+      };
+    });
+
+    assert(!controlPlaneMetrics.hasHorizontalOverflow, 'Control-plane docs page has horizontal overflow');
+    assert(
+      controlPlaneMetrics.containerWithinViewport,
+      'Control-plane docs container overflows viewport bounds',
+    );
+    assert(
+      controlPlaneMetrics.leftAlignmentDelta <= 2,
+      `Docs heading/content left alignment is off by ${controlPlaneMetrics.leftAlignmentDelta.toFixed(2)}px`,
+    );
+    assert(controlPlaneMetrics.separatorVisible, 'Docs section separator is not visible on control-plane page');
+
     const pricingPage = await browser.newPage({viewport: {width: 1366, height: 900}});
     await pricingPage.goto(PRICING_URL, {waitUntil: 'networkidle'});
     const pricingHeading = await pricingPage.textContent('h1');
+    const pricingBody = (await pricingPage.textContent('main')) ?? '';
     assert(
       typeof pricingHeading === 'string' && pricingHeading.includes('Pricing'),
       'Pricing docs page did not render expected heading',
+    );
+    assert(
+      pricingBody.includes('contact@wavry.dev'),
+      'Pricing docs page is missing required contact email information',
+    );
+    assert(
+      pricingBody.includes('SaaS / Integration Tier'),
+      'Pricing docs page is missing explicit SaaS/integration licensing requirement',
     );
   } finally {
     await browser.close();

@@ -89,6 +89,22 @@ For desktop runtime verification, use Tauri commands exposed in `crates/wavry-de
 4. website checks (`apps/website` build and style checks)
 5. verify release artifact names against [Release Artifacts](/release-artifacts)
 
+## Contribution Workflow and CLA
+
+Before opening a pull request:
+
+1. Branch from `main` and keep the change focused to one logical scope.
+2. Run required local quality gates (`fmt`, `clippy`, `test`, and website checks when docs/UI are touched).
+3. Use Conventional Commit style for commit subjects (`feat:`, `fix:`, `docs:`, etc.).
+4. Include the CLA attestation in commit or PR context:
+   `I have read and agree to CLA.md`.
+5. Ensure all required CI workflows are green before merge.
+
+References:
+
+- [CLA.md](https://github.com/bybrooklyn/wavry/blob/main/CLA.md)
+- [CONTRIBUTING.md](https://github.com/bybrooklyn/wavry/blob/main/CONTRIBUTING.md)
+
 ## Where to Start for Major Changes
 
 | Change Type | First Files |

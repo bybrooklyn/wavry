@@ -61,18 +61,18 @@ Last updated: 2026-02-13
 
 - [ ] Keep website docs-first, with no oversized marketing landing experience.
 - [ ] Ensure theme consistency across all pages, including pricing cards and docs components.
-- [ ] Remove any text highlight/hover behavior that turns content unreadable (for example black-on-dark issues).
+- [x] Remove any text highlight/hover behavior that turns content unreadable (for example black-on-dark issues).
 - [ ] Fix footer alignment and responsive spacing across breakpoints.
 - [ ] Fix dark mode toggle behavior so it does not break layout or theming.
-- [ ] Remove mobile sidebar trigger if it conflicts with required UX, and keep navigation usable on small screens.
-- [ ] Fix docs separators and content container alignment on all docs pages.
-- [ ] Expand docs for relay/master architecture, data flow, failure modes, and scaling guidance.
-- [ ] Expand Linux documentation with verified setup and troubleshooting for Wayland/PipeWire/portals.
-- [ ] Expand operations docs with deployment topology, backup/restore, and incident response.
-- [ ] Expand developer docs with codebase map, local env bootstrap, and contribution workflow.
-- [ ] Keep licensing docs clear: AGPL/RIFT details, CLA requirements, and commercial terms.
-- [ ] Keep pricing page clear and actionable with contact: `contact@wavry.dev`.
-- [ ] Add explicit SaaS/integration licensing requirement: users must contact for terms.
+- [x] Remove mobile sidebar trigger if it conflicts with required UX, and keep navigation usable on small screens.
+- [x] Fix docs separators and content container alignment on all docs pages.
+- [x] Expand docs for relay/master architecture, data flow, failure modes, and scaling guidance.
+- [x] Expand Linux documentation with verified setup and troubleshooting for Wayland/PipeWire/portals.
+- [x] Expand operations docs with deployment topology, backup/restore, and incident response.
+- [x] Expand developer docs with codebase map, local env bootstrap, and contribution workflow.
+- [x] Keep licensing docs clear: AGPL/RIFT details, CLA requirements, and commercial terms.
+- [x] Keep pricing page clear and actionable with contact: `contact@wavry.dev`.
+- [x] Add explicit SaaS/integration licensing requirement: users must contact for terms.
 
 ## Priority 1: Product/Platform Decisions
 
