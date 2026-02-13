@@ -9,9 +9,30 @@ if [[ "$(uname -s)" != "Linux" ]]; then
   exit 1
 fi
 
+resolve_cmd() {
+  local cmd="$1"
+  if command -v "$cmd" >/dev/null 2>&1; then
+    command -v "$cmd"
+    return 0
+  fi
+
+  local candidate
+  for candidate in \
+    "/usr/libexec/$cmd" \
+    "/usr/lib/$cmd" \
+    "/usr/lib/xdg-desktop-portal/$cmd"; do
+    if [[ -x "$candidate" ]]; then
+      echo "$candidate"
+      return 0
+    fi
+  done
+
+  return 1
+}
+
 require_cmd() {
   local cmd="$1"
-  if ! command -v "$cmd" >/dev/null 2>&1; then
+  if ! resolve_cmd "$cmd" >/dev/null; then
     echo "[FAIL] Missing required command: $cmd" >&2
     exit 1
   fi
@@ -22,6 +43,13 @@ require_cmd weston
 require_cmd pipewire
 require_cmd xdg-desktop-portal
 require_cmd xdg-desktop-portal-gtk
+
+DBUS_DAEMON_BIN="$(resolve_cmd dbus-daemon)"
+WESTON_BIN="$(resolve_cmd weston)"
+PIPEWIRE_BIN="$(resolve_cmd pipewire)"
+XDG_PORTAL_BIN="$(resolve_cmd xdg-desktop-portal)"
+XDG_PORTAL_GTK_BIN="$(resolve_cmd xdg-desktop-portal-gtk)"
+export PATH="$(dirname "$XDG_PORTAL_BIN"):$(dirname "$XDG_PORTAL_GTK_BIN"):$PATH"
 
 TMP_DIR="$(mktemp -d -t wavry-wayland-ci.XXXXXX)"
 LOG_DIR="$TMP_DIR/logs"
@@ -39,6 +67,7 @@ export WAVRY_PORTAL_SERVICE_MODE="process"
 
 PIDS=()
 DBUS_PID=""
+declare -A NAMED_PIDS=()
 
 start_bg() {
   local name="$1"
@@ -46,6 +75,7 @@ start_bg() {
   "$@" >"$LOG_DIR/${name}.log" 2>&1 &
   local pid=$!
   PIDS+=("$pid")
+  NAMED_PIDS["$name"]="$pid"
   echo "[INFO] Started $name (pid=$pid)"
 }
 
@@ -62,16 +92,18 @@ wait_for_socket() {
   return 1
 }
 
-wait_for_process() {
-  local proc_name="$1"
-  local timeout_secs="${2:-20}"
+wait_for_pid() {
+  local pid="$1"
+  local name="$2"
+  local timeout_secs="${3:-20}"
   local i
   for ((i = 0; i < timeout_secs; i++)); do
-    if pgrep -x "$proc_name" >/dev/null 2>&1; then
+    if kill -0 "$pid" >/dev/null 2>&1; then
       return 0
     fi
     sleep 1
   done
+  echo "[FAIL] ${name} process is not running (pid=${pid})" >&2
   return 1
 }
 
@@ -105,35 +137,36 @@ cleanup() {
 trap cleanup EXIT
 
 # Start session D-Bus daemon.
-DBUS_OUTPUT="$(dbus-daemon --session --fork --print-address 1 --print-pid 1)"
+DBUS_OUTPUT="$("$DBUS_DAEMON_BIN" --session --fork --print-address 1 --print-pid 1)"
 export DBUS_SESSION_BUS_ADDRESS="$(echo "$DBUS_OUTPUT" | sed -n '1p')"
 DBUS_PID="$(echo "$DBUS_OUTPUT" | sed -n '2p')"
 echo "[INFO] D-Bus session started (pid=$DBUS_PID)"
 
-start_bg pipewire pipewire
+start_bg pipewire "$PIPEWIRE_BIN"
 if command -v wireplumber >/dev/null 2>&1; then
   start_bg wireplumber wireplumber
 fi
 
-start_bg weston weston --backend=headless-backend.so --socket="$WAYLAND_DISPLAY" --idle-time=0 --xwayland
+start_bg weston "$WESTON_BIN" --backend=headless-backend.so --socket="$WAYLAND_DISPLAY" --idle-time=0 --xwayland
 
 if ! wait_for_socket "$XDG_RUNTIME_DIR/$WAYLAND_DISPLAY" 25; then
   echo "[FAIL] Wayland socket did not appear: $XDG_RUNTIME_DIR/$WAYLAND_DISPLAY" >&2
   exit 1
 fi
 
-start_bg portal_gtk xdg-desktop-portal-gtk -r
-start_bg portal xdg-desktop-portal -r
+start_bg portal_gtk "$XDG_PORTAL_GTK_BIN" -r
+start_bg portal "$XDG_PORTAL_BIN" -r
 
-if ! wait_for_process "xdg-desktop-portal" 25; then
-  echo "[FAIL] xdg-desktop-portal process did not start" >&2
+PORTAL_PID="${NAMED_PIDS[portal]:-}"
+PORTAL_GTK_PID="${NAMED_PIDS[portal_gtk]:-}"
+
+if [[ -z "$PORTAL_PID" || -z "$PORTAL_GTK_PID" ]]; then
+  echo "[FAIL] failed to track portal process IDs" >&2
   exit 1
 fi
 
-if ! wait_for_process "xdg-desktop-portal-gtk" 25; then
-  echo "[FAIL] xdg-desktop-portal-gtk process did not start" >&2
-  exit 1
-fi
+wait_for_pid "$PORTAL_PID" "xdg-desktop-portal" 25
+wait_for_pid "$PORTAL_GTK_PID" "xdg-desktop-portal-gtk" 25
 
 echo "[INFO] Running Linux display smoke runtime checks in Wayland session"
 (

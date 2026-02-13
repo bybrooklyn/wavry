@@ -49,7 +49,22 @@ warn() { echo "[WARN] $*"; }
 fail() { echo "[FAIL] $*"; FAILED=$((FAILED + 1)); }
 
 has_cmd() {
-  command -v "$1" >/dev/null 2>&1
+  local cmd="$1"
+  if command -v "$cmd" >/dev/null 2>&1; then
+    return 0
+  fi
+
+  local candidate
+  for candidate in \
+    "/usr/libexec/$cmd" \
+    "/usr/lib/$cmd" \
+    "/usr/lib/xdg-desktop-portal/$cmd"; do
+    if [[ -x "$candidate" ]]; then
+      return 0
+    fi
+  done
+
+  return 1
 }
 
 check_cmd() {
@@ -92,7 +107,7 @@ check_any_user_service_active() {
     local candidate
     for candidate in "$@"; do
       local proc_name="${candidate%.service}"
-      if pgrep -x "$proc_name" >/dev/null 2>&1; then
+      if pgrep -f -- "$proc_name" >/dev/null 2>&1; then
         pass "$label process active via: $proc_name"
         return
       fi
