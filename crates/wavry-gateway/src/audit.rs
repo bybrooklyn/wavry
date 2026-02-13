@@ -2,7 +2,10 @@
 use std::net::IpAddr;
 use tracing::{error, info, warn};
 
-/// Security event types for audit logging
+/// Security and operational event types for audit logging
+///
+/// This enum includes both security events (authentication, authorization) and
+/// operational events (infrastructure failures) that have security implications.
 #[derive(Debug, Clone, Copy)]
 pub enum SecurityEventType {
     /// Successful login
@@ -24,6 +27,9 @@ pub enum SecurityEventType {
     /// Invalid/malformed request
     ValidationError,
     /// Database error during auth operation
+    /// Note: While primarily an infrastructure event, database errors during authentication
+    /// can indicate security issues (SQL injection attempts, DoS) or availability problems
+    /// that affect security posture, so they are logged in the security audit trail.
     DatabaseError,
 }
 

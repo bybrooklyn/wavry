@@ -21,15 +21,21 @@ This document defines the threat model, security mitigations, operational proced
    - [1.1 Threat Actors](#11-threat-actors)
    - [1.2 Threat Matrix](#12-threat-matrix)
    - [1.3 Gateway/Control Plane Attack Surface](#13-gatewaycontrol-plane-attack-surface)
-2. [Control Plane Security Model](#1a-control-plane-security-model)
-   - [1A.1 Gateway Authentication Architecture](#1a1-gateway-authentication-architecture)
-   - [1A.2 Authentication Threat Mitigations](#1a2-authentication-threat-mitigations)
-   - [1A.3 Security Audit Logging](#1a3-security-audit-logging)
-3. [Threat Mitigations](#2-threat-mitigations)
-3. [End-to-End Encryption](#3-end-to-end-encryption)
-4. [Lease Security](#4-lease-security)
-5. [Rate Limiting](#5-rate-limiting)
-6. [Audit & Observability](#6-audit--observability)
+2. [Control Plane Security Model](#2-control-plane-security-model)
+   - [2.1 Gateway Authentication Architecture](#21-gateway-authentication-architecture)
+   - [2.2 Authentication Threat Mitigations](#22-authentication-threat-mitigations)
+   - [2.3 Security Audit Logging](#23-security-audit-logging)
+3. [Threat Mitigations](#3-threat-mitigations)
+4. [End-to-End Encryption](#4-end-to-end-encryption)
+5. [Lease Security](#5-lease-security)
+6. [Rate Limiting](#6-rate-limiting)
+7. [Audit & Observability](#7-audit--observability)
+8. [Kill Switches](#8-kill-switches)
+9. [Key Management](#9-key-management)
+10. [Operational Procedures](#10-operational-procedures)
+11. [Privacy Posture](#11-privacy-posture)
+12. [Recommended Defaults](#12-recommended-defaults)
+13. [Minimum Viable Safe Launch Checklist](#13-minimum-viable-safe-launch-checklist)
 7. [Kill Switches](#7-kill-switches)
 8. [Key Management](#8-key-management)
 9. [Operational Procedures](#9-operational-procedures)
@@ -86,9 +92,9 @@ The **Gateway** provides authentication, signaling, and session coordination ser
 
 ---
 
-## 1A. Control Plane Security Model
+## 2. Control Plane Security Model
 
-### 1A.1 Gateway Authentication Architecture
+### 2.1 Gateway Authentication Architecture
 
 The Gateway uses a multi-layer authentication system:
 
@@ -118,7 +124,7 @@ The Gateway uses a multi-layer authentication system:
 └────────────────────────────────────────────────────────────┘
 ```
 
-### 1A.2 Authentication Threat Mitigations
+### 2.2 Authentication Threat Mitigations
 
 | Threat | Mitigation | Implementation Status |
 |:-------|:-----------|:---------------------|
@@ -128,7 +134,7 @@ The Gateway uses a multi-layer authentication system:
 | T16: Token theft | HTTPS-only + SHA-256 hashing | ✅ Implemented |
 | T17: Admin compromise | Separate admin auth + audit logs | 🚧 Partial |
 
-### 1A.3 Security Audit Logging
+### 2.3 Security Audit Logging
 
 **Structured audit events** are logged for all authentication operations:
 
@@ -174,7 +180,7 @@ pub enum FailureReason {
 
 ---
 
-## 2. Threat Mitigations
+## 3. Threat Mitigations
 
 ### 2.1 Mitigation Matrix
 
@@ -237,7 +243,7 @@ pub enum FailureReason {
 
 ---
 
-## 3. End-to-End Encryption
+## 4. End-to-End Encryption
 
 ### 3.1 Protocol: Noise XX
 
@@ -287,7 +293,7 @@ The Noise XX handshake (Msg1-3) has been verified end-to-end between `wavry-serv
 
 ---
 
-## 4. Lease Security
+## 5. Lease Security
 
 ### 4.1 Lease Properties
 
@@ -332,7 +338,7 @@ For production, recommend push-based with periodic pull as backup.
 
 ---
 
-## 5. Rate Limiting
+## 6. Rate Limiting
 
 ### 5.1 Master-Side Limits
 
@@ -370,7 +376,7 @@ struct RateLimitConfig {
 
 ---
 
-## 6. Audit & Observability
+## 7. Audit & Observability
 
 ### 6.1 What We Log (Master)
 
@@ -420,7 +426,7 @@ wavry_relay_lease_validations_total{result="valid|invalid"}
 
 ---
 
-## 7. Kill Switches
+## 8. Kill Switches
 
 ### 7.1 Available Kill Switches
 
@@ -469,7 +475,7 @@ POST /v1/admin/lockdown
 
 ---
 
-## 8. Key Management
+## 9. Key Management
 
 ### 8.1 Key Hierarchy
 
@@ -547,7 +553,7 @@ Master's signing public key must be verifiable:
 
 ---
 
-## 9. Operational Procedures
+## 10. Operational Procedures
 
 ### 9.1 Relay Updates
 
@@ -631,7 +637,7 @@ Update flow:
 
 ---
 
-## 10. Privacy Posture
+## 11. Privacy Posture
 
 ### 10.1 Data Minimization
 
@@ -664,7 +670,7 @@ Violation = permanent ban + public disclosure.
 
 ---
 
-## 11. Recommended Defaults
+## 12. Recommended Defaults
 
 ### 11.1 Security Defaults
 
@@ -700,7 +706,7 @@ Violation = permanent ban + public disclosure.
 
 ---
 
-## 12. Minimum Viable Safe Launch Checklist
+## 13. Minimum Viable Safe Launch Checklist
 
 > [!IMPORTANT]
 > All items must be completed before public launch.
