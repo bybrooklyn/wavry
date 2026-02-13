@@ -37,7 +37,7 @@ Last updated: 2026-02-13
 - [ ] Pin base images by digest and enable periodic update workflow with review.
 - [ ] Parallelize control-plane image builds where safe and reduce redundant rebuilds.
 - [ ] Add CI telemetry for build durations and cache hit rates, then enforce performance budgets.
-- [ ] Add smoke tests for produced Docker images before publish.
+- [x] Add smoke tests for produced Docker images before publish.
 
 ## Priority 1: Linux-First Product Quality
 
