@@ -344,12 +344,19 @@ nc -u <relay_public_ip> 4000
 
 ### Sizing Guidelines
 
-| Relay Capacity | vCPU | RAM | Max Sessions | Max Bitrate | Network |
-|----------------|------|-----|--------------|-------------|---------|
-| Small | 1 | 512MB | 50 | 10 Gbps | 100 Mbps |
-| Medium | 2 | 1GB | 100 | 20 Gbps | 500 Mbps |
-| Large | 4 | 2GB | 250 | 50 Gbps | 1 Gbps |
-| XLarge | 8 | 4GB | 500 | 100 Gbps | 10 Gbps |
+**Note:** Max Bitrate represents aggregate relay throughput capacity across all sessions, not per-session limits.
+
+| Relay Capacity | vCPU | RAM | Max Sessions | Aggregate Throughput | Network Bandwidth |
+|----------------|------|-----|--------------|---------------------|-------------------|
+| Small | 1 | 512MB | 50 | 500 Mbps (10 Mbps/session avg) | 100 Mbps+ |
+| Medium | 2 | 1GB | 100 | 2 Gbps (20 Mbps/session avg) | 500 Mbps+ |
+| Large | 4 | 2GB | 250 | 5 Gbps (20 Mbps/session avg) | 1 Gbps+ |
+| XLarge | 8 | 4GB | 500 | 10 Gbps (20 Mbps/session avg) | 10 Gbps+ |
+
+**Per-Session Bitrates:**
+- Typical: 5-20 Mbps (1080p60)
+- High quality: 20-50 Mbps (4K60)
+- Configuration: Set via `--max-bitrate-kbps` (default: 20000 = 20 Mbps)
 
 ### When to Scale
 
