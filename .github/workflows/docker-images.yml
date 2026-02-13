@@ -17,6 +17,7 @@ on:
 permissions:
   actions: read
   contents: read
+  id-token: write
   packages: write
 
 concurrency:
@@ -120,6 +121,7 @@ jobs:
 
       - name: Build and optionally push
         if: github.event_name != 'pull_request' || (matrix.component == 'gateway' && steps.changes.outputs.gateway == 'true') || (matrix.component == 'relay' && steps.changes.outputs.relay == 'true')
+        id: build_image
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -139,6 +141,28 @@ jobs:
             type=gha,mode=max,scope=wavry-${{ matrix.component }}
           build-args: |
             BUILDKIT_INLINE_CACHE=1
+
+      - name: Install cosign
+        if: github.event_name != 'pull_request' && ((matrix.component == 'gateway' && steps.changes.outputs.gateway != 'false') || (matrix.component == 'relay' && steps.changes.outputs.relay != 'false'))
+        uses: sigstore/cosign-installer@v3
+
+      - name: Sign container image digest (keyless)
+        if: github.event_name != 'pull_request' && ((matrix.component == 'gateway' && steps.changes.outputs.gateway != 'false') || (matrix.component == 'relay' && steps.changes.outputs.relay != 'false'))
+        shell: bash
+        env:
+          COSIGN_EXPERIMENTAL: "1"
+        run: |
+          set -euo pipefail
+
+          digest="${{ steps.build_image.outputs.digest }}"
+          if [[ -z "$digest" ]]; then
+            echo "No image digest emitted by docker/build-push-action." >&2
+            exit 1
+          fi
+
+          image_ref="${{ env.REGISTRY }}/${{ github.repository }}/${{ matrix.component }}@${digest}"
+          echo "Signing image digest: ${image_ref}"
+          cosign sign --yes "${image_ref}"
 
       - name: Runtime smoke (PR)
         if: github.event_name == 'pull_request' && ((matrix.component == 'gateway' && steps.changes.outputs.gateway == 'true') || (matrix.component == 'relay' && steps.changes.outputs.relay == 'true'))

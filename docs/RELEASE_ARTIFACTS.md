@@ -49,6 +49,8 @@ Metadata:
 
 - `SHA256SUMS`
 - `release-manifest.json`
+- `release-signatures/*.sig`
+- `release-signatures/*.pem`
 
 ## Excluded Files
 
@@ -66,4 +68,4 @@ The release workflow fails if required backend binaries are missing:
 - `wavry-master-*`
 - `wavry-server-*`
 
-It also generates checksums, a machine-readable release manifest, and a human-readable asset catalog for every published release.
+It also generates checksums, a machine-readable release manifest, and keyless Sigstore signatures for every published release asset.

@@ -582,6 +582,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      id-token: write
     steps:
       - name: Download all
         uses: actions/download-artifact@v4
@@ -820,6 +821,23 @@ jobs:
             ' release-manifest.tsv > release-manifest.json
 
           rm -f release-manifest.tsv
+      - name: Install cosign
+        uses: sigstore/cosign-installer@v3
+      - name: Sign release assets (keyless)
+        shell: bash
+        env:
+          COSIGN_EXPERIMENTAL: "1"
+        run: |
+          set -euo pipefail
+          mkdir -p release-signatures
+
+          while IFS= read -r file; do
+            base="$(basename "$file")"
+            cosign sign-blob --yes \
+              --output-signature "release-signatures/${base}.sig" \
+              --output-certificate "release-signatures/${base}.pem" \
+              "$file"
+          done < <(find release-assets -maxdepth 1 -type f -print | sort)
       - name: Delete existing release assets
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -865,7 +883,9 @@ jobs:
             ## Integrity and Catalog
             - `SHA256SUMS` contains checksums for every shipped file.
             - `release-manifest.json` provides machine-readable file/platform/arch/checksum metadata.
+            - `release-signatures/*.sig` and `release-signatures/*.pem` provide keyless Sigstore signatures for each shipped artifact.
           files: |
             release-assets/*
+            release-signatures/*
             SHA256SUMS
             release-manifest.json

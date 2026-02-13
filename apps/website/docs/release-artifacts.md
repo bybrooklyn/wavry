@@ -47,8 +47,10 @@ Examples:
 | `wavry-desktop-native-macos-arm64.dmg` | Desktop App | macOS | arm64 | Native Swift desktop DMG |
 | `wavry-mobile-android-arm64-release.apk` | Android App | Android | arm64 | Mobile client APK |
 | `wavry-quest-android-arm64-release.apk` | Android App | Android (Quest) | arm64 | Quest client APK |
-| `SHA256SUMS.txt` | Integrity | All | n/a | SHA-256 checksums for all shipped files |
-| `RELEASE_ASSETS.md` | Metadata | All | n/a | Machine-generated labeled release manifest |
+| `SHA256SUMS` | Integrity | All | n/a | SHA-256 checksums for all shipped files |
+| `release-manifest.json` | Metadata | All | n/a | Machine-readable file/platform/arch/checksum manifest |
+| `release-signatures/<artifact>.sig` | Signature | All | n/a | Sigstore signature for each shipped artifact |
+| `release-signatures/<artifact>.pem` | Signature | All | n/a | Sigstore signing certificate for each artifact |
 
 ## Docker-Only Control Plane Components
 
@@ -95,10 +97,26 @@ sudo dnf install ./wavry-desktop-tauri-linux-x64.rpm
 ## Integrity Verification
 
 ```bash
-sha256sum -c SHA256SUMS.txt
+sha256sum -c SHA256SUMS
 ```
 
 If any file does not verify, discard the artifact and redownload.
+
+## Signature Verification (Sigstore)
+
+Each release artifact is signed with keyless Sigstore (`cosign`) and shipped with:
+
+- `release-signatures/<artifact>.sig`
+- `release-signatures/<artifact>.pem`
+
+Example verification:
+
+```bash
+cosign verify-blob \
+  --signature release-signatures/wavry-server-linux-x64.sig \
+  --certificate release-signatures/wavry-server-linux-x64.pem \
+  wavry-server-linux-x64
+```
 
 ## Related Docs
 

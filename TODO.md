@@ -54,7 +54,7 @@ Last updated: 2026-02-13
 - [ ] Add fuzzing targets for control-plane message parsing and relay session state transitions.
 - [ ] Add structured security logging and audit events for control-plane auth failures and policy denials.
 - [x] Add dependency and supply-chain hardening checks in CI (pinned actions, audit gates, SBOM generation).
-- [ ] Add release signing/attestation plan and implementation for binaries and container images.
+- [x] Add release signing/attestation plan and implementation for binaries and container images.
 - [x] Document key rotation and secret management procedures for production deployments.
 
 ## Priority 1: Website + Documentation
