@@ -39,7 +39,7 @@ while IFS= read -r match; do
       failed=1
       ;;
   esac
-done < <(rg -n '^[[:space:]]*uses:[[:space:]]*[^[:space:]]+' .github/workflows/*.yml)
+done < <(grep -nE '^[[:space:]]*uses:[[:space:]]*[^[:space:]]+' .github/workflows/*.yml)
 
 if (( failed != 0 )); then
   echo "Workflow action pinning check failed." >&2
