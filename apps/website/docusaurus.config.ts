@@ -49,6 +49,12 @@ const config: Config = {
 
   themeConfig: {
     image: 'img/logo.png',
+    docs: {
+      sidebar: {
+        hideable: false,
+        autoCollapseCategories: false,
+      },
+    },
     colorMode: {
       defaultMode: 'dark',
       disableSwitch: true,
@@ -72,6 +78,18 @@ const config: Config = {
           docId: 'getting-started',
           position: 'left',
           label: 'Getting Started',
+        },
+        {
+          type: 'doc',
+          docId: 'documentation-map',
+          position: 'left',
+          label: 'Docs Map',
+        },
+        {
+          type: 'doc',
+          docId: 'codebase-reference',
+          position: 'left',
+          label: 'Reference',
         },
         {
           type: 'doc',
@@ -107,6 +125,14 @@ const config: Config = {
               to: '/getting-started',
             },
             {
+              label: 'Documentation Map',
+              to: '/documentation-map',
+            },
+            {
+              label: 'Codebase Reference',
+              to: '/codebase-reference',
+            },
+            {
               label: 'Deployment Modes',
               to: '/deployment-modes',
             },
@@ -134,6 +160,10 @@ const config: Config = {
             {
               label: 'Security',
               to: '/security',
+            },
+            {
+              label: 'Env Vars',
+              to: '/environment-variable-reference',
             },
             {
               label: 'Operations',

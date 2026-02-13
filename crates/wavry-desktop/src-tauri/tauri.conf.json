@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Wavry",
-  "version": "0.0.4-unstable",
+  "version": "0.0.5-unstable",
   "identifier": "dev.wavry.desktop",
   "build": {
     "beforeDevCommand": "bun run dev",

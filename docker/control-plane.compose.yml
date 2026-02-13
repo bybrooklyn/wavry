@@ -12,6 +12,13 @@ services:
       ADMIN_PANEL_TOKEN: ${ADMIN_PANEL_TOKEN:-}
     ports:
       - "${WAVRY_GATEWAY_PORT:-3000}:3000"
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    tmpfs:
+      - /tmp
     volumes:
       - gateway-data:/var/lib/wavry
 
@@ -29,8 +36,18 @@ services:
       - 0.0.0.0:4000
       - --master-url
       - ${WAVRY_RELAY_MASTER_URL:-http://host.docker.internal:8080}
+      - --health-listen
+      - 0.0.0.0:9091
     ports:
       - "${WAVRY_RELAY_PORT:-4000}:4000/udp"
+      - "${WAVRY_RELAY_HEALTH_PORT:-9091}:9091"
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    tmpfs:
+      - /tmp
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:

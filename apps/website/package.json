@@ -1,6 +1,6 @@
 {
   "name": "apps-website",
-  "version": "0.0.4-unstable",
+  "version": "0.0.5-unstable",
   "private": true,
   "scripts": {
     "docusaurus": "docusaurus",

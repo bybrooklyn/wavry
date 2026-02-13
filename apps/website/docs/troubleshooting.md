@@ -1,116 +1,158 @@
 ---
 title: Troubleshooting
-description: Practical troubleshooting playbook for connection, performance, and deployment issues.
+description: Practical fault-isolation guide with concrete checks and commands.
 ---
 
-Use this page as a first-pass runbook when sessions fail or degrade.
+Use this guide to isolate failures quickly.
 
-## 1. Cannot Establish a Session
+## Fast Triage (2 Minutes)
 
-### Symptoms
+Run these first:
 
-- Client never reaches connected state
-- Handshake errors in logs
-- Immediate disconnect after signaling
+```bash
+# control-plane container state
+docker compose -f docker/control-plane.compose.yml ps
 
-### Checks
+# gateway health endpoint
+curl -fsS http://127.0.0.1:3000/health
 
-1. Confirm gateway/relay containers are running when required (`docker compose -f docker/control-plane.compose.yml ps`).
-2. Confirm host process is active and reachable.
-3. Confirm target address/port is correct for direct connect.
-4. Confirm firewall/security group policy allows required UDP path.
-5. Confirm client and host builds are compatible.
+# recent gateway logs
+docker compose -f docker/control-plane.compose.yml logs --tail=100 gateway
+```
+
+Then determine if failure is primarily:
+
+- control plane (session setup/auth/routing)
+- host runtime (capture/encode/send)
+- client runtime (receive/decode/render/input)
+- network path (direct route vs relay fallback)
+
+## 1. Cannot Establish Session
+
+Symptoms:
+
+- client never reaches connected state
+- handshake errors appear immediately
+
+Checks:
+
+1. confirm gateway is healthy
+2. confirm host runtime is active
+3. confirm target/session parameters are correct
+4. confirm firewall/NAT policy allows required UDP flow
+
+Actions:
+
+- restart control-plane containers
+- verify host/client compatibility versions
+- retry with minimal topology (single host, single client)
 
 ## 2. Session Connects but Feels Laggy
 
-### Symptoms
+Symptoms:
 
-- Input delay spikes
-- Jitter/stutter during interaction
-- Throughput swings with visible quality collapse
+- high input delay
+- visual jitter or stutter
 
-### Checks
+Checks:
 
-1. Verify whether session is on direct path or relay fallback.
-2. Check RTT/loss/jitter logs around issue windows.
-3. Inspect host CPU/GPU usage for saturation.
-4. Reduce initial bitrate/resolution temporarily for isolation.
-5. Validate no competing heavy background workloads.
+1. verify whether session is direct or relay
+2. inspect RTT/loss/jitter trends around event time
+3. inspect host CPU/GPU saturation
+4. reduce bitrate/resolution to isolate bottleneck
 
-## 3. Audio Problems
+Actions:
 
-### Symptoms
+- restore direct path where possible
+- reduce competing host workload
+- keep adaptation logs for correlation
 
-- No audio output
-- Wrong capture source
-- Audio route mismatch on macOS
+## 3. Unexpected High Relay Usage
 
-### Checks
+Symptoms:
 
-1. Verify selected audio source configuration.
-2. On macOS, validate source mode (`system`, `microphone`, `app:<name>`).
-3. Confirm OS permissions for capture/input devices.
-4. Confirm sample-rate/channel compatibility in logs.
+- sessions relay in networks where direct path should be common
 
-## 4. Desktop App Issues
+Checks:
 
-### Symptoms
+1. validate NAT/firewall behavior
+2. confirm candidate address correctness
+3. inspect recent infra or policy changes
 
-- Desktop app fails in dev mode
-- UI connects but runtime does not start
-- Settings appear ignored
+Actions:
 
-### Checks
+- correct ingress/egress policy for direct path
+- verify upstream candidate generation
+- compare with known-good baseline region
 
-1. Run `bun run check` in `crates/wavry-desktop`.
-2. Confirm Tauri dependencies and platform prerequisites.
-3. Validate that session start/stop commands are reflected in backend logs.
-4. Verify monitor/audio/input permissions in OS settings.
-5. Linux Wayland/KDE: if you see `Gdk-Message ... Error 71 (Protocol Error) dispatching to wayland display`:
-   - Wavry now applies Wayland-safe defaults automatically (no manual flags required):
-     `GDK_BACKEND=wayland`, `WINIT_UNIX_BACKEND=wayland`,
-     `WEBKIT_DISABLE_DMABUF_RENDERER=1`, and `WEBKIT_DISABLE_COMPOSITING_MODE=1`.
-6. On Linux host start failures, run `./scripts/linux-display-smoke.sh` and verify startup logs for Linux runtime diagnostics and missing plugin hints.
+## 4. Desktop Runtime Issues
 
-## 5. Relay Usage Is Unexpectedly High
+Symptoms:
 
-### Symptoms
+- desktop app starts but runtime does not
+- settings do not apply
 
-- Most sessions relay even in expected direct environments
+Checks:
 
-### Checks
+1. run `bun run check` in `crates/wavry-desktop`
+2. inspect app logs for command/permission failures
+3. verify monitor/audio/input permissions
 
-1. Re-validate NAT/firewall behavior for UDP.
-2. Check if clients are behind restrictive enterprise networking.
-3. Confirm gateway-provided connection candidates are valid.
-4. Review recent infrastructure/network policy changes.
+Linux Wayland/KDE note:
 
-## 6. Build/Release Pipeline Failures
+- if `Gdk-Message ... Error 71 (Protocol Error) dispatching to wayland display` appears, run Linux preflight and confirm portal/compositor health.
 
-### Symptoms
+## 5. Linux Capture and Portal Failures
 
-- CI takes too long or flakes
-- Packaging succeeds on one platform but not another
+Checks:
 
-### Checks
+```bash
+./scripts/linux-display-smoke.sh
+```
 
-1. Verify toolchain cache keys and lockfile changes.
-2. Validate platform-specific build dependencies.
-3. Build from clean environment to reproduce deterministically.
-4. Ensure artifact signing/notarization steps are configured correctly.
+If failing:
 
-## Debugging Workflow Recommendation
+1. verify `xdg-desktop-portal` + backend package
+2. verify PipeWire session state
+3. retest with clean login session
 
-1. Reproduce with minimal topology.
-2. Capture precise timestamps and relevant logs.
-3. Separate control-plane failures from media-plane failures.
-4. Verify security configuration did not unintentionally block transport.
-5. Apply one change at a time and retest.
+Use [Linux and Wayland Support](/linux-wayland-support) for distro-specific recovery flow.
+
+## 6. Audio Issues
+
+Symptoms:
+
+- missing audio
+- wrong source selection
+
+Checks:
+
+1. verify selected audio source (`system`, `microphone`, `app:<name>`)
+2. verify OS capture permissions
+3. verify sample-rate/channel compatibility in logs
+
+## 7. CI/CD Build Failures
+
+Checks:
+
+1. re-run with clean workspace state
+2. confirm lockfiles and cache keys are valid
+3. verify platform dependencies
+4. verify Dockerfile and workflow syntax changes
+
+## 8. Useful Diagnostic Bundle
+
+When escalating an issue, provide:
+
+1. precise timestamp window
+2. gateway/relay logs for that window
+3. host/client runtime logs
+4. whether session was direct or relay
+5. environment details (OS/compositor/version)
 
 ## Related Docs
 
 - [Getting Started](/getting-started)
-- [Linux and Wayland Support](/linux-wayland-support)
-- [Session Lifecycle](/lifecycle)
-- [Networking and Relay](/networking-and-relay)
 - [Operations](/operations)
+- [Linux and Wayland Support](/linux-wayland-support)
+- [Security](/security)

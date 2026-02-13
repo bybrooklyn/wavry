@@ -1,103 +1,128 @@
 ---
 title: Operations
-description: Production operations guidance for deploying, observing, and releasing Wavry reliably.
+description: Production operations runbook for reliability, performance, and release control.
 ---
 
-This page outlines practical operations guidance for teams running Wavry in production-like environments.
+This page is the practical operator baseline for running Wavry in production-like environments.
 
-## Operational Priorities
+## Operational Objectives
 
-1. Predictable session quality
-2. Fast failure detection
-3. Repeatable release process
-4. Security and compliance alignment
+1. Keep interactive latency stable.
+2. Detect regressions quickly.
+3. Deploy safely with fast rollback.
+4. Maintain secure control-plane posture.
 
-## Deployment Topology (Typical)
+## Deployment Model
 
-A common deployment layout includes:
+Typical topology:
 
-- Gateway/auth service containers (Docker-only distribution)
-- Relay service containers in one or more regions (Docker-only distribution)
-- Host pools with capture/encode workloads
-- Client apps or integrated product frontends
+- Docker-only control plane (`gateway`, `relay`)
+- host runtime pools (`wavry-server`)
+- user-facing clients (desktop/mobile/web integrations)
 
-For resilience, separate control-plane and data-plane scaling decisions.
+Use separate scaling strategies for:
 
-## Observability Baseline
+- control plane (API and registration behavior)
+- data plane (session/media load)
 
-At minimum, collect:
+## Reliability Baseline (SLIs)
 
-- Session creation/teardown events
-- Handshake success/failure rates
-- Relay/direct path usage ratios
-- RTT/loss/jitter trends
-- Bitrate adaptation and quality state transitions
+Track these minimum service indicators:
 
-Recommended output targets:
+- session setup success rate
+- handshake failure rate
+- direct vs relay ratio
+- p95/p99 input-to-present latency
+- session drop rate
 
-- Structured logs
-- Metrics backend with dashboards
-- Alerting integrated into on-call workflow
+Set SLO targets per environment tier (dev/stage/prod).
 
-## CI/CD Baseline
+## Monitoring Baseline
 
-### Build speed and reproducibility
+Collect at minimum:
 
-- Cache Rust dependencies/toolchain artifacts
-- Cache Bun dependencies keyed by lockfile
-- Keep build environments deterministic
+- control-plane health and request rates
+- auth failures and rate-limit triggers
+- relay registration/heartbeat health
+- host runtime CPU/GPU pressure
+- RTT/loss/jitter trend series
 
-### Quality gates
+Alert examples:
 
-- Formatting and lint checks
-- Unit/integration test suites
-- Platform packaging validation where applicable
+- gateway health endpoint failing for > 2 minutes
+- relay registrations drop below expected region baseline
+- handshake failures spike above normal envelope
+- direct-path ratio sharply drops after rollout
 
-## Release Pipeline Checklist
+## Runbook: Daily
+
+1. Confirm control-plane container health.
+2. Review top error classes in gateway and relay logs.
+3. Check direct/relay ratio trend for anomalies.
+4. Verify no unexplained session failure burst.
+
+## Runbook: Release Day
 
 1. `cargo fmt --all`
 2. `cargo clippy --workspace --all-targets -- -D warnings`
-3. `cargo test --workspace`
-4. Desktop/frontend checks where relevant
-5. Artifact checksum generation and verification
-6. Signed/notarized packaging where required by platform
-
-## Capacity and Reliability Planning
-
-Plan for:
-
-- Burst relay load during network events
-- Host pool saturation behavior
-- Backpressure and admission strategy
-- Regional failover/runbook procedures
+3. `cargo test --workspace --locked`
+4. Desktop checks (`bun run check`)
+5. Website docs build (`bun run build`)
+6. Validate release artifact naming and checksums
+7. Confirm docker image tags and manifests
 
 ## Linux Fleet Operations
 
-For Linux host pools (especially Wayland hosts), standardize these controls:
+For Linux host fleets (especially Wayland):
 
-1. Pin compositor + portal backend versions by image.
-2. Pin GStreamer plugin sets and verify codec element availability before rollout.
-3. Monitor portal error rates (`xdg-desktop-portal`) and PipeWire health.
-4. Include `./scripts/linux-display-smoke.sh` in pre-release validation.
-5. Keep at least one KDE Wayland and one GNOME Wayland lane in release verification.
-
-## Incident Management Suggestions
-
-- Maintain a severity rubric tied to user impact
-- Keep runbooks for connect failures, relay overload, and auth outages
-- Capture post-incident action items with owners and deadlines
+1. Pin compositor and portal backend package versions.
+2. Pin required GStreamer plugin set.
+3. Run `./scripts/linux-display-smoke.sh` on candidate images.
+4. Keep at least one KDE Wayland lane and one GNOME Wayland lane in verification.
+5. Track portal and PipeWire failure rates as first-class signals.
 
 ## Change Management
 
-Before major rollout:
+For non-trivial changes:
 
-- Test in staging with realistic network conditions
-- Validate backward compatibility assumptions
-- Roll out with canary phases and rollback plan
+1. stage in representative network conditions
+2. deploy to canary cohort
+3. compare pre/post latency and failure metrics
+4. expand rollout only if indicators remain within target bounds
+
+Always define rollback threshold before rollout begins.
+
+## Capacity Planning
+
+Plan capacity for:
+
+- peak concurrent sessions
+- relay burst conditions
+- host CPU/GPU saturation behavior
+- region failover traffic shifts
+
+Keep headroom and avoid running near steady-state capacity ceilings.
+
+## Incident Response Flow
+
+1. Classify impact (control-plane, data-plane, client runtime).
+2. Stabilize by limiting blast radius.
+3. Restore availability first, then optimize quality.
+4. Capture root cause with precise timeline.
+5. Assign follow-up fixes with owners and due dates.
+
+## Backup and Recovery
+
+Minimum recommendations:
+
+- backup gateway persistent state on a schedule
+- keep versioned environment configuration
+- validate restore path in staging periodically
 
 ## Related Docs
 
-- [Troubleshooting](/troubleshooting)
+- [Docker Control Plane](/docker-control-plane)
 - [Security](/security)
-- [Configuration Reference](/configuration-reference)
+- [Troubleshooting](/troubleshooting)
+- [Runbooks and Checklists](/runbooks-and-checklists)
 - [Linux and Wayland Support](/linux-wayland-support)

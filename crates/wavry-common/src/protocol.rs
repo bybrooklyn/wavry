@@ -81,6 +81,8 @@ pub struct RelayRegisterRequest {
 pub struct RelayRegisterResponse {
     pub heartbeat_interval_ms: u64,
     pub master_public_key: Vec<u8>,
+    #[serde(default)]
+    pub master_key_id: Option<String>,
 }
 
 /// Periodic heartbeat from a relay to the Master server.

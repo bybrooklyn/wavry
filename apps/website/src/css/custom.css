@@ -253,20 +253,6 @@ html {
     width: 100%;
   }
 
-  .navbar__items--left .navbar__item {
-    display: none;
-  }
-
-  .navbar__toggle,
-  button[aria-label='Open navigation bar'],
-  button[aria-label='Open sidebar'] {
-    display: none !important;
-  }
-
-  .theme-doc-sidebar-menu {
-    display: none !important;
-  }
-
   .navbar__items--right {
     display: flex;
     margin-left: auto;

@@ -1,112 +1,96 @@
 ---
 title: Configuration Reference
-description: Key runtime flags and environment variables used when operating Wavry components.
+description: Practical configuration guide for host/client runtimes and Docker control-plane services.
 ---
 
-This page summarizes commonly used runtime configuration knobs.
+This page summarizes the most important runtime options and environment variables.
 
-For complete and current option sets, always check each binary's `--help` output.
+For exhaustive options, use each binary's `--help` output.
+
+For the full source-derived environment catalog, see [Environment Variable Reference](/environment-variable-reference).
 
 ## Host Runtime (`wavry-server`)
 
-Common options:
+Common flags:
 
-- `--listen`: UDP listen address (`0.0.0.0:0` by default)
-- `--no-encrypt`: disable transport encryption (testing only)
-- `--width` / `--height`: default stream resolution
+- `--listen`: UDP listen address
+- `--width` / `--height`: stream resolution
 - `--fps`: target frame rate
 - `--bitrate-kbps`: initial target bitrate
-- `--keyframe-interval-ms`: keyframe cadence
-- `--display-id`: select capture display
-- `--gateway-url`: signaling gateway URL
+- `--display-id`: selected display
+- `--gateway-url`: signaling endpoint
 - `--session-token`: signaling session token
 - `--enable-webrtc`: optional web bridge path
-- `--record`: enable local recording
-- `--record-dir`: recording output directory
-- `--send-file`: queue file transfer(s) to client
-- `--file-out-dir`: incoming transfer directory
-- `--file-transfer-share-percent`: max transfer share of current video bitrate
-- `--file-transfer-min-kbps`: transfer floor budget
-- `--file-transfer-max-kbps`: transfer ceiling budget
 - `--audio-source`: `system`, `microphone`, `app:<name>`, `disabled`
-  - `app:<name>` is supported on Linux/macOS/Windows; on startup failure it falls back safely to `system`.
 
-Related env vars include:
+Common env vars:
 
 - `WAVRY_LISTEN_ADDR`
 - `WAVRY_GATEWAY_URL`
 - `WAVRY_SESSION_TOKEN`
-- `WAVRY_FILE_OUT_DIR`
-- `WAVRY_FILE_MAX_BYTES`
 - `WAVRY_AUDIO_SOURCE`
-- `WAVRY_FILE_TRANSFER_SHARE_PERCENT`
-- `WAVRY_FILE_TRANSFER_MIN_KBPS`
-- `WAVRY_FILE_TRANSFER_MAX_KBPS`
-- `WAVRY_ALLOW_INSECURE_SIGNALING` (production override for `ws://`)
-- `WAVRY_SIGNALING_TLS_PINS_SHA256` (comma/semicolon-separated SHA-256 cert fingerprints for `wss://` signaling pinning)
+- `WAVRY_ALLOW_INSECURE_SIGNALING`
+- `WAVRY_SIGNALING_TLS_PINS_SHA256`
 
 ## Client Runtime (`wavry-client`)
 
-Common options:
+Common categories:
 
-- connect target (explicit host address or discovery-driven)
-- encryption and identity options
+- target/discovery options
+- encryption and identity settings
 - relay/master endpoint options
-- resolution and input behavior options
-- file transfer receive/output options
+- input and rendering behavior
 
-For interactive transfer controls in CLI mode:
+Useful mode:
 
-- `--file-control-stdin`
-  - accepts `"<file_id> <pause|resume|cancel|retry>"`
+- `--file-control-stdin` for transfer control commands (`pause`, `resume`, `cancel`, `retry`)
 
 ## Desktop App (`wavry-desktop`)
 
-Desktop app config spans:
+Key configuration domains:
 
-- Connectivity mode (cloud/direct/custom)
-- Gateway URL
-- Host port and UPnP behavior
-- Resolution strategy (native/client/custom)
-- Gamepad enable + deadzone tuning
-- Selected monitor/display target
+- connectivity mode (cloud/direct/custom)
+- gateway URL
+- host networking options
+- resolution strategy
+- input/gamepad settings
+- display target
 
-The desktop UI maps these choices to runtime config passed into host/client processes.
+Linux diagnostics commands are exposed in desktop runtime surface:
 
-Linux desktop builds also expose runtime diagnostics commands:
+- `linux_runtime_health`
+- `linux_host_preflight(display_id)`
 
-- `linux_runtime_health`: returns Linux session/backend/plugin diagnostics.
-- `linux_host_preflight(display_id)`: validates Linux host readiness and resolves the selected display + capture resolution before host start.
+## Docker Control Plane (`gateway` and `relay`)
 
-## Gateway and Relay
+Control plane services are Docker-only.
 
-Gateway and relay are distributed as Docker containers. Use [Docker Control Plane](/docker-control-plane) for deployment commands and image/tag policy.
+Use [Docker Control Plane](/docker-control-plane) for deployment commands and image/tag policy.
 
-Deployment configuration should define:
+Key runtime variables:
 
-- Binding/listen addresses
-- Auth/session token policies
-- Rate-limiting/security controls
-- Database/migration paths (gateway)
-- Upstream coordination settings
+- `ADMIN_PANEL_TOKEN`
+- `WAVRY_GLOBAL_RATE_LIMIT`
+- `WAVRY_GLOBAL_RATE_WINDOW_SECS`
+- `WAVRY_GLOBAL_RATE_MAX_KEYS`
+- `WAVRY_TRUST_PROXY_HEADERS`
+- `WAVRY_RELAY_MASTER_PUBLIC_KEY`
+- `WAVRY_RELAY_ALLOW_INSECURE_DEV` (dev only)
 
-Useful security-focused env vars:
+## Recommended Configuration Workflow
 
-- `WAVRY_GLOBAL_RATE_LIMIT`: global gateway request cap per window
-- `WAVRY_GLOBAL_RATE_WINDOW_SECS`: global limiter window size
-- `WAVRY_GLOBAL_RATE_MAX_KEYS`: bounded key cardinality for limiter map
-- `WAVRY_TRUST_PROXY_HEADERS`: whether to trust `X-Forwarded-For` / `X-Real-IP`
-
-## Suggested Configuration Workflow
-
-1. Start with defaults for local validation.
-2. Pin critical addresses/ports for production.
-3. Set explicit security and logging policies.
-4. Validate direct/relay behavior in a staging network.
-5. Document your final environment profile per deployment tier.
+1. start with defaults in local environment
+2. pin addresses/ports and auth values in staging
+3. enforce production signaling and TLS policy
+4. validate direct vs relay behavior under realistic network conditions
+5. document final environment profile per deployment tier
 
 ## Related Docs
 
+- [Runtime and Service Reference](/runtime-and-service-reference)
+- [Environment Variable Reference](/environment-variable-reference)
 - [Getting Started](/getting-started)
+- [Docker Control Plane](/docker-control-plane)
 - [Networking and Relay](/networking-and-relay)
 - [Operations](/operations)
+- [Security](/security)

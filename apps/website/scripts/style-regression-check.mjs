@@ -155,7 +155,7 @@ async function runChecks() {
     });
 
     assert(!mobileMetrics.hasHorizontalOverflow, 'Mobile docs page has horizontal overflow');
-    assert(!mobileMetrics.hasVisibleToggle, 'Mobile sidebar toggle is visible');
+    assert(mobileMetrics.hasVisibleToggle, 'Mobile navigation/sidebar toggle is not visible');
 
     const pricingPage = await browser.newPage({viewport: {width: 1366, height: 900}});
     await pricingPage.goto(PRICING_URL, {waitUntil: 'networkidle'});

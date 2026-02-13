@@ -217,6 +217,10 @@ See [docs/ADMIN_DASHBOARD.md](docs/ADMIN_DASHBOARD.md) for detailed API referenc
 
 Technical contributions are welcome. Please ensure any changes to the protocol are documented and accompanied by relevant unit tests.
 
+Before submitting patches or opening a pull request, read [`CLA.md`](CLA.md) and include this attestation in your PR description or commit message:
+
+`I have read and agree to CLA.md`
+
 ---
 
 ## Licensing & Hosted Service

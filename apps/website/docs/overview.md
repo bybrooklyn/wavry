@@ -1,102 +1,92 @@
 ---
 title: Wavry Overview
-description: What Wavry is, who it is for, how it works, and how licensing works.
+description: What Wavry is, what ships, who should use it, and where to start.
 slug: /
 ---
 
-Wavry is a low-latency remote compute platform built for sessions where responsiveness matters more than static image quality.
+Wavry is a low-latency remote compute stack for sessions where input responsiveness matters more than perfect visual smoothness.
 
-Wavry is engineered to provide **the best Wayland support on the market** for latency-sensitive remote desktop and streaming workloads.
+Wavry is engineered with a Linux-first runtime model and aims to provide best-in-class Wayland behavior for interactive workloads.
 
-It is designed for:
+## What Wavry Includes
 
-- Remote desktop control where input delay is unacceptable
-- Interactive game and media streaming with tight latency budgets
-- Cloud-hosted application sessions that still need local-feeling control
+Wavry is a full stack, not just a desktop UI:
 
-## What Wavry Actually Is
+- `rift-core`: transport protocol, congestion control, FEC
+- `rift-crypto`: handshake, identity, replay protection, encryption
+- `wavry-server` and `wavry-client`: host/client runtime loops
+- `wavry-desktop`: desktop control surface (Linux and Windows Tauri, macOS native Swift release)
+- Control plane services (`gateway`, `relay`) distributed as Docker images
 
-Wavry combines protocol, cryptography, runtimes, and operations guidance into one stack:
+## What Ships in Releases
 
-- `RIFT` transport for real-time media and input traffic
-- End-to-end encryption (`Noise XX` + `ChaCha20-Poly1305`)
-- Control-plane services for signaling and relay fallback
-- Host/client runtimes for capture, encode, send, decode, render, and input injection
+Wavry release artifacts are intentionally scoped:
 
-Wavry is not just a UI app. It is an implementation stack for interactive remote sessions.
+- Desktop apps
+- Host/runtime binaries (`wavry-server`, `wavry-master`)
+- Android app artifacts
+- Checksums and release manifest
 
-## Why It Exists
+Control-plane services are Docker-only:
 
-Typical streaming stacks optimize for throughput and video smoothness first. Wavry is optimized for interaction quality first.
+- `ghcr.io/<owner>/<repo>/gateway:<tag>`
+- `ghcr.io/<owner>/<repo>/relay:<tag>`
 
-Key design choices:
+See [Release Artifacts](/release-artifacts) for exact names.
 
-1. Keep input loop delay bounded.
-2. Favor delay stability over perfect visual quality.
-3. Adapt quickly to congestion changes.
-4. Encrypt by default and separate control-plane from encrypted data-plane traffic.
+## 60-Second Session Flow
 
-## What Wavry Is Not
+1. Client and host negotiate via the control plane or direct route.
+2. Peers establish encrypted session state.
+3. Host captures and encodes frames, sends encrypted packets.
+4. Client decrypts, reorders/reconstructs, decodes, and renders.
+5. Input flows back to host over encrypted path.
+6. Direct route is preferred; relay is fallback-only.
 
-Wavry is not intended to be:
+## Who Wavry Is For
 
-- A static video CDN
-- A long-buffer media playback system
-- A browser-only toy protocol with no production operations model
+Wavry is a fit for:
 
-## How a Session Works (High-Level)
+- Remote desktop where control latency is critical
+- Interactive streaming where packet delay stability matters
+- Teams that need self-hosting and operational control
+- Linux-heavy deployments, including Wayland environments
 
-1. Client discovers/signals to a host directly or through the gateway.
-2. Host and client negotiate encrypted session keys.
-3. Host sends encoded media over RIFT while client sends input events back.
-4. Runtime adapts bitrate/FEC based on RTT, loss, and jitter.
-5. Relay is used only when direct transport cannot be established.
+Wavry is not designed as a long-buffer media playback/CDN product.
 
-## Core Components
+## Documentation Paths
 
-| Component | Responsibility |
-|---|---|
-| `rift-core` | Packet model, DELTA congestion control, FEC, control messages |
-| `rift-crypto` | Identity, handshake, replay protection, authenticated encryption |
-| `wavry-server` | Host runtime: capture, encode, stream, input handling |
-| `wavry-client` | Client runtime: receive, decode, render, input send |
-| `wavry-gateway` | Signaling and coordination APIs |
-| `wavry-relay` | Encrypted UDP relay fallback |
-| `wavry-desktop` | Desktop UX and operator controls |
+Pick a path based on your role:
 
-## Linux and Wayland Position
+| Role | Start Here | Then Read |
+|---|---|---|
+| New evaluator | [Getting Started](/getting-started) | [Architecture](/architecture), [Lifecycle](/lifecycle) |
+| Linux operator | [Linux and Wayland Support](/linux-wayland-support) | [Operations](/operations), [Troubleshooting](/troubleshooting) |
+| Platform engineer | [Architecture](/architecture) | [Configuration Reference](/configuration-reference), [Security](/security) |
+| Infra/DevOps | [Docker Control Plane](/docker-control-plane) | [Operations](/operations), [Runbooks and Checklists](/runbooks-and-checklists) |
+| Commercial evaluator | [Deployment Modes](/deployment-modes) | [Pricing](/pricing), [FAQ](/faq) |
+| New contributor | [Codebase Reference](/codebase-reference) | [Developer Workflows](/developer-workflows), [Internal Design Docs](/internal-design-docs) |
 
-Linux is a first-class target for Wavry, with a native Wayland-first path for capture and desktop runtime behavior.
+## Licensing Summary
 
-- Wayland host capture runs through portal + PipeWire.
-- Desktop runtime on Wayland enforces native backend defaults to avoid mixed-backend instability.
-- X11 remains supported for legacy Linux sessions.
+Wavry is open-source under AGPL-3.0 for compliant use.
 
-Read the full Linux implementation guide in [Linux and Wayland Support](/linux-wayland-support).
+- AGPL-compatible usage: free
+- Commercial/private distribution and certain SaaS/integration models: commercial agreement required
 
-## Licensing and Commercial Use
+RIFT implementation in this repository is covered by the same open-source licensing model documented for Wavry.
 
-Wavry’s open-source core, including RIFT implementation, is released under **AGPL-3.0**.
+See [Deployment Modes](/deployment-modes), [Pricing](/pricing), and [LICENSE](https://github.com/bybrooklyn/wavry/blob/main/LICENSE).
 
-- If your use follows AGPL requirements, you can use Wavry for free.
-- If you need exclusion from AGPL obligations for commercial/private derivative usage, use commercial licensing.
-- If you want to run Wavry as a SaaS service or deeply integrate it into a commercial platform, direct contact is required.
+## Recommended Reading Order
 
-Read details in [Pricing](/pricing) and [Deployment Modes](/deployment-modes).
-
-## Evaluation Path
-
-For a practical technical evaluation, follow this order:
-
-1. [Getting Started](/getting-started) for an end-to-end local run.
-2. [Architecture](/architecture) and [Lifecycle](/lifecycle) for implementation boundaries.
-3. [Networking and Relay](/networking-and-relay) for path behavior.
-4. [Security](/security) before internet-facing deployments.
-5. [Operations](/operations) and [Troubleshooting](/troubleshooting) for production readiness.
-
-## Recommended Next Reads
-
-- [Product Use Cases](/product-use-cases)
-- [Configuration Reference](/configuration-reference)
-- [Desktop App](/desktop-app)
-- [FAQ](/faq)
+1. [Getting Started](/getting-started)
+2. [Docker Control Plane](/docker-control-plane)
+3. [Architecture](/architecture)
+4. [Session Lifecycle](/lifecycle)
+5. [Linux and Wayland Support](/linux-wayland-support)
+6. [Security](/security)
+7. [Operations](/operations)
+8. [Troubleshooting](/troubleshooting)
+9. [Codebase Reference](/codebase-reference)
+10. [Environment Variable Reference](/environment-variable-reference)

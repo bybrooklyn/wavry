@@ -1,90 +1,95 @@
 ---
 title: Security
-description: Security posture, threat model assumptions, and operator hardening guidance.
+description: Security model, hardening baseline, and operational controls for production use.
 ---
 
-Wavry is designed for secure interactive sessions by default, with encryption-first transport and clear trust boundaries.
+Wavry is designed for encryption-first interactive sessions with explicit trust boundaries.
 
-## Security Goals
+## Security Model Summary
 
-1. Keep session payloads encrypted end-to-end.
-2. Prevent replay/tampering in transport paths.
-3. Limit control-plane abuse and unauthorized session actions.
-4. Preserve operator visibility without exposing sensitive content.
+Core principles:
+
+1. media and input payloads remain encrypted end-to-end
+2. control plane is separated from encrypted data plane
+3. replay and tamper resistance are built into session transport
+4. relay should operate as a blind forwarder for encrypted payloads
 
 ## Cryptographic Baseline
 
-- Handshake: `Noise_XX_25519_ChaChaPoly_BLAKE2s`
-- Encrypted transport: `ChaCha20-Poly1305`
-- Identity/authentication: key-based peer identity
-
-## Threat Model Themes
-
-Wavry designs around practical threats such as:
-
-- Unauthorized session initiation attempts
-- Token/session replay
-- Control-plane abuse and resource exhaustion
-- Network observers attempting metadata correlation
+- handshake: `Noise_XX_25519_ChaChaPoly_BLAKE2s`
+- transport encryption: `ChaCha20-Poly1305`
+- peer identity: key-based identity model
 
 ## Trust Boundaries
 
-### Endpoint boundary
+Endpoint boundary:
 
-- Session keys and decrypted payload handling should stay at trusted endpoints.
+- keys and decrypted payloads must stay on trusted endpoints
 
-### Relay boundary
+Gateway boundary:
 
-- Relay should forward encrypted traffic without needing decryption capability.
+- gateway handles auth, signaling, and policy
+- treat as internet-facing security surface
 
-### Gateway boundary
+Relay boundary:
 
-- Gateway coordinates sessions and policy decisions; it should be hardened like any internet-facing control service.
+- relay forwards encrypted packets
+- relay should not require decryption capability
 
-## Secure Operator Practices
+## Production Hardening Checklist
 
-### Authentication and secrets
+### Control Plane
 
-- Keep signing tokens/keys out of logs.
-- Rotate secrets and tokens on a defined cadence.
-- Scope credentials to minimal required permissions.
+1. terminate TLS at trusted ingress
+2. enforce strict auth and admin token controls
+3. keep rate limiting enabled (`WAVRY_GLOBAL_RATE_LIMIT*`)
+4. trust proxy headers only behind trusted proxy (`WAVRY_TRUST_PROXY_HEADERS=1`)
 
-### Network hardening
+### Signaling Security
 
-- Use TLS for internet-facing control-plane traffic.
-- Restrict management/admin surfaces by network policy.
-- Apply DDoS/rate-limit controls at ingress boundaries.
-- Keep gateway global API rate limiting enabled (`WAVRY_GLOBAL_RATE_LIMIT*`).
-- Only trust forwarded client IP headers behind a trusted proxy (`WAVRY_TRUST_PROXY_HEADERS=1`).
-- In production, use `wss://` signaling and only enable insecure `ws://` via explicit override.
-- For high-assurance deployments, pin signaling TLS cert fingerprints with `WAVRY_SIGNALING_TLS_PINS_SHA256`.
+1. use `wss://` for signaling in production
+2. avoid insecure signaling override except controlled dev
+3. pin signaling cert fingerprints when high assurance is required (`WAVRY_SIGNALING_TLS_PINS_SHA256`)
 
-### Runtime monitoring
+### Secret Handling
 
-Track and alert on:
+1. keep secrets out of logs and source-controlled files
+2. rotate tokens/keys on a defined schedule
+3. use scoped credentials with least privilege
 
-- Failed auth spikes
-- Session setup anomalies
-- Relay bandwidth outliers
-- Unusual admin API usage
+### Relay Security
 
-## Incident Response Guidelines
+1. do not run insecure relay mode in production
+2. set and validate relay master public key
+3. monitor relay registration and heartbeat anomalies
 
-1. Identify affected surfaces (gateway, relay, endpoint).
-2. Revoke or rotate potentially exposed credentials.
-3. Isolate abusive clients/users/network ranges.
-4. Patch and redeploy impacted components.
-5. Document timeline and prevention controls.
+## Detection and Monitoring
 
-## Security Validation Checklist
+Alert on:
 
-- Encryption enabled in all production environments
-- Replay protections active and tested
-- Admin access constrained and audited
-- Logs reviewed for secret leakage
-- Upgrade process defined for security patch releases
+- auth failure spikes
+- handshake failure surges
+- abnormal relay usage changes
+- unusual admin API access patterns
 
-## Deep Security References
+Log with enough context for incident reconstruction, but avoid sensitive payload disclosure.
+
+## Incident Response
+
+1. identify impacted surface (gateway, relay, endpoint)
+2. rotate exposed credentials/tokens
+3. isolate abusive traffic/users/ranges
+4. patch and redeploy
+5. record timeline, blast radius, and preventive controls
+
+## Security Validation Before Release
+
+1. run standard lint/tests and security-relevant checks
+2. verify production signaling/TLS posture
+3. verify no insecure relay flags in production deployment
+4. verify admin access boundaries and auditability
+
+## Deep References
 
 - [WAVRY_SECURITY.md](https://github.com/bybrooklyn/wavry/blob/main/docs/WAVRY_SECURITY.md)
 - [WAVRY_SECURITY_GUIDELINES.md](https://github.com/bybrooklyn/wavry/blob/main/docs/WAVRY_SECURITY_GUIDELINES.md)

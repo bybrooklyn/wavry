@@ -26,6 +26,7 @@ pub enum RelayState {
     Probation,
     Active,
     Degraded,
+    Draining,
     Quarantined,
     Banned,
 }
@@ -78,8 +79,10 @@ pub fn calculate_relay_score(relay: &RelayCandidate) -> f32 {
     let rtt_score = m.probe_rtt_score;
     let loss_score = m.probe_loss_score * 100.0;
 
-    // Use actual load_pct for capacity score (inverted)
-    let capacity_score = (1.0 - (relay.load_pct / 100.0).clamp(0.0, 1.0)) * 100.0;
+    // Blend live load and probe-based capacity score.
+    let load_capacity = (1.0 - (relay.load_pct / 100.0).clamp(0.0, 1.0)) * 100.0;
+    let metric_capacity = (m.capacity_score.clamp(0.0, 1.0)) * 100.0;
+    let capacity_score = load_capacity * 0.7 + metric_capacity * 0.3;
 
     let mut raw_score = success_score * 0.25
         + handshake_score * 0.15
@@ -89,18 +92,24 @@ pub fn calculate_relay_score(relay: &RelayCandidate) -> f32 {
         + loss_score * 0.10
         + capacity_score * 0.05;
 
-    // Penalize stale relays (older than 2 minutes)
+    // Penalize stale relays as heartbeat freshness decays.
     if let Ok(age) = SystemTime::now().duration_since(relay.last_seen) {
-        if age.as_secs() > 120 {
-            raw_score *= 0.5;
-        }
+        let freshness_multiplier = match age.as_secs() {
+            0..=30 => 1.0,
+            31..=90 => 0.9,
+            91..=180 => 0.65,
+            181..=300 => 0.4,
+            _ => 0.2,
+        };
+        raw_score *= freshness_multiplier;
     }
 
     let state_multiplier = match relay.state {
-        RelayState::New => 0.0,
-        RelayState::Probation => 0.5,
+        RelayState::New => 0.25,
+        RelayState::Probation => 0.65,
         RelayState::Active => 1.0,
-        RelayState::Degraded => 0.3,
+        RelayState::Degraded => 0.4,
+        RelayState::Draining => 0.0,
         RelayState::Quarantined => 0.0,
         RelayState::Banned => 0.0,
     };
@@ -366,5 +375,35 @@ mod tests {
         let filtered = filter_by_geography(candidates.clone(), Some("eu-central-1"), None, 10);
 
         assert_eq!(filtered[0]._id, "eu");
+    }
+
+    #[test]
+    fn test_draining_relay_is_never_selected() {
+        let healthy = RelayCandidate {
+            _id: "active".into(),
+            endpoints: vec![],
+            state: RelayState::Active,
+            metrics: RelayMetrics::default(),
+            region: None,
+            asn: None,
+            load_pct: 0.0,
+            last_seen: SystemTime::now(),
+        };
+        let draining = RelayCandidate {
+            _id: "drain".into(),
+            endpoints: vec![],
+            state: RelayState::Draining,
+            metrics: RelayMetrics::default(),
+            region: None,
+            asn: None,
+            load_pct: 0.0,
+            last_seen: SystemTime::now(),
+        };
+
+        for _ in 0..100 {
+            let pool = vec![healthy.clone(), draining.clone()];
+            let selected = select_relay(&pool).expect("a relay should be selected");
+            assert_eq!(selected._id, "active");
+        }
     }
 }

@@ -1,80 +1,115 @@
 ---
 title: Getting Started
-description: Run Wavry locally, verify an end-to-end encrypted session, and understand each moving part.
+description: End-to-end local setup with verification steps, expected results, and teardown.
 ---
 
-This guide gets you from clone to first working session and explains what each process does.
+This guide gets you from clone to a verified local session quickly.
 
-## What You Will Run
+## Goal
 
-A minimal local Wavry stack uses:
+By the end of this page, you should have:
 
-1. `gateway` Docker container (auth/control plane)
-2. optional `relay` Docker container (encrypted UDP fallback)
-3. `wavry-server` process (host runtime: capture + encode + stream)
-4. `wavry-client` process (client runtime: receive + decode + render + input)
-
-You can also run the desktop app for UI-driven host/client workflows.
+1. gateway container running and healthy
+2. optional relay container running
+3. host/client runtimes started
+4. a basic session validated
 
 ## Prerequisites
+
+Required:
 
 - Rust 1.75+
 - `protobuf-compiler`
 - `pkg-config`
-- Bun (for desktop/web tooling)
 
-Optional (platform-specific):
+Optional:
 
-- Android SDK/NDK for Android builds
-- Xcode for macOS packaging
-- PipeWire + XDG Desktop Portal backend for Linux/Wayland capture paths
+- Bun (desktop app)
+- Android SDK/NDK (Android builds)
+- Xcode (macOS packaging)
 
-For detailed Linux setup (distros, compositor support, portal packages, validation), use [Linux and Wayland Support](/linux-wayland-support).
+Linux note:
+
+- For Wayland hosts, ensure PipeWire + XDG portal stack is installed.
+- Use [Linux and Wayland Support](/linux-wayland-support) for distro-specific setup.
 
 ## 1. Clone and Build
 
 ```bash
 git clone https://github.com/bybrooklyn/wavry.git
 cd wavry
-cargo build --workspace
+cargo build --workspace --locked
 ```
 
-## 2. Start Control-Plane Services (Docker-Only)
+Expected outcome:
 
-From repo root, start gateway:
+- Workspace compiles successfully with no build errors.
+
+## 2. Start Control Plane (Docker-Only)
+
+Start gateway:
 
 ```bash
 docker compose -f docker/control-plane.compose.yml up -d gateway
 ```
 
-If you want to validate relay fallback locally, start relay too:
+Verify gateway health:
+
+```bash
+curl -fsS http://127.0.0.1:3000/health
+```
+
+If you want relay fallback validation, start relay profile:
 
 ```bash
 WAVRY_RELAY_MASTER_URL=http://host.docker.internal:8080 \
 docker compose -f docker/control-plane.compose.yml --profile relay up -d relay
 ```
 
-Relay requires a reachable master endpoint for registration and heartbeat. For production, set `WAVRY_RELAY_MASTER_PUBLIC_KEY` and disable insecure dev mode.
+Check container status:
+
+```bash
+docker compose -f docker/control-plane.compose.yml ps
+```
 
 ## 3. Start Host and Client Runtimes
 
-Open two terminals.
-
-Terminal 3 (host):
+Terminal A (host):
 
 ```bash
-cargo run --bin wavry-server
+RUST_LOG=info cargo run --bin wavry-server
 ```
 
-Terminal 4 (client):
+Terminal B (client):
 
 ```bash
-cargo run --bin wavry-client
+RUST_LOG=info cargo run --bin wavry-client
 ```
 
-If mDNS/direct discovery is unavailable in your environment, run the client with an explicit host address.
+Expected outcome:
 
-## 4. Run the Desktop App (Optional but Recommended)
+- Host and client start without panic.
+- Client reaches connected/active state when target is resolved.
+
+## 4. Validate Basic Session Quality
+
+Confirm:
+
+- input feels responsive
+- no repeated handshake failures in logs
+- no runaway delay growth under short interaction bursts
+
+Useful checks:
+
+```bash
+# control plane health
+curl -fsS http://127.0.0.1:3000/health
+
+# control plane container logs
+docker compose -f docker/control-plane.compose.yml logs --tail=100 gateway
+```
+
+## 5. Optional Desktop App Run
 
 ```bash
 cd crates/wavry-desktop
@@ -82,50 +117,56 @@ bun install
 bun run tauri dev
 ```
 
-Use the UI to start hosting or connect to a remote host.
+Then use desktop UI for host/client workflow testing.
 
-## 5. Validate Session Health
+## Linux/Wayland Validation (Recommended)
 
-When testing locally, confirm:
+Run preflight:
 
-- Session is established and remains connected
-- Input events are responsive (mouse + keyboard)
-- No handshake/encryption errors in logs
-- Bitrate/congestion state updates appear without runaway delay
+```bash
+./scripts/linux-display-smoke.sh
+```
 
-## Common Local Issues
+If preflight fails, follow [Linux and Wayland Support](/linux-wayland-support).
+
+## Common First-Run Problems
+
+### Gateway is unhealthy
+
+- Check container logs: `docker compose -f docker/control-plane.compose.yml logs gateway`
+- Confirm `3000` is not already in use.
 
 ### Client cannot connect
 
-- Verify gateway container is running
-- Verify relay container is running if you are validating relay fallback
-- Confirm host process is active
-- Confirm address/port if using direct connect
+- Confirm host runtime is active.
+- Confirm target/session settings are correct.
+- Confirm firewall policy permits required UDP path.
 
-### Desktop app fails to start
+### Session is unexpectedly relayed
 
-- Re-run `bun install` in `crates/wavry-desktop`
-- Check Tauri prerequisites for your OS
-- Run `bun run check` to validate frontend types
+- Recheck NAT/firewall behavior.
+- Confirm direct candidate path availability.
 
-### Choppy session on local network
+### Linux capture fails
 
-- Ensure CPU/GPU is not saturated
-- Try lower stream settings temporarily
-- Confirm you are not relaying unnecessarily when direct path is available
+- Run `./scripts/linux-display-smoke.sh`.
+- Verify portal backend packages and PipeWire availability.
 
-### Linux/Wayland capture fails
+## Teardown
 
-- Run `./scripts/linux-display-smoke.sh`
-- Confirm `xdg-desktop-portal` and your desktop backend package are installed/running
-- Confirm screen-capture permission was granted
-- Follow [Linux and Wayland Support](/linux-wayland-support) for full remediation flow
+Stop local control-plane containers:
+
+```bash
+docker compose -f docker/control-plane.compose.yml down
+```
+
+Stop host/client runtimes with `Ctrl+C` in their terminals.
 
 ## Next Steps
 
-1. Read [Deployment Modes](/deployment-modes) to pick OSS/commercial/hosted usage.
-2. Read [Docker Control Plane](/docker-control-plane) for gateway/relay container operation.
-3. Read [Architecture](/architecture) to understand boundaries and extension points.
-4. Read [Session Lifecycle](/lifecycle) and [Networking and Relay](/networking-and-relay) to understand behavior under real network conditions.
-5. Read [Security](/security) before internet-facing deployment.
-6. Use [Operations](/operations) and [Troubleshooting](/troubleshooting) to define your production runbook.
+1. [Architecture](/architecture)
+2. [Session Lifecycle](/lifecycle)
+3. [Docker Control Plane](/docker-control-plane)
+4. [Security](/security)
+5. [Operations](/operations)
+6. [Troubleshooting](/troubleshooting)

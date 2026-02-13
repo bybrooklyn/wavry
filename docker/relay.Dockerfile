@@ -18,11 +18,13 @@ FROM chef-base AS builder
 COPY --from=planner /app/recipe.json recipe.json
 RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
     --mount=type=cache,target=/usr/local/cargo/git,sharing=locked \
+    --mount=type=cache,target=/app/target,sharing=locked \
     cargo chef cook --release --recipe-path recipe.json --bin wavry-relay
 COPY . .
 RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
     --mount=type=cache,target=/usr/local/cargo/git,sharing=locked \
-    cargo build --locked --release -p wavry-relay
+    --mount=type=cache,target=/app/target,sharing=locked \
+    cargo build --locked --release -p wavry-relay --bin wavry-relay
 
 FROM debian:bookworm-slim AS runtime
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -38,10 +40,12 @@ RUN chmod +x /usr/local/bin/relay-entrypoint.sh
 
 ENV RUST_LOG=info
 ENV HOME=/var/lib/wavry-relay
+ENV WAVRY_RELAY_HEALTH_LISTEN=0.0.0.0:9091
 
 VOLUME ["/var/lib/wavry-relay"]
 
 EXPOSE 4000/udp
+EXPOSE 9091
 USER wavry
 ENTRYPOINT ["/usr/local/bin/relay-entrypoint.sh"]
-CMD ["--listen", "0.0.0.0:4000", "--master-url", "http://wavry-master:8080"]
+CMD ["--listen", "0.0.0.0:4000", "--master-url", "http://wavry-master:8080", "--health-listen", "0.0.0.0:9091"]

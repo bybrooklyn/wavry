@@ -1,89 +1,104 @@
 ---
 title: Architecture
-description: How Wavry is structured across protocol, crypto, media runtime, and control plane.
+description: Layered architecture, trust boundaries, and data/control flow for Wavry.
 ---
 
-Wavry is built as a modular stack with explicit trust boundaries between signaling and encrypted media traffic.
+Wavry is structured as a modular stack with clear separation between control and encrypted transport.
 
-## Architectural Layers
+## Layer Model
 
-| Layer | Components | Purpose |
+| Layer | Components | Responsibility |
 |---|---|---|
-| Protocol + control | `rift-core` | Frame/packet model, DELTA congestion control, FEC, control messages |
-| Cryptography | `rift-crypto` | Identity keys, handshake, replay protection, authenticated encryption |
-| Session runtime | `wavry-server`, `wavry-client` | Capture/encode/send and receive/decode/render/input loops |
-| Control plane | `wavry-gateway` | Session signaling, coordination APIs, operator-facing controls |
-| Transport fallback | `wavry-relay` | Blind forwarding for encrypted UDP payloads |
-| User surfaces | Desktop/mobile/web apps | UX and platform-specific interaction paths |
+| Protocol | `rift-core` | packet model, DELTA congestion control, FEC, control primitives |
+| Crypto | `rift-crypto` | identity, handshake, replay protection, authenticated encryption |
+| Runtime | `wavry-server`, `wavry-client` | capture/encode/send and receive/decode/render/input loops |
+| Control plane | `gateway` service | signaling, auth, routing coordination |
+| Transport fallback | `relay` service | blind forwarding for encrypted UDP payloads |
+| Product surfaces | desktop/mobile/web apps | user workflows and integration surfaces |
 
 ## Control Plane vs Data Plane
 
-### Control plane
+Control plane:
 
-Used to coordinate session setup and routing decisions:
+- session negotiation
+- policy and routing coordination
+- auth and admission controls
 
-- Peer signaling
-- Session metadata exchange
-- Relay allocation when needed
+Data plane:
 
-### Data plane
+- encrypted media and input transport
+- latency-sensitive adaptation and recovery
 
-Carries encrypted real-time traffic:
+Design requirement:
 
-- Media payloads (video/audio)
-- Input/control traffic
-- Reliability/correction metadata (for low-latency recovery)
+- control-plane services do not require access to decrypted payloads.
 
-Wavry keeps these concerns separate so relay/gateway services do not need decrypted payload access.
-
-## Session Lifecycle
-
-1. **Discovery and signaling**
-   - Client resolves host (direct or gateway-assisted).
-2. **Crypto handshake**
-   - Peers establish shared secrets and authenticated transport state.
-3. **Media/input loop start**
-   - Host sends encoded media; client sends encrypted input events.
-4. **Adaptive runtime control**
-   - DELTA adjusts bitrate/FEC based on RTT/loss/jitter.
-5. **Path fallback (if required)**
-   - Session uses relay only if direct transport is not viable.
-
-## Data Flow (Simplified)
+## Session Path (Simplified)
 
 ```text
-Host capture -> encode -> packetize (RIFT) -> encrypt -> UDP transport
-Client receive -> decrypt -> reorder/FEC -> decode -> present
-Client input -> encrypt -> control path -> host injection
+Client <-> Gateway (signal/auth)
+Client <-> Host (direct encrypted path preferred)
+Client <-> Relay <-> Host (fallback encrypted path)
 ```
 
-## Latency Strategy
+## Runtime Pipeline
 
-Wavry favors responsiveness by design:
+Host side:
 
-- Keep buffers/queues short
-- Prefer dropping stale work over building delay
-- Adapt bitrate quickly when congestion appears
-- Use FEC/retransmit strategy tuned for interactive deadlines
+1. capture display/audio
+2. encode media
+3. packetize and encrypt
+4. transmit over UDP
+
+Client side:
+
+1. receive encrypted packets
+2. validate/decrypt/reorder/FEC recovery
+3. decode and present
+
+Input path:
+
+1. client captures input events
+2. encrypts and sends events
+3. host injects events
+
+## Adaptation Strategy
+
+Wavry optimizes for responsiveness:
+
+- maintain low standing queue
+- adapt bitrate based on delay/loss/jitter trends
+- tune correction behavior for interactive workloads
+- prefer stable control feel over peak throughput
 
 ## Security Boundaries
 
-- Relay forwards encrypted blobs and should not require payload visibility.
-- Keys and identity material stay in trusted host/client context.
-- Gateway control APIs should be hardened and audited separately.
+- endpoint keys remain at host/client
+- relay operates on encrypted blobs
+- gateway is hardened as internet-facing API surface
 
-For deeper security details, see [Security](/security).
+See [Security](/security) for deployment controls.
 
-## Extension Points
+## Linux and Wayland Design Focus
 
-Teams usually extend Wavry in these areas:
+Linux is a first-class runtime target:
 
-- Platform capture/render backends
-- Session admission/auth integrations
-- Policy controls for routing and relay usage
-- Product-specific UI and provisioning workflows
+- Wayland capture via portal + PipeWire path
+- runtime backend defaults tuned for Wayland stability
+- dedicated Linux preflight and runtime diagnostics
 
-## Detailed Specs
+See [Linux and Wayland Support](/linux-wayland-support).
+
+## Extension Areas
+
+Common extension points:
+
+- platform capture/render backends
+- policy/auth integration
+- deployment automation and observability
+- product-specific UX flows
+
+## Deep Technical References
 
 - [WAVRY_ARCHITECTURE.md](https://github.com/bybrooklyn/wavry/blob/main/docs/WAVRY_ARCHITECTURE.md)
 - [RIFT_SPEC_V1.md](https://github.com/bybrooklyn/wavry/blob/main/docs/RIFT_SPEC_V1.md)
