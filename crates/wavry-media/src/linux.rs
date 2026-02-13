@@ -1474,117 +1474,6 @@ async fn open_audio_portal_stream() -> Result<(OwnedFd, u32)> {
     with_portal_retry("audio", open_audio_portal_stream_inner).await
 }
 
-#[cfg(test)]
-mod tests {
-    use super::{
-        backend_to_portal_descriptor, expected_portal_backends_from_desktop,
-        find_monitor_source_for_sink_from_sinks, find_sink_index_for_application_from_sink_inputs,
-    };
-
-    #[test]
-    fn find_sink_index_for_application_matches_binary() {
-        let sink_inputs = r#"
-Sink Input #77
-    Driver: PipeWire
-    Sink: 2
-    Properties:
-        application.process.binary = "spotify"
-
-Sink Input #80
-    Driver: PipeWire
-    Sink: 4
-    Properties:
-        application.process.binary = "discord"
-"#;
-        let sink = find_sink_index_for_application_from_sink_inputs(sink_inputs, "discord");
-        assert_eq!(sink, Some(4));
-    }
-
-    #[test]
-    fn find_monitor_source_for_sink_reads_target_block() {
-        let sinks = r#"
-Sink #2
-    State: RUNNING
-    Name: alsa_output.usb-foo.analog-stereo
-    Monitor Source: alsa_output.usb-foo.analog-stereo.monitor
-
-Sink #4
-    State: RUNNING
-    Name: alsa_output.pci-0000_00_1f.3.analog-stereo
-    Monitor Source: alsa_output.pci-0000_00_1f.3.analog-stereo.monitor
-"#;
-        let source = find_monitor_source_for_sink_from_sinks(sinks, 4);
-        assert_eq!(
-            source.as_deref(),
-            Some("alsa_output.pci-0000_00_1f.3.analog-stereo.monitor")
-        );
-    }
-
-    #[test]
-    fn expected_portal_backends_match_kde() {
-        let backends = expected_portal_backends_from_desktop(Some("KDE"));
-        assert_eq!(
-            backends,
-            vec!["xdg-desktop-portal-kde", "xdg-desktop-portal-gtk"]
-        );
-    }
-
-    #[test]
-    fn expected_portal_backends_match_hyprland() {
-        let backends = expected_portal_backends_from_desktop(Some("Hyprland"));
-        assert_eq!(
-            backends,
-            vec![
-                "xdg-desktop-portal-hyprland",
-                "xdg-desktop-portal-wlr",
-                "xdg-desktop-portal-gtk"
-            ]
-        );
-    }
-
-    #[test]
-    fn expected_portal_backends_default_when_unknown() {
-        let backends = expected_portal_backends_from_desktop(Some("UnknownDesktop"));
-        assert_eq!(
-            backends,
-            vec![
-                "xdg-desktop-portal-kde",
-                "xdg-desktop-portal-gnome",
-                "xdg-desktop-portal-wlr",
-                "xdg-desktop-portal-gtk"
-            ]
-        );
-    }
-
-    #[test]
-    fn backend_descriptor_mapping_is_stable() {
-        assert_eq!(
-            backend_to_portal_descriptor("xdg-desktop-portal-kde"),
-            Some("kde.portal")
-        );
-        assert_eq!(
-            backend_to_portal_descriptor("xdg-desktop-portal-gnome"),
-            Some("gnome.portal")
-        );
-        assert_eq!(
-            backend_to_portal_descriptor("xdg-desktop-portal-wlr"),
-            Some("wlr.portal")
-        );
-        assert_eq!(
-            backend_to_portal_descriptor("xdg-desktop-portal-hyprland"),
-            Some("hyprland.portal")
-        );
-        assert_eq!(
-            backend_to_portal_descriptor("xdg-desktop-portal-gtk"),
-            Some("gtk.portal")
-        );
-        assert_eq!(
-            backend_to_portal_descriptor("xdg-desktop-portal-unknown"),
-            None
-        );
-    }
-}
-
 async fn open_audio_portal_stream_inner() -> Result<(OwnedFd, u32)> {
     // Note: This uses the same Screencast portal but with different sources
     // In a real implementation, we might need the Device portal or
@@ -1754,4 +1643,115 @@ fn token_path() -> Option<PathBuf> {
         .map(PathBuf::from)
         .or_else(|| std::env::var_os("HOME").map(|home| Path::new(&home).join(".config")))?;
     Some(base.join("wavry").join("portal_restore_token"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        backend_to_portal_descriptor, expected_portal_backends_from_desktop,
+        find_monitor_source_for_sink_from_sinks, find_sink_index_for_application_from_sink_inputs,
+    };
+
+    #[test]
+    fn find_sink_index_for_application_matches_binary() {
+        let sink_inputs = r#"
+Sink Input #77
+    Driver: PipeWire
+    Sink: 2
+    Properties:
+        application.process.binary = "spotify"
+
+Sink Input #80
+    Driver: PipeWire
+    Sink: 4
+    Properties:
+        application.process.binary = "discord"
+"#;
+        let sink = find_sink_index_for_application_from_sink_inputs(sink_inputs, "discord");
+        assert_eq!(sink, Some(4));
+    }
+
+    #[test]
+    fn find_monitor_source_for_sink_reads_target_block() {
+        let sinks = r#"
+Sink #2
+    State: RUNNING
+    Name: alsa_output.usb-foo.analog-stereo
+    Monitor Source: alsa_output.usb-foo.analog-stereo.monitor
+
+Sink #4
+    State: RUNNING
+    Name: alsa_output.pci-0000_00_1f.3.analog-stereo
+    Monitor Source: alsa_output.pci-0000_00_1f.3.analog-stereo.monitor
+"#;
+        let source = find_monitor_source_for_sink_from_sinks(sinks, 4);
+        assert_eq!(
+            source.as_deref(),
+            Some("alsa_output.pci-0000_00_1f.3.analog-stereo.monitor")
+        );
+    }
+
+    #[test]
+    fn expected_portal_backends_match_kde() {
+        let backends = expected_portal_backends_from_desktop(Some("KDE"));
+        assert_eq!(
+            backends,
+            vec!["xdg-desktop-portal-kde", "xdg-desktop-portal-gtk"]
+        );
+    }
+
+    #[test]
+    fn expected_portal_backends_match_hyprland() {
+        let backends = expected_portal_backends_from_desktop(Some("Hyprland"));
+        assert_eq!(
+            backends,
+            vec![
+                "xdg-desktop-portal-hyprland",
+                "xdg-desktop-portal-wlr",
+                "xdg-desktop-portal-gtk"
+            ]
+        );
+    }
+
+    #[test]
+    fn expected_portal_backends_default_when_unknown() {
+        let backends = expected_portal_backends_from_desktop(Some("UnknownDesktop"));
+        assert_eq!(
+            backends,
+            vec![
+                "xdg-desktop-portal-kde",
+                "xdg-desktop-portal-gnome",
+                "xdg-desktop-portal-wlr",
+                "xdg-desktop-portal-gtk"
+            ]
+        );
+    }
+
+    #[test]
+    fn backend_descriptor_mapping_is_stable() {
+        assert_eq!(
+            backend_to_portal_descriptor("xdg-desktop-portal-kde"),
+            Some("kde.portal")
+        );
+        assert_eq!(
+            backend_to_portal_descriptor("xdg-desktop-portal-gnome"),
+            Some("gnome.portal")
+        );
+        assert_eq!(
+            backend_to_portal_descriptor("xdg-desktop-portal-wlr"),
+            Some("wlr.portal")
+        );
+        assert_eq!(
+            backend_to_portal_descriptor("xdg-desktop-portal-hyprland"),
+            Some("hyprland.portal")
+        );
+        assert_eq!(
+            backend_to_portal_descriptor("xdg-desktop-portal-gtk"),
+            Some("gtk.portal")
+        );
+        assert_eq!(
+            backend_to_portal_descriptor("xdg-desktop-portal-unknown"),
+            None
+        );
+    }
 }
