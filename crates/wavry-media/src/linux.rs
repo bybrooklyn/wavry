@@ -870,7 +870,7 @@ impl PipewireEncoder {
             .bus()
             .ok_or_else(|| MediaError::GStreamerError("failed to get pipeline bus".to_string()))?;
         if let Some(msg) = bus.pop_filtered(&[gst::MessageType::Error]) {
-            if let Some(err) = msg.view().error() {
+            if let gst::MessageView::Error(err) = msg.view() {
                 let err_msg = format!(
                     "GStreamer error: {} ({})",
                     err.error(),
@@ -1208,7 +1208,7 @@ impl PipewireAudioCapturer {
             let bus = self.pipeline.bus();
             if let Some(bus) = bus {
                 if let Some(msg) = bus.pop_filtered(&[gst::MessageType::Error]) {
-                    if let Some(err) = msg.view().error() {
+                    if let gst::MessageView::Error(err) = msg.view() {
                         return MediaError::StreamNodeLoss(format!(
                             "Audio capture failed: {} ({})",
                             err.error(),
