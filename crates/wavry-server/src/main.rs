@@ -548,15 +548,23 @@ mod host {
                     }
                 }
                 AudioRouteSource::Application(app) => {
-                    warn!(
-                        "application audio route '{}' requested but not yet supported, using system mix",
-                        app
-                    );
-                    match runtime.block_on(AudioCapturer::new()) {
+                    match runtime.block_on(AudioCapturer::new_application(app.clone())) {
                         Ok(capturer) => capturer,
                         Err(err) => {
-                            error!("failed to initialize Windows audio capturer: {}", err);
-                            return;
+                            warn!(
+                                "Windows application route '{}' init failed ({}), using system mix",
+                                app, err
+                            );
+                            match runtime.block_on(AudioCapturer::new()) {
+                                Ok(capturer) => capturer,
+                                Err(fallback_err) => {
+                                    error!(
+                                        "failed to initialize Windows audio capturer (fallback): {}",
+                                        fallback_err
+                                    );
+                                    return;
+                                }
+                            }
                         }
                     }
                 }

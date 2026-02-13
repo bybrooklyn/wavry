@@ -8,7 +8,9 @@ use libloading::Library;
 use opus::{Application, Channels, Encoder as OpusEncoder};
 use std::collections::VecDeque;
 use std::ffi::c_void;
-use std::time::Instant;
+#[cfg(target_os = "windows")]
+use std::sync::{mpsc, Mutex};
+use std::time::{Duration, Instant};
 
 use crate::audio::renderer::f32_to_i16;
 #[cfg(feature = "opus-support")]
@@ -20,13 +22,26 @@ use crate::audio::{
 
 #[cfg(target_os = "windows")]
 use windows::{
-    core::*, Graphics::Capture::*, Graphics::DirectX::Direct3D11::IDirect3DDevice,
-    Graphics::DirectX::DirectXPixelFormat, Win32::Foundation::*, Win32::Graphics::Direct3D::*,
-    Win32::Graphics::Direct3D11::*, Win32::Graphics::Dxgi::Common::*, Win32::Graphics::Dxgi::*,
-    Win32::Graphics::Gdi::*, Win32::Media::Audio::*, Win32::Media::MediaFoundation::*,
-    Win32::System::Com::*, Win32::System::WinRT::Direct3D11::IDirect3DDxgiInterfaceAccess,
+    core::{implement, *},
+    Graphics::Capture::*,
+    Graphics::DirectX::Direct3D11::IDirect3DDevice,
+    Graphics::DirectX::DirectXPixelFormat,
+    Win32::Foundation::*,
+    Win32::Graphics::Direct3D::*,
+    Win32::Graphics::Direct3D11::*,
+    Win32::Graphics::Dxgi::Common::*,
+    Win32::Graphics::Dxgi::*,
+    Win32::Graphics::Gdi::*,
+    Win32::Media::Audio::*,
+    Win32::Media::MediaFoundation::*,
+    Win32::System::Com::StructuredStorage::*,
+    Win32::System::Com::*,
+    Win32::System::Diagnostics::ToolHelp::*,
+    Win32::System::Variant::*,
+    Win32::System::WinRT::Direct3D11::IDirect3DDxgiInterfaceAccess,
     Win32::System::WinRT::Graphics::Capture::IGraphicsCaptureItemInterop,
-    Win32::UI::Input::KeyboardAndMouse::*, Win32::UI::WindowsAndMessaging::GetDesktopWindow,
+    Win32::UI::Input::KeyboardAndMouse::*,
+    Win32::UI::WindowsAndMessaging::GetDesktopWindow,
 };
 
 #[cfg(target_os = "windows")]
@@ -44,6 +59,8 @@ const KSDATAFORMAT_SUBTYPE_PCM: GUID = GUID::from_u128(0x00000001_0000_0010_8000
 const WAVE_FORMAT_IEEE_FLOAT: u32 = 0x0003;
 #[cfg(target_os = "windows")]
 const WAVE_FORMAT_EXTENSIBLE: u32 = 0xFFFE;
+#[cfg(target_os = "windows")]
+const WINDOWS_AUDIO_ACTIVATION_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[cfg(target_os = "windows")]
 fn pack_u64(hi: u32, lo: u32) -> u64 {
@@ -500,6 +517,207 @@ pub struct WindowsAudioCapturer {
     resample_prev: Option<[f32; 2]>,
 }
 
+#[cfg(target_os = "windows")]
+struct HandleGuard(HANDLE);
+
+#[cfg(target_os = "windows")]
+impl Drop for HandleGuard {
+    fn drop(&mut self) {
+        unsafe {
+            let _ = CloseHandle(self.0);
+        }
+    }
+}
+
+#[cfg(target_os = "windows")]
+#[implement(IActivateAudioInterfaceCompletionHandler)]
+struct AudioInterfaceActivationHandler {
+    tx: Mutex<Option<mpsc::Sender<Result<IAudioClient>>>>,
+}
+
+#[cfg(target_os = "windows")]
+impl IActivateAudioInterfaceCompletionHandler_Impl for AudioInterfaceActivationHandler_Impl {
+    fn ActivateCompleted(
+        &self,
+        activateoperation: windows::core::Ref<'_, IActivateAudioInterfaceAsyncOperation>,
+    ) -> windows::core::Result<()> {
+        let activation_result = unsafe { activated_audio_client_from_operation(activateoperation) };
+        if let Ok(mut sender_slot) = self.tx.lock() {
+            if let Some(tx) = sender_slot.take() {
+                let _ = tx.send(activation_result);
+            }
+        }
+        Ok(())
+    }
+}
+
+#[cfg(target_os = "windows")]
+unsafe fn activated_audio_client_from_operation(
+    activateoperation: windows::core::Ref<'_, IActivateAudioInterfaceAsyncOperation>,
+) -> Result<IAudioClient> {
+    let operation = activateoperation
+        .as_ref()
+        .ok_or_else(|| anyhow!("ActivateAudioInterfaceAsync completion missing operation"))?;
+
+    let mut activate_result = HRESULT(0);
+    let mut activated_interface: Option<IUnknown> = None;
+    operation
+        .GetActivateResult(&mut activate_result, &mut activated_interface)
+        .context("GetActivateResult failed for process loopback activation")?;
+    activate_result
+        .ok()
+        .map_err(|e| anyhow!("ActivateAudioInterfaceAsync returned error: {}", e))?;
+
+    let activated_interface = activated_interface
+        .ok_or_else(|| anyhow!("process loopback activation returned no interface"))?;
+    activated_interface
+        .cast::<IAudioClient>()
+        .context("process loopback activation did not return IAudioClient")
+}
+
+#[cfg(target_os = "windows")]
+fn normalize_process_selector(value: &str) -> String {
+    let trimmed = value.trim();
+    let basename = trimmed.rsplit(['\\', '/']).next().unwrap_or(trimmed);
+    basename.to_ascii_lowercase()
+}
+
+#[cfg(target_os = "windows")]
+fn process_name_matches(candidate: &str, target: &str) -> bool {
+    if candidate.eq_ignore_ascii_case(target) {
+        return true;
+    }
+    let candidate = candidate.strip_suffix(".exe").unwrap_or(candidate);
+    let target = target.strip_suffix(".exe").unwrap_or(target);
+    candidate.eq_ignore_ascii_case(target)
+}
+
+#[cfg(target_os = "windows")]
+fn process_name_from_entry(entry: &PROCESSENTRY32W) -> String {
+    let end = entry
+        .szExeFile
+        .iter()
+        .position(|&ch| ch == 0)
+        .unwrap_or(entry.szExeFile.len());
+    String::from_utf16_lossy(&entry.szExeFile[..end])
+}
+
+#[cfg(target_os = "windows")]
+fn find_process_id_by_name(target_name: &str) -> Result<Option<u32>> {
+    unsafe {
+        let snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0)
+            .context("CreateToolhelp32Snapshot failed while resolving application route")?;
+        let _snapshot_guard = HandleGuard(snapshot);
+
+        let mut entry = PROCESSENTRY32W {
+            dwSize: std::mem::size_of::<PROCESSENTRY32W>() as u32,
+            ..Default::default()
+        };
+
+        Process32FirstW(snapshot, &mut entry).context("Process32FirstW failed")?;
+
+        let mut matched_pid: Option<u32> = None;
+        loop {
+            let process_name = process_name_from_entry(&entry).to_ascii_lowercase();
+            if process_name_matches(&process_name, target_name) {
+                matched_pid = Some(match matched_pid {
+                    Some(existing) => existing.min(entry.th32ProcessID),
+                    None => entry.th32ProcessID,
+                });
+            }
+
+            if Process32NextW(snapshot, &mut entry).is_err() {
+                break;
+            }
+        }
+
+        Ok(matched_pid)
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn resolve_process_target_pid(app_name: &str) -> Result<u32> {
+    let trimmed = app_name.trim();
+    if trimmed.is_empty() {
+        return Err(anyhow!("application route cannot be empty"));
+    }
+
+    if let Ok(pid) = trimmed.parse::<u32>() {
+        if pid == 0 {
+            return Err(anyhow!("process id 0 is invalid"));
+        }
+        return Ok(pid);
+    }
+
+    let normalized = normalize_process_selector(trimmed);
+    if normalized.is_empty() {
+        return Err(anyhow!("application route cannot be empty"));
+    }
+
+    find_process_id_by_name(&normalized)?
+        .ok_or_else(|| anyhow!("no running process found for '{}'", app_name))
+}
+
+#[cfg(target_os = "windows")]
+fn activate_process_loopback_audio_client(target_pid: u32) -> Result<IAudioClient> {
+    let mut activation_params = AUDIOCLIENT_ACTIVATION_PARAMS {
+        ActivationType: AUDIOCLIENT_ACTIVATION_TYPE_PROCESS_LOOPBACK,
+        Anonymous: AUDIOCLIENT_ACTIVATION_PARAMS_0 {
+            ProcessLoopbackParams: AUDIOCLIENT_PROCESS_LOOPBACK_PARAMS {
+                TargetProcessId: target_pid,
+                ProcessLoopbackMode: PROCESS_LOOPBACK_MODE_INCLUDE_TARGET_PROCESS_TREE,
+            },
+        },
+    };
+
+    let mut activation_propvariant = PROPVARIANT {
+        Anonymous: PROPVARIANT_0 {
+            Anonymous: ManuallyDrop::new(PROPVARIANT_0_0 {
+                vt: VT_BLOB,
+                wReserved1: 0,
+                wReserved2: 0,
+                wReserved3: 0,
+                Anonymous: PROPVARIANT_0_0_0 {
+                    blob: BLOB {
+                        cbSize: std::mem::size_of::<AUDIOCLIENT_ACTIVATION_PARAMS>() as u32,
+                        pBlobData: (&mut activation_params as *mut AUDIOCLIENT_ACTIVATION_PARAMS)
+                            .cast::<u8>(),
+                    },
+                },
+            }),
+        },
+    };
+
+    let (tx, rx) = mpsc::channel();
+    let completion_handler: IActivateAudioInterfaceCompletionHandler =
+        AudioInterfaceActivationHandler {
+            tx: Mutex::new(Some(tx)),
+        }
+        .into();
+
+    let _activation_operation = unsafe {
+        ActivateAudioInterfaceAsync(
+            VIRTUAL_AUDIO_DEVICE_PROCESS_LOOPBACK,
+            &IAudioClient::IID,
+            Some(&mut activation_propvariant as *mut PROPVARIANT as *const PROPVARIANT),
+            &completion_handler,
+        )
+        .context("ActivateAudioInterfaceAsync failed for process loopback capture")?
+    };
+
+    match rx.recv_timeout(WINDOWS_AUDIO_ACTIVATION_TIMEOUT) {
+        Ok(result) => result,
+        Err(mpsc::RecvTimeoutError::Timeout) => Err(anyhow!(
+            "timed out waiting for process-loopback audio activation (pid {})",
+            target_pid
+        )),
+        Err(mpsc::RecvTimeoutError::Disconnected) => Err(anyhow!(
+            "process-loopback activation callback channel closed unexpectedly (pid {})",
+            target_pid
+        )),
+    }
+}
+
 impl WindowsAudioCapturer {
     pub async fn new() -> Result<Self> {
         Self::new_with_mode(WindowsAudioCaptureMode::SystemMix).await
@@ -507,6 +725,17 @@ impl WindowsAudioCapturer {
 
     pub async fn new_microphone() -> Result<Self> {
         Self::new_with_mode(WindowsAudioCaptureMode::Microphone).await
+    }
+
+    pub async fn new_application(app_name: String) -> Result<Self> {
+        let target_pid = resolve_process_target_pid(&app_name)
+            .with_context(|| format!("unable to resolve Windows app route '{}'", app_name))?;
+        log::info!(
+            "resolved Windows application audio route '{}' to pid {}",
+            app_name,
+            target_pid
+        );
+        Self::new_with_mode(WindowsAudioCaptureMode::Application(target_pid)).await
     }
 
     async fn new_with_mode(mode: WindowsAudioCaptureMode) -> Result<Self> {
@@ -518,27 +747,35 @@ impl WindowsAudioCapturer {
                 _ => {}
             }
 
-            let enumerator: IMMDeviceEnumerator =
-                CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL)
-                    .context("CoCreateInstance failed")?;
-
-            let device = match mode {
-                WindowsAudioCaptureMode::SystemMix => {
-                    enumerator.GetDefaultAudioEndpoint(eRender, eConsole)?
+            let (audio_client, stream_flags) = match mode {
+                WindowsAudioCaptureMode::SystemMix | WindowsAudioCaptureMode::Microphone => {
+                    let enumerator: IMMDeviceEnumerator =
+                        CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL)
+                            .context("CoCreateInstance failed")?;
+                    let device = match mode {
+                        WindowsAudioCaptureMode::SystemMix => {
+                            enumerator.GetDefaultAudioEndpoint(eRender, eConsole)?
+                        }
+                        WindowsAudioCaptureMode::Microphone => {
+                            enumerator.GetDefaultAudioEndpoint(eCapture, eConsole)?
+                        }
+                        WindowsAudioCaptureMode::Application(_) => unreachable!(),
+                    };
+                    let audio_client: IAudioClient = device.Activate(CLSCTX_ALL, None)?;
+                    let stream_flags = match mode {
+                        WindowsAudioCaptureMode::SystemMix => AUDCLNT_STREAMFLAGS_LOOPBACK,
+                        WindowsAudioCaptureMode::Microphone => 0,
+                        WindowsAudioCaptureMode::Application(_) => unreachable!(),
+                    };
+                    (audio_client, stream_flags)
                 }
-                WindowsAudioCaptureMode::Microphone => {
-                    enumerator.GetDefaultAudioEndpoint(eCapture, eConsole)?
+                WindowsAudioCaptureMode::Application(target_pid) => {
+                    let audio_client = activate_process_loopback_audio_client(target_pid)?;
+                    (audio_client, AUDCLNT_STREAMFLAGS_LOOPBACK)
                 }
             };
-
-            let audio_client: IAudioClient = device.Activate(CLSCTX_ALL, None)?;
 
             let format = audio_client.GetMixFormat()?;
-
-            let stream_flags = match mode {
-                WindowsAudioCaptureMode::SystemMix => AUDCLNT_STREAMFLAGS_LOOPBACK,
-                WindowsAudioCaptureMode::Microphone => 0,
-            };
 
             // Loopback mode captures system output; microphone mode uses capture endpoint.
             audio_client.Initialize(AUDCLNT_SHAREMODE_SHARED, stream_flags, 0, 0, format, None)?;
@@ -725,6 +962,7 @@ impl WindowsAudioCapturer {
 enum WindowsAudioCaptureMode {
     SystemMix,
     Microphone,
+    Application(u32),
 }
 
 #[cfg(feature = "opus-support")]
@@ -1093,8 +1331,10 @@ impl crate::InputInjector for WindowsInputInjector {
         unsafe {
             match event {
                 crate::InputEvent::MouseMove { x, y } => {
-                    let mut input = INPUT::default();
-                    input.r#type = INPUT_MOUSE;
+                    let mut input = INPUT {
+                        r#type: INPUT_MOUSE,
+                        ..Default::default()
+                    };
                     input.Anonymous.mi = MOUSEINPUT {
                         dx: (x * 65535.0) as i32,
                         dy: (y * 65535.0) as i32,
@@ -1106,8 +1346,10 @@ impl crate::InputInjector for WindowsInputInjector {
                     let _ = SendInput(&[input], std::mem::size_of::<INPUT>() as i32);
                 }
                 crate::InputEvent::MouseDown { button } => {
-                    let mut input = INPUT::default();
-                    input.r#type = INPUT_MOUSE;
+                    let mut input = INPUT {
+                        r#type: INPUT_MOUSE,
+                        ..Default::default()
+                    };
                     let flag = match button {
                         crate::MouseButton::Left => MOUSEEVENTF_LEFTDOWN,
                         crate::MouseButton::Right => MOUSEEVENTF_RIGHTDOWN,
@@ -1124,8 +1366,10 @@ impl crate::InputInjector for WindowsInputInjector {
                     let _ = SendInput(&[input], std::mem::size_of::<INPUT>() as i32);
                 }
                 crate::InputEvent::MouseUp { button } => {
-                    let mut input = INPUT::default();
-                    input.r#type = INPUT_MOUSE;
+                    let mut input = INPUT {
+                        r#type: INPUT_MOUSE,
+                        ..Default::default()
+                    };
                     let flag = match button {
                         crate::MouseButton::Left => MOUSEEVENTF_LEFTUP,
                         crate::MouseButton::Right => MOUSEEVENTF_RIGHTUP,
@@ -1142,8 +1386,10 @@ impl crate::InputInjector for WindowsInputInjector {
                     let _ = SendInput(&[input], std::mem::size_of::<INPUT>() as i32);
                 }
                 crate::InputEvent::KeyDown { key_code } => {
-                    let mut input = INPUT::default();
-                    input.r#type = INPUT_KEYBOARD;
+                    let mut input = INPUT {
+                        r#type: INPUT_KEYBOARD,
+                        ..Default::default()
+                    };
                     input.Anonymous.ki = KEYBDINPUT {
                         wVk: VIRTUAL_KEY(key_code as u16),
                         wScan: 0,
@@ -1154,8 +1400,10 @@ impl crate::InputInjector for WindowsInputInjector {
                     let _ = SendInput(&[input], std::mem::size_of::<INPUT>() as i32);
                 }
                 crate::InputEvent::KeyUp { key_code } => {
-                    let mut input = INPUT::default();
-                    input.r#type = INPUT_KEYBOARD;
+                    let mut input = INPUT {
+                        r#type: INPUT_KEYBOARD,
+                        ..Default::default()
+                    };
                     input.Anonymous.ki = KEYBDINPUT {
                         wVk: VIRTUAL_KEY(key_code as u16),
                         wScan: 0,
@@ -1167,8 +1415,10 @@ impl crate::InputInjector for WindowsInputInjector {
                 }
                 crate::InputEvent::Scroll { dx, dy } => {
                     if dy != 0.0 {
-                        let mut input = INPUT::default();
-                        input.r#type = INPUT_MOUSE;
+                        let mut input = INPUT {
+                            r#type: INPUT_MOUSE,
+                            ..Default::default()
+                        };
                         input.Anonymous.mi = MOUSEINPUT {
                             dx: 0,
                             dy: 0,
@@ -1180,8 +1430,10 @@ impl crate::InputInjector for WindowsInputInjector {
                         let _ = SendInput(&[input], std::mem::size_of::<INPUT>() as i32);
                     }
                     if dx != 0.0 {
-                        let mut input = INPUT::default();
-                        input.r#type = INPUT_MOUSE;
+                        let mut input = INPUT {
+                            r#type: INPUT_MOUSE,
+                            ..Default::default()
+                        };
                         input.Anonymous.mi = MOUSEINPUT {
                             dx: 0,
                             dy: 0,

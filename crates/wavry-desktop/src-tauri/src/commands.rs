@@ -11,10 +11,10 @@ use wavry_media::CapabilityProbe;
 
 #[cfg(target_os = "macos")]
 use wavry_media::MacProbe;
+#[cfg(target_os = "windows")]
+use wavry_media::WindowsProbe;
 #[cfg(target_os = "linux")]
 use wavry_media::{PipewireAudioCapturer, PipewireEncoder};
-#[cfg(target_os = "windows")]
-use wavry_media::{WindowsAudioCapturer, WindowsEncoder, WindowsProbe};
 
 use serde_json::json;
 use std::sync::atomic::Ordering;

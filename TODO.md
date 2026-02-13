@@ -192,7 +192,7 @@ All infrastructure and core functionality is complete. Next phase focuses on new
 - [x] Live audio packet forwarding in main streaming path
 - [x] Microphone route support on macOS, Linux, and Windows (with runtime fallback to system mix on init failure)
 - [x] Linux per-application route support (`app:<name>`) with Pulse sink-input matching + safe fallback
-- [ ] Windows per-application routing parity (`app:<name>`)
+- [x] Windows per-application routing parity (`app:<name>`) via WASAPI process loopback (name/PID target + fallback safety)
 
 ---
 
@@ -204,7 +204,7 @@ All infrastructure and core functionality is complete. Next phase focuses on new
 - [x] ~~**Input Mapping**~~ - Shipped in v0.0.3-canary
 - [x] **File Transfer (MVP)** - Secure chunked transfer with integrity checks
 - [x] **File Transfer (Advanced)** - Resume/cancel and congestion-aware fairness
-- [ ] **Audio Routing (Advanced)** - Per-application routing parity across platforms
+- [x] **Audio Routing (Advanced)** - Per-application routing parity across platforms
 
 ### Platform Support
 - [ ] **iOS Client** - WebTransport or native app

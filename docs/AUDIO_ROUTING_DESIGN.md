@@ -44,7 +44,7 @@ Runtime enum:
 
 - `system`: WASAPI loopback capture on default render endpoint
 - `microphone`: WASAPI capture on default input endpoint
-- `app:<name>`: currently fallback-routed to `system` with warning logs
+- `app:<name>`: WASAPI process-loopback capture (`ActivateAudioInterfaceAsync`) targeting the selected process ID/name, with fallback to `system` on init failure
 
 ## Stream Path
 

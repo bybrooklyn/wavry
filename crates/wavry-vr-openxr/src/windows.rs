@@ -165,8 +165,9 @@ impl MfDecoder {
                 .ResetDevice(device, reset_token)
                 .map_err(|e| VrError::Adapter(format!("MF ResetDevice failed: {e:?}")))?;
 
-            let manager_ptr =
-                std::mem::transmute::<_, *mut std::ffi::c_void>(device_manager.clone());
+            let manager_ptr = std::mem::transmute::<IMFDXGIDeviceManager, *mut std::ffi::c_void>(
+                device_manager.clone(),
+            );
             decoder
                 .ProcessMessage(MFT_MESSAGE_SET_D3D_MANAGER, manager_ptr as usize)
                 .map_err(|e| VrError::Adapter(format!("MF set D3D manager: {e:?}")))?;
@@ -311,7 +312,9 @@ fn run(state: Arc<SharedState>) -> VrResult<()> {
         .map_err(|e| VrError::Adapter(format!("OpenXR system: {e:?}")))?;
 
     let create_info = xr::d3d::SessionCreateInfoD3D11 {
-        device: unsafe { std::mem::transmute(device.clone()) },
+        device: unsafe {
+            std::mem::transmute::<ID3D11Device, *mut std::ffi::c_void>(device.clone())
+        },
     };
 
     let (session, mut frame_waiter, mut frame_stream) = unsafe {

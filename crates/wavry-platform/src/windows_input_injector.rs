@@ -10,6 +10,12 @@ impl WindowsInjector {
     }
 }
 
+impl Default for WindowsInjector {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl InputInjector for WindowsInjector {
     fn key(&mut self, keycode: u32, pressed: bool) -> Result<()> {
         let input = INPUT {

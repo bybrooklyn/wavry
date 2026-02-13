@@ -65,9 +65,9 @@ const MAX_FILE_STATUS_MESSAGE_CHARS: usize = 512;
 fn probe_supported_codecs() -> Vec<Codec> {
     #[cfg(target_os = "windows")]
     {
-        return wavry_media::WindowsProbe
+        wavry_media::WindowsProbe
             .supported_decoders()
-            .unwrap_or_else(|_| vec![Codec::H264]);
+            .unwrap_or_else(|_| vec![Codec::H264])
     }
     #[cfg(target_os = "macos")]
     {

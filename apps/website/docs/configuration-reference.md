@@ -29,7 +29,7 @@ Common options:
 - `--file-transfer-min-kbps`: transfer floor budget
 - `--file-transfer-max-kbps`: transfer ceiling budget
 - `--audio-source`: `system`, `microphone`, `app:<name>`, `disabled`
-  - `app:<name>` is currently best-effort on Linux/macOS and falls back safely when unsupported.
+  - `app:<name>` is supported on Linux/macOS/Windows; on startup failure it falls back safely to `system`.
 
 Related env vars include:
 
