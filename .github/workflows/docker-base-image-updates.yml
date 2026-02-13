@@ -1,0 +1,145 @@
+name: Docker Base Image Updates
+
+on:
+  schedule:
+    # Run weekly on Mondays at 9:00 AM UTC
+    - cron: '0 9 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  check-updates:
+    name: Check Docker base image updates
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Check cargo-chef image
+        id: check_chef
+        run: |
+          set -euo pipefail
+          
+          # Current digest from Dockerfiles
+          CURRENT_DIGEST=$(grep -A1 "lukemathwalker/cargo-chef" docker/gateway.Dockerfile | grep "FROM" | sed -n 's/.*@sha256:\([a-f0-9]*\).*/\1/p')
+          echo "Current cargo-chef digest: $CURRENT_DIGEST"
+          
+          # Pull latest and get new digest
+          docker pull lukemathwalker/cargo-chef:latest-rust-1-bookworm
+          LATEST_DIGEST=$(docker inspect lukemathwalker/cargo-chef:latest-rust-1-bookworm --format='{{index .RepoDigests 0}}' | sed 's/.*@sha256://')
+          echo "Latest cargo-chef digest: $LATEST_DIGEST"
+          
+          if [[ "$CURRENT_DIGEST" != "$LATEST_DIGEST" ]]; then
+            echo "chef_updated=true" >> $GITHUB_OUTPUT
+            echo "chef_new_digest=$LATEST_DIGEST" >> $GITHUB_OUTPUT
+          else
+            echo "chef_updated=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Check debian image
+        id: check_debian
+        run: |
+          set -euo pipefail
+          
+          # Current digest from Dockerfiles
+          CURRENT_DIGEST=$(grep -A1 "debian:bookworm-slim" docker/gateway.Dockerfile | grep "FROM" | sed -n 's/.*@sha256:\([a-f0-9]*\).*/\1/p')
+          echo "Current debian digest: $CURRENT_DIGEST"
+          
+          # Pull latest and get new digest
+          docker pull debian:bookworm-slim
+          LATEST_DIGEST=$(docker inspect debian:bookworm-slim --format='{{index .RepoDigests 0}}' | sed 's/.*@sha256://')
+          echo "Latest debian digest: $LATEST_DIGEST"
+          
+          if [[ "$CURRENT_DIGEST" != "$LATEST_DIGEST" ]]; then
+            echo "debian_updated=true" >> $GITHUB_OUTPUT
+            echo "debian_new_digest=$LATEST_DIGEST" >> $GITHUB_OUTPUT
+          else
+            echo "debian_updated=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Create issue if updates available
+        if: steps.check_chef.outputs.chef_updated == 'true' || steps.check_debian.outputs.debian_updated == 'true'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const chefUpdated = '${{ steps.check_chef.outputs.chef_updated }}' === 'true';
+            const debianUpdated = '${{ steps.check_debian.outputs.debian_updated }}' === 'true';
+            
+            let body = '## Docker Base Image Updates Available\n\n';
+            body += 'The following Docker base images have updates available:\n\n';
+            
+            if (chefUpdated) {
+              body += '### cargo-chef Image\n';
+              body += '- **Image**: `lukemathwalker/cargo-chef:latest-rust-1-bookworm`\n';
+              body += `- **New Digest**: \`sha256:${{ steps.check_chef.outputs.chef_new_digest }}\`\n`;
+              body += '- **Files to update**: `docker/gateway.Dockerfile`, `docker/relay.Dockerfile`\n\n';
+            }
+            
+            if (debianUpdated) {
+              body += '### Debian Base Image\n';
+              body += '- **Image**: `debian:bookworm-slim`\n';
+              body += `- **New Digest**: \`sha256:${{ steps.check_debian.outputs.debian_new_digest }}\`\n`;
+              body += '- **Files to update**: `docker/gateway.Dockerfile`, `docker/relay.Dockerfile`\n\n';
+            }
+            
+            body += '## Action Required\n\n';
+            body += '1. Review the changelog for the updated images\n';
+            body += '2. Update the Dockerfiles with the new digests\n';
+            body += '3. Update the "Last updated" date comments\n';
+            body += '4. Test the Docker builds locally\n';
+            body += '5. Create a PR with the updates\n\n';
+            body += '## Update Template\n\n';
+            body += '```dockerfile\n';
+            if (chefUpdated) {
+              body += '# Base image pinned by digest for security and reproducibility\n';
+              body += '# Tag: lukemathwalker/cargo-chef:latest-rust-1-bookworm\n';
+              body += `# Last updated: ${new Date().toISOString().split('T')[0]}\n`;
+              body += `FROM lukemathwalker/cargo-chef:latest-rust-1-bookworm@sha256:${{ steps.check_chef.outputs.chef_new_digest }} AS chef-base\n`;
+            }
+            if (debianUpdated) {
+              body += '# Runtime base image pinned by digest for security\n';
+              body += '# Tag: debian:bookworm-slim\n';
+              body += `# Last updated: ${new Date().toISOString().split('T')[0]}\n`;
+              body += `FROM debian:bookworm-slim@sha256:${{ steps.check_debian.outputs.debian_new_digest }} AS runtime\n`;
+            }
+            body += '```\n';
+            
+            // Check if an issue already exists
+            const issues = await github.rest.issues.listForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open',
+              labels: 'docker,dependencies'
+            });
+            
+            const existingIssue = issues.data.find(issue => 
+              issue.title.includes('Docker Base Image Updates')
+            );
+            
+            if (existingIssue) {
+              // Update existing issue
+              await github.rest.issues.update({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: existingIssue.number,
+                body: body
+              });
+              console.log(`Updated existing issue #${existingIssue.number}`);
+            } else {
+              // Create new issue
+              await github.rest.issues.create({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                title: 'Docker Base Image Updates Available',
+                body: body,
+                labels: ['docker', 'dependencies', 'security']
+              });
+              console.log('Created new issue for base image updates');
+            }
+
+      - name: Report status
+        if: steps.check_chef.outputs.chef_updated != 'true' && steps.check_debian.outputs.debian_updated != 'true'
+        run: echo "All Docker base images are up to date."

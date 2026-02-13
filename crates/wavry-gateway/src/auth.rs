@@ -1,3 +1,4 @@
+use crate::audit::{log_security_event, FailureReason, SecurityEventType};
 use crate::db::{self, Session, User};
 use crate::security;
 use argon2::{
@@ -329,6 +330,14 @@ pub async fn register(
     AUTH_METRICS
         .register_success
         .fetch_add(1, Ordering::Relaxed);
+    log_security_event(
+        SecurityEventType::Registration,
+        Some(client_ip),
+        Some(&user.id),
+        Some(&email),
+        None,
+        None,
+    );
     (StatusCode::CREATED, Json(auth_response(user, session))).into_response()
 }
 
@@ -377,9 +386,13 @@ pub async fn login(
             let lockout_until = last_failure + chrono::Duration::minutes(LOCKOUT_DURATION_MINUTES);
             if Utc::now() < lockout_until {
                 AUTH_METRICS.rate_limited.fetch_add(1, Ordering::Relaxed);
-                tracing::warn!(
-                    client_ip = %client_ip,
-                    "login rejected: ip locked"
+                log_security_event(
+                    SecurityEventType::RateLimitExceeded,
+                    Some(client_ip),
+                    None,
+                    Some(&email),
+                    None,
+                    Some(&format!("{} failed login attempts", count)),
                 );
                 return error_response(
                     StatusCode::TOO_MANY_REQUESTS,
@@ -401,16 +414,26 @@ pub async fn login(
         Ok(None) => {
             AUTH_METRICS.auth_failures.fetch_add(1, Ordering::Relaxed);
             db::record_login_failure(&pool, &ip_failure_key).await.ok();
-            tracing::warn!(
-                client_ip = %client_ip,
-                email = %email,
-                "login failed: user not found"
+            log_security_event(
+                SecurityEventType::LoginFailure,
+                Some(client_ip),
+                None,
+                Some(&email),
+                Some(FailureReason::UserNotFound),
+                None,
             );
             return error_response(StatusCode::UNAUTHORIZED, "Invalid credentials");
         }
         Err(err) => {
             AUTH_METRICS.db_errors.fetch_add(1, Ordering::Relaxed);
-            tracing::error!("database error during login: {}", err);
+            log_security_event(
+                SecurityEventType::DatabaseError,
+                Some(client_ip),
+                None,
+                Some(&email),
+                None,
+                Some(&err.to_string()),
+            );
             return error_response(StatusCode::INTERNAL_SERVER_ERROR, "Database error");
         }
     };
@@ -440,10 +463,13 @@ pub async fn login(
         AUTH_METRICS.auth_failures.fetch_add(1, Ordering::Relaxed);
         db::record_login_failure(&pool, &failure_key).await.ok();
         db::record_login_failure(&pool, &ip_failure_key).await.ok();
-        tracing::warn!(
-            client_ip = %client_ip,
-            user_id = %user.id,
-            "login failed: invalid password"
+        log_security_event(
+            SecurityEventType::LoginFailure,
+            Some(client_ip),
+            Some(&user.id),
+            Some(&email),
+            Some(FailureReason::InvalidPassword),
+            None,
         );
         return error_response(StatusCode::UNAUTHORIZED, "Invalid credentials");
     }
@@ -451,10 +477,13 @@ pub async fn login(
     if let Some(stored_secret) = &user.totp_secret {
         let Some(code) = payload.totp_code.as_deref() else {
             AUTH_METRICS.auth_failures.fetch_add(1, Ordering::Relaxed);
-            tracing::warn!(
-                client_ip = %client_ip,
-                user_id = %user.id,
-                "login failed: 2FA required but missing"
+            log_security_event(
+                SecurityEventType::LoginFailure,
+                Some(client_ip),
+                Some(&user.id),
+                Some(&email),
+                Some(FailureReason::TotpRequired),
+                None,
             );
             return error_response(StatusCode::UNAUTHORIZED, "2FA required");
         };
@@ -516,6 +545,14 @@ pub async fn login(
     };
 
     AUTH_METRICS.login_success.fetch_add(1, Ordering::Relaxed);
+    log_security_event(
+        SecurityEventType::LoginSuccess,
+        Some(client_ip),
+        Some(&user.id),
+        Some(&email),
+        None,
+        None,
+    );
     (StatusCode::OK, Json(auth_response(user, session))).into_response()
 }
 
@@ -720,6 +757,14 @@ pub async fn enable_totp(
     AUTH_METRICS
         .totp_enable_success
         .fetch_add(1, Ordering::Relaxed);
+    log_security_event(
+        SecurityEventType::TotpEnabled,
+        Some(client_ip),
+        Some(&user.id),
+        Some(&email),
+        None,
+        None,
+    );
     (StatusCode::OK, Json(auth_response(refreshed_user, session))).into_response()
 }
 
@@ -757,11 +802,28 @@ pub async fn logout(
     match db::revoke_session(&pool, &token).await {
         Ok(revoked) => {
             AUTH_METRICS.logout_success.fetch_add(1, Ordering::Relaxed);
+            // Note: We don't have user_id here without querying the session first,
+            // but logging the logout event with IP is still valuable for audit
+            log_security_event(
+                SecurityEventType::Logout,
+                Some(client_ip),
+                None, // user_id not readily available
+                None, // email not readily available
+                None,
+                None,
+            );
             (StatusCode::OK, Json(LogoutResponse { revoked })).into_response()
         }
         Err(err) => {
             AUTH_METRICS.db_errors.fetch_add(1, Ordering::Relaxed);
-            tracing::error!("failed to revoke session: {}", err);
+            log_security_event(
+                SecurityEventType::DatabaseError,
+                Some(client_ip),
+                None,
+                None,
+                None,
+                Some(&err.to_string()),
+            );
             error_response(StatusCode::INTERNAL_SERVER_ERROR, "Logout failed")
         }
     }

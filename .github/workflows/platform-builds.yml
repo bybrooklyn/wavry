@@ -469,15 +469,65 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
       - name: Build
         run: ./scripts/build-macos.sh release
+      - name: Validate app bundle safety
+        shell: bash
+        run: |
+          set -euo pipefail
+          app_path="dist/Wavry.app"
+          
+          if [[ ! -d "$app_path" ]]; then
+            echo "Native macOS app bundle not found at $app_path" >&2
+            exit 1
+          fi
+          
+          # Check for suspicious symlinks that could cause path traversal
+          echo "Checking for suspicious symlinks in app bundle..."
+          if find "$app_path" -type l | grep -q .; then
+            echo "Found symlinks in app bundle:"
+            find "$app_path" -type l -ls
+            
+            # Check if any symlinks point outside the app bundle
+            while IFS= read -r symlink; do
+              target=$(readlink "$symlink")
+              # Absolute paths or .. traversal are suspicious
+              if [[ "$target" = /* ]] || [[ "$target" = *".."* ]]; then
+                echo "ERROR: Suspicious symlink detected: $symlink -> $target" >&2
+                exit 1
+              fi
+            done < <(find "$app_path" -type l)
+            echo "All symlinks are safe (relative paths within bundle)"
+          else
+            echo "No symlinks found in app bundle"
+          fi
+          
+          # Check for hidden directories that shouldn't be there
+          echo "Checking for suspicious hidden directories..."
+          suspicious_hidden=$(find "$app_path" -type d -name ".*" ! -name "." ! -name ".." | head -10)
+          if [[ -n "$suspicious_hidden" ]]; then
+            echo "WARNING: Found hidden directories:"
+            echo "$suspicious_hidden"
+          fi
+          
+          # Verify app bundle structure
+          echo "Verifying app bundle structure..."
+          required_paths=(
+            "$app_path/Contents"
+            "$app_path/Contents/MacOS"
+            "$app_path/Contents/Info.plist"
+          )
+          for path in "${required_paths[@]}"; do
+            if [[ ! -e "$path" ]]; then
+              echo "ERROR: Required app bundle path missing: $path" >&2
+              exit 1
+            fi
+          done
+          
+          echo "App bundle validation passed"
       - name: Stage
         shell: bash
         run: |
           mkdir -p ci-artifacts/macos-app
           app_path="dist/Wavry.app"
-          if [[ ! -d "$app_path" ]]; then
-            echo "Native macOS app bundle not found at $app_path" >&2
-            exit 1
-          fi
           hdiutil create \
             -volname "Wavry" \
             -srcfolder "$app_path" \
