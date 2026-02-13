@@ -648,6 +648,27 @@ jobs:
             fi
           done
 
+          # Ensure every collected asset has an explicit, policy-approved name.
+          for file in release-assets/*; do
+            base="$(basename "$file")"
+            case "$base" in
+              wavry-master-*-*|\
+              wavry-server-*-*|\
+              wavry-desktop-tauri-linux-*.AppImage|\
+              wavry-desktop-tauri-linux-*.deb|\
+              wavry-desktop-tauri-linux-*.rpm|\
+              wavry-desktop-tauri-windows-*.exe|\
+              wavry-desktop-native-macos-*.dmg|\
+              wavry-mobile-android-arm64-release.apk|\
+              wavry-quest-android-arm64-release.apk)
+                ;;
+              *)
+                echo "Unexpected release asset name (ambiguous or unsupported): $base" >&2
+                exit 1
+                ;;
+            esac
+          done
+
           count="$(find release-assets -type f | wc -l | tr -d ' ')"
           if [[ "$count" == "0" ]]; then
             echo "No release assets were collected." >&2
