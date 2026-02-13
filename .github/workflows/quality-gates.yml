@@ -78,7 +78,19 @@ jobs:
         run: cargo install cargo-tarpaulin --locked
 
       - name: Coverage (Tier 1)
-        run: cargo tarpaulin -p rift-core -p rift-crypto --fail-under 70 --out Stdout
+        env:
+          CARGO_TARGET_DIR: target/tarpaulin-coverage
+        run: |
+          cargo tarpaulin \
+            -p rift-core \
+            -p rift-crypto \
+            --locked \
+            --fail-under 70 \
+            --out Stdout \
+            --include-files crates/rift-core/src/* \
+            --include-files crates/rift-core/tests/* \
+            --include-files crates/rift-crypto/src/* \
+            --include-files crates/rift-crypto/tests/*
 
   fuzz-smoke:
     name: Fuzz Smoke
