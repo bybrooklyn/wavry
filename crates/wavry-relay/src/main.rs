@@ -1100,6 +1100,7 @@ async fn relay_metrics(State(state): State<RelayHttpState>) -> impl IntoResponse
 async fn relay_metrics_prometheus(State(state): State<RelayHttpState>) -> impl IntoResponse {
     let snapshot = state.server.metrics.snapshot();
     let relay_id = &state.server.relay_id;
+    let active_sessions = state.server.active_session_count().await;
 
     let prometheus_text = format!(
         r#"# HELP wavry_relay_packets_rx Total packets received
@@ -1194,7 +1195,7 @@ wavry_relay_uptime_seconds{{relay_id="{relay_id}"}} {uptime_seconds}
         cleanup_idle_sessions = snapshot.cleanup_idle_sessions,
         overload_shed_packets = snapshot.overload_shed_packets,
         nat_rebind_events = snapshot.nat_rebind_events,
-        active_sessions = 0, // Will be computed below
+        active_sessions = active_sessions,
         uptime_seconds = state.server.started_at.elapsed().as_secs(),
     );
 
@@ -1385,12 +1386,10 @@ async fn main() -> Result<()> {
                 info!("Received SIGINT, initiating graceful shutdown...");
                 // Log final metrics before shutdown
                 let snapshot = shutdown_server.metrics.snapshot();
+                let active_sessions = shutdown_server.active_session_count().await;
                 info!(
                     "Final metrics: packets_rx={}, packets_forwarded={}, active_sessions={}",
-                    snapshot.packets_rx,
-                    snapshot.packets_forwarded,
-                    // Note: active session count would need to be fetched from server
-                    0
+                    snapshot.packets_rx, snapshot.packets_forwarded, active_sessions
                 );
             }
             Err(err) => {
