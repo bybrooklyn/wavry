@@ -261,7 +261,11 @@ check_cmd "cargo"
 check_cmd "gst-inspect-1.0"
 check_cmd "xdg-desktop-portal"
 check_cmd "pw-cli"
-check_cmd "pactl"
+if has_cmd "pactl"; then
+  pass "Command available: pactl"
+else
+  warn "pactl not available; PulseAudio CLI diagnostics will be skipped"
+fi
 
 SESSION_TYPE="${XDG_SESSION_TYPE:-unknown}"
 WAYLAND_DISPLAY_VAR="${WAYLAND_DISPLAY:-}"

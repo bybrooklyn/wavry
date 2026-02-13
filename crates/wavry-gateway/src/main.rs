@@ -16,6 +16,7 @@ use tower_http::cors::{AllowOrigin, CorsLayer};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 mod admin;
+mod audit;
 mod auth;
 mod db;
 mod relay;

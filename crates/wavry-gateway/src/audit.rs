@@ -7,6 +7,7 @@ use tracing::{error, info, warn};
 /// This enum includes both security events (authentication, authorization) and
 /// operational events (infrastructure failures) that have security implications.
 #[derive(Debug, Clone, Copy)]
+#[allow(dead_code)]
 pub enum SecurityEventType {
     /// Successful login
     LoginSuccess,
@@ -52,6 +53,7 @@ impl SecurityEventType {
 
 /// Reason codes for authentication failures
 #[derive(Debug, Clone, Copy)]
+#[allow(dead_code)]
 pub enum FailureReason {
     /// User account not found
     UserNotFound,
