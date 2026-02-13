@@ -419,6 +419,11 @@ mod tests {
         SocketAddr::from(([127, 0, 0, 1], port))
     }
 
+    fn next_u64(seed: &mut u64) -> u64 {
+        *seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1);
+        *seed
+    }
+
     #[test]
     fn register_peer_allows_nat_rebind_for_same_identity() {
         let session_id = Uuid::new_v4();
@@ -502,5 +507,67 @@ mod tests {
         assert_eq!(cleanup.idle_sessions, 1);
         assert_eq!(cleanup.total_removed(), 2);
         assert!(pool.is_empty());
+    }
+
+    #[test]
+    fn fuzz_session_state_transitions_never_panic() {
+        let mut seed = 0xA1B2_C3D4_E5F6_1020u64;
+
+        for _ in 0..512 {
+            let ttl_ms = (next_u64(&mut seed) % 2000) + 50;
+            let mut session = RelaySession::new(Uuid::new_v4(), Duration::from_millis(ttl_ms));
+
+            for _ in 0..64 {
+                match next_u64(&mut seed) % 5 {
+                    0 => {
+                        let role = if (next_u64(&mut seed) & 1) == 0 {
+                            PeerRole::Client
+                        } else {
+                            PeerRole::Server
+                        };
+                        let identity = if (next_u64(&mut seed) & 1) == 0 {
+                            "peer-a"
+                        } else {
+                            "peer-b"
+                        };
+                        let port = 40_000 + (next_u64(&mut seed) % 2_000) as u16;
+                        let _ = session.register_peer(role, identity.to_string(), addr(port));
+                    }
+                    1 => {
+                        let renew_ms = (next_u64(&mut seed) % 5_000) + 1;
+                        let _ = session.renew_lease(Duration::from_millis(renew_ms));
+                    }
+                    2 => {
+                        let role = if (next_u64(&mut seed) & 1) == 0 {
+                            PeerRole::Client
+                        } else {
+                            PeerRole::Server
+                        };
+                        let port = 45_000 + (next_u64(&mut seed) % 1_000) as u16;
+                        session.update_peer_address(role, addr(port));
+                    }
+                    3 => {
+                        let bytes = (next_u64(&mut seed) % 1_500) as usize;
+                        session.record_forward(bytes);
+                    }
+                    _ => {
+                        let probe_port = 40_000 + (next_u64(&mut seed) % 2_000) as u16;
+                        let _ = session.identify_peer(addr(probe_port));
+                    }
+                }
+
+                let _ = session.is_active();
+                let _ = session.is_expired();
+                assert!(matches!(
+                    session.state,
+                    SessionState::Init
+                        | SessionState::WaitingPeer
+                        | SessionState::Active
+                        | SessionState::Renewed
+                        | SessionState::Expired
+                        | SessionState::Rejected
+                ));
+            }
+        }
     }
 }

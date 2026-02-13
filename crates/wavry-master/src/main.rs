@@ -957,6 +957,17 @@ mod tests {
     use super::*;
     use ed25519_dalek::SigningKey;
 
+    fn next_u64(seed: &mut u64) -> u64 {
+        *seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1);
+        *seed
+    }
+
+    fn fill_pseudorandom(seed: &mut u64, buf: &mut [u8]) {
+        for byte in buf.iter_mut() {
+            *byte = (next_u64(seed) & 0xFF) as u8;
+        }
+    }
+
     fn test_signing_key() -> pasetors::keys::AsymmetricSecretKey<pasetors::version4::V4> {
         let seed = [7u8; 32];
         let sk = SigningKey::from_bytes(&seed);
@@ -1025,5 +1036,51 @@ mod tests {
         assert_eq!(payload.relay_id, relay_id);
         assert_eq!(payload.key_id, key_id);
         assert_eq!(payload.session_id, session_id);
+    }
+
+    #[test]
+    fn fuzz_signal_message_json_parse_never_panics() {
+        let mut seed = 0xBEEF_CAFE_1234_5678u64;
+        for _ in 0..10_000 {
+            let len = (next_u64(&mut seed) % 1024) as usize;
+            let mut data = vec![0u8; len];
+            fill_pseudorandom(&mut seed, &mut data);
+            let text = String::from_utf8_lossy(&data);
+            let _ = serde_json::from_str::<SignalMessage>(&text);
+        }
+    }
+
+    #[test]
+    fn fuzz_mutated_signal_messages_never_panic() {
+        let mut seed = 0x1234_5678_DEAD_BEEFu64;
+        let corpus = vec![
+            serde_json::to_vec(&SignalMessage::BIND {
+                token: "test-token".to_string(),
+            })
+            .expect("serialize bind"),
+            serde_json::to_vec(&SignalMessage::ERROR {
+                code: Some(429),
+                message: "rate limit".to_string(),
+            })
+            .expect("serialize error"),
+            serde_json::to_vec(&SignalMessage::REQUEST_RELAY {
+                target_username: "target-user".to_string(),
+                region: Some("us-east-1".to_string()),
+            })
+            .expect("serialize request relay"),
+        ];
+
+        for base in corpus {
+            for _ in 0..1_000 {
+                let mut mutated = base.clone();
+                let flips = ((next_u64(&mut seed) % 6) + 1) as usize;
+                for _ in 0..flips {
+                    let idx = (next_u64(&mut seed) % mutated.len() as u64) as usize;
+                    mutated[idx] ^= (next_u64(&mut seed) & 0xFF) as u8;
+                }
+                let text = String::from_utf8_lossy(&mutated);
+                let _ = serde_json::from_str::<SignalMessage>(&text);
+            }
+        }
     }
 }

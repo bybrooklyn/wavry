@@ -115,6 +115,12 @@ jobs:
       - name: Decode Fuzz Smoke Test
         run: cargo test -p rift-core --test fuzz_decode -- --nocapture
 
+      - name: Control-plane parse fuzz smoke
+        run: cargo test -p wavry-master fuzz_signal_message_json_parse_never_panics -- --nocapture
+
+      - name: Relay session transition fuzz smoke
+        run: cargo test -p wavry-relay fuzz_session_state_transitions_never_panic -- --nocapture
+
   supply-chain:
     name: Supply Chain Gate
     runs-on: ubuntu-latest

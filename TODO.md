@@ -51,7 +51,7 @@ Last updated: 2026-02-13
 ## Priority 1: Security Hardening
 
 - [x] Update threat model docs for relay/master/auth attack surfaces and trust boundaries.
-- [ ] Add fuzzing targets for control-plane message parsing and relay session state transitions.
+- [x] Add fuzzing targets for control-plane message parsing and relay session state transitions.
 - [x] Add structured security logging and audit events for control-plane auth failures and policy denials.
 - [x] Add dependency and supply-chain hardening checks in CI (pinned actions, audit gates, SBOM generation).
 - [x] Add release signing/attestation plan and implementation for binaries and container images.
