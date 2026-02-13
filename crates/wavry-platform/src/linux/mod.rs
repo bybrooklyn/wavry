@@ -643,7 +643,10 @@ impl PortalInjector {
                     let request = proxy.start(&session, None).await?;
                     let response = request.response()?;
                     let streams = response.streams();
-                    let stream_id = streams.first().map(|s| s.pipe_wire_node_id()).unwrap_or(0);
+                    let stream_id = streams
+                        .and_then(|s| s.first())
+                        .map(|s| s.pipe_wire_node_id())
+                        .unwrap_or(0);
 
                     ready_flag.store(true, Ordering::SeqCst);
 
