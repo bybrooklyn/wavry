@@ -1,98 +1,442 @@
-# Wavry TODO (Outstanding Work Only)
+# Wavry TODO (Full Execution Ledger)
 
 Current target version: `v0.0.5-unstable`  
 Last updated: 2026-02-13
 
+## How To Use This File
+
+- This document now tracks both completed work and remaining work.
+- Completed items include commit references, scope, and validation evidence.
+- Remaining items include explicit implementation steps, verification commands, and exit criteria.
+- Any task is only considered done after code changes, tests, docs updates, and CI pass.
+
+## Global CI/CD Baseline (Must Stay True)
+
+- [x] Required local preflight before pushing:
+  - `cargo fmt --all`
+  - `cargo clippy --workspace --all-targets -- -D warnings`
+  - `cargo test --workspace`
+- [x] Required control-plane regression validation:
+  - `./scripts/control-plane-resilience.sh`
+- [x] Required desktop style regression validation:
+  - `cd crates/wavry-desktop && bun run check:style`
+- [x] CI workflows must remain deterministic and release-safe:
+  - release artifact naming checks enabled
+  - checksums/manifests generation enabled
+  - prerelease channel policy enforced
+
+---
+
+## Completed Work Ledger (Done)
+
+### [x] `559ab98` docs(todo): mark control-plane audit logging complete
+
+- Scope:
+  - Updated roadmap tracking so control-plane audit logging is explicitly captured as completed.
+- Why this mattered:
+  - Reduced ambiguity around whether auth failure telemetry and policy-denial audit trails were still outstanding.
+- Validation:
+  - Manual doc review for consistency with implemented security logging work.
+
+### [x] `716d637` test(ci): add control-plane and relay fuzz smoke targets
+
+- Scope:
+  - Added CI-facing smoke coverage for fuzz targets related to control-plane and relay paths.
+- Why this mattered:
+  - Prevented silent regressions in parser/state-machine surfaces likely to fail under malformed inputs.
+- Validation:
+  - Targeted CI test execution for fuzz smoke jobs.
+
+### [x] `a63c785` fix(ci): remove rg dependency from audit pin scripts
+
+- Scope:
+  - Removed hard dependency on `rg` from audit pin scripts used in CI.
+- Why this mattered:
+  - Eliminated environment-dependent failures where `rg` was unavailable in minimal CI runners.
+- Validation:
+  - Script execution in CI-compatible shell environment without `rg` dependency.
+
+### [x] `c901a33` feat(control-plane): add chaos and soak resilience gates
+
+- Scope:
+  - Added resilience validation entrypoint and CI integration for control-plane reliability testing.
+  - Added new scripts:
+    - `scripts/control-plane-resilience.sh`
+    - `scripts/lib/control-plane-load-driver.py`
+    - `scripts/lib/tcp-chaos-proxy.py`
+  - Added a dedicated resilience job in:
+    - `.github/workflows/quality-gates.yml`
+- Why this mattered:
+  - Converted reliability expectations into enforceable gates instead of best-effort manual checks.
+- Validation:
+  - `./scripts/control-plane-resilience.sh`
+  - CI run confirmation for quality gates job with resilience stage.
+
+### [x] `7eb1168` feat(control-plane): add relay service identity token auth
+
+- Scope:
+  - Implemented optional bearer-token auth between relay and master.
+  - Added env-based enforcement and propagation:
+    - master validation: `WAVRY_MASTER_RELAY_AUTH_TOKEN`
+    - relay outbound token: `WAVRY_RELAY_MASTER_TOKEN`
+  - Files:
+    - `crates/wavry-master/src/main.rs`
+    - `crates/wavry-relay/src/main.rs`
+- Why this mattered:
+  - Established explicit control-plane trust boundaries instead of relying on network location assumptions.
+- Validation:
+  - Positive path with matching tokens.
+  - Negative path with missing/mismatched token returns auth failure.
+
+### [x] `b367aa5` feat(deploy): enforce docker-first public bind policy
+
+- Scope:
+  - Enforced container-first behavior for public-bind endpoints in gateway/master/relay.
+  - Added host override env controls for explicit non-default usage.
+  - Files:
+    - `crates/wavry-gateway/src/main.rs`
+    - `crates/wavry-gateway/src/relay.rs`
+    - `crates/wavry-master/src/main.rs`
+    - `crates/wavry-relay/src/main.rs`
+- Why this mattered:
+  - Reduced accidental unsafe public exposure in local/non-container deployments.
+- Validation:
+  - Runtime startup checks for bind mode with/without overrides.
+
+### [x] `4f5f00c` fix(ci): avoid sybil-prefix collisions in soak endpoints
+
+- Scope:
+  - Fixed synthetic identity/address generation in soak tests to avoid master sybil-prefix false positives.
+- Why this mattered:
+  - Removed flaky failures in resilience CI runs caused by test data generation rather than real defects.
+- Validation:
+  - Re-ran control-plane resilience and verified stable registration/lease behavior.
+
+### [x] `f5ecf15` feat(relay): add per-identity lease rate limiting
+
+- Scope:
+  - Added per-identity rate limiting guardrail with env configuration.
+  - New knob:
+    - `WAVRY_RELAY_IDENTITY_RATE_LIMIT_PPS`
+  - File:
+    - `crates/wavry-relay/src/main.rs`
+- Why this mattered:
+  - Prevented a single identity from monopolizing lease processing and degrading multi-tenant stability.
+- Validation:
+  - Unit/runtime checks for throttling behavior under burst load.
+
+### [x] `4462c39` feat(relay): add bounded queue backpressure controls
+
+- Scope:
+  - Added bounded inbound packet queue capacity and explicit backpressure behavior.
+  - New knob:
+    - `WAVRY_RELAY_PACKET_QUEUE_CAPACITY`
+  - Added metrics/logging for queue pressure and drops.
+  - File:
+    - `crates/wavry-relay/src/main.rs`
+- Why this mattered:
+  - Prevented unbounded memory growth and made overload behavior predictable/observable.
+- Validation:
+  - Stress conditions with queue saturation and expected throttling/drop telemetry.
+
+### [x] `c280b34` chore(linux): expand runtime diagnostics smoke checks
+
+- Scope:
+  - Extended Linux smoke script coverage:
+    - compositor detection
+    - PipeWire service/session checks
+    - portal checks
+  - File:
+    - `scripts/linux-display-smoke.sh`
+- Why this mattered:
+  - Improved first-response debugging for Linux capture failures before deep protocol investigation.
+- Validation:
+  - Script run on Linux runtime images with expected pass/fail diagnostics.
+
+### [x] `2822843` docs(roadmap): define adaptive streaming milestones
+
+- Scope:
+  - Added milestone-based adaptive streaming roadmap doc:
+    - `docs/ADAPTIVE_STREAMING_ROADMAP.md`
+- Why this mattered:
+  - Converted high-level performance ideas into phased, implementable milestones.
+- Validation:
+  - Doc cross-check with existing backlog and acceptance criteria.
+
+### [x] `8558441` test(control-plane): add reconnect and failover migration checks
+
+- Scope:
+  - Added tests for reconnect and migration under unstable network/failover conditions.
+  - Updated relay re-registration behavior after heartbeat failures/master restart.
+  - File:
+    - `crates/wavry-relay/src/main.rs`
+- Why this mattered:
+  - Raised confidence that sessions recover correctly during real-world control-plane disruptions.
+- Validation:
+  - Targeted tests and resilience script scenarios covering reconnect/migration paths.
+
+### [x] Additional docs/runbook updates completed
+
+- Updated:
+  - `docs/CONTROL_PLANE_RUNBOOKS.md`
+  - `docs/RELAY_OPERATIONS.md`
+  - `docs/GATEWAY_OPERATIONS.md`
+  - `docs/WAVRY_TESTING.md`
+- Why this mattered:
+  - Reduced operational guesswork during incidents and made recovery procedures explicit.
+
+### [x] Repeated verification loop completed during this work stream
+
+- Commands run repeatedly while implementing/fixing:
+  - `cargo fmt --all`
+  - `cargo clippy -p wavry-gateway -p wavry-master -p wavry-relay --all-targets -- -D warnings`
+  - `cargo test -p wavry-gateway -p wavry-master -p wavry-relay -- --nocapture`
+  - `./scripts/control-plane-resilience.sh`
+- Outcome:
+  - Addressed identified CI instability in resilience tests and re-established passing runs.
+
+---
+
+## Remaining Work (Not Done Yet)
+
 ## Priority 0: Release-Blocking
 
-- [ ] Fix Linux Wayland protocol stability so desktop capture never crashes with `Gdk-Message ... Error 71 (Protocol Error)` under KDE Plasma.
-- [ ] Add robust Wayland capture fallback flow: portal readiness checks, clearer user-facing error states, and safe retry behavior.
-- [ ] Validate Linux streaming + capture + input on KDE Plasma, GNOME, and Sway/Hyprland with test evidence documented.
-- [ ] Close remaining Windows build regressions (including thread-safety around Windows audio capture types) and keep Windows CI green.
-- [x] Enforce prerelease policy in tooling and CI so only `-canary` is accepted for prerelease tags.
-- [x] Keep `-unstable` for internal/development versioning only (not release tag channels).
-- [x] Ensure `cargo fmt --all`, `cargo clippy --workspace --all-targets -- -D warnings`, and `cargo test --workspace` are required CI gates for merge.
-- [x] Add a CI step that fails if release packaging emits unnamed or ambiguous artifacts.
-- [x] Ensure release artifacts are deterministic, minimal, and consistently named across all platforms.
-- [x] Generate and publish checksums (`SHA256SUMS`) for every release artifact.
-- [x] Generate and publish a machine-readable release manifest (`release-manifest.json`) listing file name, platform, arch, and checksum.
-- [x] Remove unnecessary release artifacts from CI upload/publish jobs.
-- [x] Fix macOS desktop artifact workflow to handle missing DMG directories safely without failing unrelated jobs.
-- [x] Confirm no macOS Tauri release artifacts are produced if Swift-only macOS policy is adopted.
+### [ ] Linux Wayland protocol stability (KDE/GNOME/Sway/Hyprland)
 
-## Priority 0: Control Plane (Master + Relay + Auth)
+- Objective:
+  - Eliminate protocol crashes such as `Gdk-Message ... Error 71 (Protocol Error)` in capture/session flows.
+- Implementation steps:
+  - Reproduce with deterministic matrix runs:
+    - KDE Plasma (Wayland)
+    - GNOME (Wayland)
+    - Sway or Hyprland
+  - Add structured error taxonomy in capture path:
+    - protocol violation
+    - portal unavailable
+    - PipeWire node loss
+    - compositor disconnect
+  - Add guarded retry policy:
+    - bounded retry attempts
+    - cooldown/backoff between retries
+    - hard stop with actionable user message
+  - Add portal preflight and timeout surface in UI and logs.
+  - Add regression tests for reconnect/capture restart after compositor and portal interruptions.
+- Required code areas:
+  - `crates/wavry-desktop/*`
+  - `crates/wavry-media/*`
+  - Linux integration scripts under `scripts/`
+- Verification commands:
+  - `cargo check --workspace`
+  - `cargo test --workspace`
+  - `./scripts/linux-display-smoke.sh`
+  - platform-runner matrix jobs for compositor permutations
+- Exit criteria:
+  - No reproducible protocol crash across target compositors in 30+ repeated runs each.
+  - Failure modes are recoverable or clearly surfaced with next-action guidance.
 
-- [x] Make relay and auth deployment Docker-first and production-supported only through containerized paths.
-- [x] Harden relay session lifecycle: lease validation, expiration behavior, reconnect behavior, and cleanup under churn.
-- [x] Add relay overload protection: per-IP and per-identity rate limiting, bounded queues, and backpressure metrics.
-- [x] Add stronger control-plane auth boundaries between gateway/master/relay (service identity validation and explicit trust model).
-- [x] Add control-plane chaos/failure tests: relay restart, master restart, packet loss, and high latency.
-- [x] Add load and soak tests for relay/master with success thresholds and regression baselines.
-- [x] Document operational runbooks for relay/master incidents and recovery steps.
+### [ ] Robust Wayland capture fallback UX and behavior
 
-## Priority 0: Docker Build/CI Speed + Reliability
+- Objective:
+  - Ensure users always get clear remediation when capture cannot start.
+- Implementation steps:
+  - Add explicit fallback decision tree in desktop app:
+    - portal missing
+    - permission denied
+    - PipeWire unavailable
+    - unsupported compositor feature
+  - Add user-facing copy for each failure mode with concrete resolution steps.
+  - Add retry button/state reset behavior that does not require full app restart.
+- Verification commands:
+  - `cd crates/wavry-desktop && bun run check`
+  - `cd crates/wavry-desktop && bun run check:style`
+- Exit criteria:
+  - Every capture failure path maps to deterministic UI state + actionable guidance.
 
-- [x] Improve Docker build times with BuildKit cache mounts and remote cache reuse across CI runs.
-- [x] Split Dockerfiles into stable dependency layers and frequently changing app layers.
-- [x] Pin base images by digest and enable periodic update workflow with review.
-- [x] Parallelize control-plane image builds where safe and reduce redundant rebuilds.
-- [x] Add CI telemetry for build durations and cache hit rates, then enforce performance budgets.
-- [x] Add smoke tests for produced Docker images before publish.
+### [ ] Windows build regressions + CI stability
+
+- Objective:
+  - Keep Windows build/test green, including thread-safety around audio capture types.
+- Implementation steps:
+  - Reproduce current Windows CI failures locally or in GH Windows runners.
+  - Isolate send/sync violations and unsafe cross-thread captures.
+  - Add tests for audio capture threading lifecycle (init/start/stop/drop).
+  - Add targeted CI job that validates Windows audio capture crate boundaries.
+- Verification commands:
+  - `cargo check --workspace`
+  - `cargo clippy --workspace --all-targets -- -D warnings`
+  - Windows CI workflow run in GitHub Actions
+- Exit criteria:
+  - Windows required checks pass consistently for 10 consecutive runs.
+
+### [ ] Final release artifact quality gate confirmation
+
+- Objective:
+  - Close remaining acceptance gap proving artifacts are minimal, labeled, and reproducible.
+- Implementation steps:
+  - Execute full release dry-run.
+  - Confirm every artifact has:
+    - deterministic filename
+    - platform/arch label
+    - checksum in `SHA256SUMS`
+    - entry in `release-manifest.json`
+  - Confirm no extra files are uploaded by release workflows.
+- Verification commands:
+  - release workflow dry-run job
+  - artifact inspection script in CI
+- Exit criteria:
+  - Release dry-run passes without manual corrections.
+
+## Priority 0: CI Reliability and Release Cadence (Critical for “don’t fail” objective)
+
+### [ ] Add CI flake triage and quarantine process
+
+- Objective:
+  - Prevent intermittent failures from blocking safe releases.
+- Implementation steps:
+  - Tag known flaky tests and move to quarantine workflow.
+  - Keep merge-gating jobs deterministic and stable.
+  - Add weekly flake burn-down issue with owners.
+- Verification:
+  - CI failure rate trend monitored over 2+ weeks.
+- Exit criteria:
+  - Non-code-related CI failures stay below agreed threshold.
+
+### [ ] Add release train automation with explicit go/no-go gates
+
+- Objective:
+  - Ensure releases are produced on schedule with auditable decision points.
+- Implementation steps:
+  - Define release cadence (weekly/biweekly).
+  - Add release-train workflow requiring:
+    - green required checks
+    - changelog present
+    - manifest/checksum/signature pass
+  - Auto-create release PR with checklist.
+- Verification:
+  - One full dry-run release train and one real release.
+- Exit criteria:
+  - Release can be cut from automation with zero manual patching.
+
+### [ ] Add rollback verification for every release
+
+- Objective:
+  - Ensure failed release deployment can be reverted quickly and safely.
+- Implementation steps:
+  - Add rollback script/playbook per target platform.
+  - Test rollback in staging from latest release candidate.
+- Exit criteria:
+  - Documented and tested rollback under 15 minutes.
 
 ## Priority 1: Linux-First Product Quality
 
-- [x] Expand Linux-specific diagnostics to include compositor, portal service status, PipeWire session state, and encoder availability.
-- [ ] Implement Linux integration tests that exercise real capture paths (Wayland portal + PipeWire) in CI or nightly runners.
-- [ ] Improve Linux input parity and edge-case handling (gamepad hotplug, key mapping edge cases, clipboard behavior).
-- [ ] Improve Linux audio routing coverage with explicit tests for default/mic/app routes.
-- [ ] Add Linux packaging QA for AppImage/tarball/deb/rpm targets with install/uninstall checks.
-- [ ] Add Linux performance profiling for encode/capture/network hot paths and track regressions.
+### [ ] Linux real-capture integration tests in CI/nightly
 
-## Priority 1: Security Hardening
+- Implementation steps:
+  - Add nightly runner with Wayland + PipeWire + portal stack.
+  - Automate session creation, capture start, short stream, teardown.
+  - Store logs/artifacts for failure forensics.
+- Verification:
+  - nightly workflow success trend and reproducible logs.
 
-- [x] Update threat model docs for relay/master/auth attack surfaces and trust boundaries.
-- [x] Add fuzzing targets for control-plane message parsing and relay session state transitions.
-- [x] Add structured security logging and audit events for control-plane auth failures and policy denials.
-- [x] Add dependency and supply-chain hardening checks in CI (pinned actions, audit gates, SBOM generation).
-- [x] Add release signing/attestation plan and implementation for binaries and container images.
-- [x] Document key rotation and secret management procedures for production deployments.
+### [ ] Linux input parity and edge-case handling
 
-## Priority 1: Website + Documentation
+- Implementation steps:
+  - Cover gamepad hotplug, keyboard layout mapping, clipboard transitions.
+  - Add integration tests and device-matrix notes.
+- Verification:
+  - device scenario matrix completed with pass evidence.
 
-- [x] Keep website docs-first, with no oversized marketing landing experience.
-- [x] Ensure theme consistency across all pages, including pricing cards and docs components.
-- [x] Remove any text highlight/hover behavior that turns content unreadable (for example black-on-dark issues).
-- [x] Fix footer alignment and responsive spacing across breakpoints.
-- [x] Fix dark mode toggle behavior so it does not break layout or theming.
-- [x] Remove mobile sidebar trigger if it conflicts with required UX, and keep navigation usable on small screens.
-- [x] Fix docs separators and content container alignment on all docs pages.
-- [x] Expand docs for relay/master architecture, data flow, failure modes, and scaling guidance.
-- [x] Expand Linux documentation with verified setup and troubleshooting for Wayland/PipeWire/portals.
-- [x] Expand operations docs with deployment topology, backup/restore, and incident response.
-- [x] Expand developer docs with codebase map, local env bootstrap, and contribution workflow.
-- [x] Keep licensing docs clear: AGPL/RIFT details, CLA requirements, and commercial terms.
-- [x] Keep pricing page clear and actionable with contact: `contact@wavry.dev`.
-- [x] Add explicit SaaS/integration licensing requirement: users must contact for terms.
+### [ ] Linux audio routing coverage
 
-## Priority 1: Product/Platform Decisions
+- Implementation steps:
+  - Add tests for default sink/source and app-specific routing selection.
+  - Validate route changes during active session.
+- Verification:
+  - route-switch tests pass without session restart.
 
-- [x] Finalize and enforce macOS client strategy: Swift-only or dual-client; remove conflicting CI/release paths.
-- [x] Define supported platform matrix and support policy (stable/beta/experimental) in docs.
-- [x] Define release channels and versioning policy (`stable`, `canary`, internal `unstable`) and enforce in scripts/workflows.
-- [x] Create a strict release checklist and gate publishing on checklist completion.
+### [ ] Linux packaging QA
 
-## Priority 2: Performance + Reliability Roadmap
+- Implementation steps:
+  - Add install/uninstall smoke tests for AppImage/tarball/deb/rpm.
+  - Verify desktop integration and dependency checks.
+- Verification:
+  - packaging matrix job with pass artifacts.
 
-- [x] Add adaptive resolution/bandwidth control roadmap with concrete milestones.
-- [ ] Add end-to-end latency budget instrumentation and reporting.
-- [ ] Add long-session memory stability tests and leak detection automation.
-- [x] Add reconnect/migration test cases for unstable network conditions.
-- [ ] Add optional advanced transport experiments behind feature flags.
+### [ ] Linux performance regression tracking
+
+- Implementation steps:
+  - Add benchmark scenarios for capture/encode/network loop.
+  - Track baseline and fail on major regression threshold.
+- Verification:
+  - performance dashboard or stored benchmark history.
+
+## Priority 1: Documentation Completion
+
+### [ ] Final docs completeness pass for release readiness
+
+- Objective:
+  - Ensure install, operate, troubleshoot, and scaling workflows are complete without source spelunking.
+- Implementation steps:
+  - Audit docs against runbook checklist:
+    - install paths
+    - configuration examples
+    - incident response
+    - scaling and failure modes
+  - Add missing command snippets and expected outputs.
+  - Add cross-links between architecture and operations docs.
+- Verification:
+  - Fresh-reader review from teammate with no prior context.
+- Exit criteria:
+  - No unresolved doc gaps on release checklist.
+
+## Priority 2: Performance + Reliability Roadmap Execution
+
+### [ ] End-to-end latency budget instrumentation
+
+- Implementation steps:
+  - Define stage-level latency budgets (capture, encode, network, decode, render).
+  - Emit structured metrics per stage and aggregate session percentile stats.
+- Verification:
+  - baseline report generated from representative sessions.
+
+### [ ] Long-session memory stability + leak automation
+
+- Implementation steps:
+  - Add 2h/8h soak profiles with memory sampling.
+  - Add threshold-based failure gates for leak slope.
+- Verification:
+  - soak jobs publish memory trend artifacts and pass thresholds.
+
+### [ ] Advanced transport experiments behind feature flags
+
+- Implementation steps:
+  - Gate transport variants with explicit runtime flags.
+  - Add A/B benchmark harness and fallback safety checks.
+- Verification:
+  - experiments do not affect stable path unless flag enabled.
+
+---
 
 ## Acceptance Criteria Before Next Public Release
 
-- [ ] Linux Wayland capture/session flow is stable across target compositors with documented test evidence.
+- [ ] Linux Wayland capture/session flow is stable across target compositors with documented evidence.
 - [x] Control-plane soak tests pass with defined SLOs.
 - [ ] Release artifacts are clean, labeled, checksummed, and minimal.
-- [ ] CI is warning-free and green across required targets.
-- [ ] Docs are complete enough for install, operate, troubleshoot, and scale without source spelunking.
+- [ ] CI is warning-free and green across required targets for sustained runs.
+- [ ] Docs are complete enough for install, operation, troubleshooting, and scaling.
+
+## Execution Order (Strict)
+
+1. Complete Linux Wayland protocol stability and fallback UX tasks.
+2. Close Windows CI regressions and re-establish sustained green required checks.
+3. Run full release dry-run and close artifact quality gaps.
+4. Complete docs completeness pass with runbook validation.
+5. Execute release train workflow and publish when all gates are green.
+
+## Next Immediate Actions (First 72 Hours)
+
+1. Run compositor-matrix crash reproduction and capture logs for KDE/GNOME/Sway-Hyprland.
+2. Implement capture fallback error taxonomy and user remediation states in desktop app.
+3. Add nightly Linux real-capture integration job with artifact retention.
+4. Start Windows audio thread-safety triage with dedicated CI diagnostics output.
+5. Execute release dry-run and verify `SHA256SUMS` + `release-manifest.json` contents.
