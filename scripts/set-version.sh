@@ -20,6 +20,17 @@ WAVRY_RAW=$(echo "$WAVRY_VER" | sed 's/^v//')
 RIFT_RAW=$(echo "$RIFT_VER" | sed 's/^v//')
 DELTA_RAW=$(echo "$DELTA_VER" | sed 's/^v//')
 
+# Enforce release policy:
+# - stable versions are allowed (e.g. 0.1.0)
+# - prereleases are allowed only as -canary (optionally with dot suffixes)
+#   examples: 0.1.0-canary, 0.1.0-canary.1
+if ! [[ "$WAVRY_RAW" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-canary([.][0-9A-Za-z-]+)*)?$ ]]; then
+    echo "Error: invalid Wavry version '$WAVRY_VER'"
+    echo "Only stable versions or -canary prereleases are allowed."
+    echo "Examples: 0.1.0, 0.1.0-canary, 0.1.0-canary.1"
+    exit 1
+fi
+
 echo "Updating Wavry to v$WAVRY_RAW"
 echo "Updating RIFT to v$RIFT_RAW"
 echo "Updating DELTA to v$DELTA_RAW"

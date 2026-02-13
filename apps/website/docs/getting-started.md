@@ -27,7 +27,9 @@ Optional (platform-specific):
 
 - Android SDK/NDK for Android builds
 - Xcode for macOS packaging
-- PipeWire for Linux capture paths
+- PipeWire + XDG Desktop Portal backend for Linux/Wayland capture paths
+
+For detailed Linux setup (distros, compositor support, portal packages, validation), use [Linux and Wayland Support](/linux-wayland-support).
 
 ## 1. Clone and Build
 
@@ -109,6 +111,13 @@ When testing locally, confirm:
 - Ensure CPU/GPU is not saturated
 - Try lower stream settings temporarily
 - Confirm you are not relaying unnecessarily when direct path is available
+
+### Linux/Wayland capture fails
+
+- Run `./scripts/linux-display-smoke.sh`
+- Confirm `xdg-desktop-portal` and your desktop backend package are installed/running
+- Confirm screen-capture permission was granted
+- Follow [Linux and Wayland Support](/linux-wayland-support) for full remediation flow
 
 ## Next Steps
 

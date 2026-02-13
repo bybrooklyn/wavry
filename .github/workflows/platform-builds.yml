@@ -28,6 +28,7 @@ jobs:
       wavry_version: ${{ steps.version.outputs.wavry_version }}
       rift_version: ${{ steps.version.outputs.rift_version }}
       delta_version: ${{ steps.version.outputs.delta_version }}
+      is_prerelease: ${{ steps.version_policy.outputs.is_prerelease }}
       already_released: ${{ steps.check_release.outputs.already_released }}
     steps:
       - name: Checkout
@@ -44,6 +45,28 @@ jobs:
           echo "delta_version=$DELTA_V" >> $GITHUB_OUTPUT
           echo "WAVRY_V=$WAVRY_V" >> $GITHUB_ENV
           echo "Extracted Wavry Version: $WAVRY_V"
+
+      - name: Enforce prerelease policy (canary-only)
+        id: version_policy
+        run: |
+          set -euo pipefail
+          WAVRY_V="${{ steps.version.outputs.wavry_version }}"
+
+          if [[ "$WAVRY_V" =~ - ]]; then
+            if [[ "$WAVRY_V" =~ ^[0-9]+\.[0-9]+\.[0-9]+-canary([.][0-9A-Za-z-]+)*$ ]]; then
+              echo "is_prerelease=true" >> "$GITHUB_OUTPUT"
+            else
+              echo "Unsupported prerelease version: $WAVRY_V" >&2
+              echo "Only -canary prerelease tags are allowed." >&2
+              exit 1
+            fi
+          else
+            if [[ ! "$WAVRY_V" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+              echo "Invalid stable version format: $WAVRY_V" >&2
+              exit 1
+            fi
+            echo "is_prerelease=false" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Install protoc
         uses: arduino/setup-protoc@v3
@@ -91,6 +114,9 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           shared-key: rust-${{ runner.os }}-workspace
+      - name: Linux display preflight (compile-time)
+        if: runner.os == 'Linux'
+        run: ./scripts/linux-display-smoke.sh --skip-runtime
       - name: Run tests
         run: cargo test --workspace --locked
 
@@ -125,6 +151,32 @@ jobs:
         run: |
           source ./secrets/wavry.env
           ./scripts/master-relay-smoke.sh
+
+  linux-wayland-runtime:
+    name: Linux Wayland runtime lane
+    needs: pre-build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            dbus-x11 \
+            weston \
+            xdg-desktop-portal \
+            xdg-desktop-portal-gtk \
+            pipewire \
+            wireplumber \
+            gstreamer1.0-tools \
+            gstreamer1.0-plugins-base \
+            gstreamer1.0-plugins-good \
+            gstreamer1.0-plugins-bad
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+      - name: Wayland runtime smoke
+        run: ./scripts/ci-wayland-runtime.sh
 
   rust-backend:
     name: Build backend (${{ matrix.suffix }}-${{ matrix.arch }})
@@ -224,7 +276,7 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y pkg-config protobuf-compiler libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev libasound2-dev libx11-dev libxtst-dev libxrandr-dev libxi-dev libevdev-dev libudev-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev patchelf libwebkit2gtk-4.1-dev libsoup-3.0-dev libgl-dev || sudo apt-get install -y libwebkit2gtk-4.0-dev
+          sudo apt-get install -y pkg-config protobuf-compiler libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev libasound2-dev libx11-dev libxtst-dev libxrandr-dev libxi-dev libevdev-dev libudev-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev patchelf libwebkit2gtk-4.1-dev libsoup-3.0-dev libgl-dev rpm || sudo apt-get install -y libwebkit2gtk-4.0-dev rpm
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
       - name: Cache
@@ -241,8 +293,12 @@ jobs:
         if: runner.os == 'macOS'
         working-directory: crates/wavry-desktop
         run: bun run tauri build --bundles dmg --no-sign --ci
-      - name: Build (non-macOS binary)
-        if: runner.os != 'macOS'
+      - name: Build (Linux bundles)
+        if: runner.os == 'Linux'
+        working-directory: crates/wavry-desktop
+        run: bun run tauri build --bundles appimage,deb,rpm --ci
+      - name: Build (Windows binary)
+        if: runner.os == 'Windows'
         working-directory: crates/wavry-desktop
         run: bun run tauri build --no-bundle --ci
       - name: Stage macOS desktop DMG
@@ -289,8 +345,43 @@ jobs:
             fi
           done
           exit 1
-      - name: Stage non-macOS desktop binary
-        if: runner.os != 'macOS'
+      - name: Stage Linux desktop bundles
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p ci-artifacts/desktop
+
+          appimage_path=""
+          deb_path=""
+          rpm_path=""
+          for root in "target/release" "crates/wavry-desktop/src-tauri/target/release"; do
+            if [[ -z "$appimage_path" && -d "$root/bundle/appimage" ]]; then
+              appimage_path="$(find "$root/bundle/appimage" -type f -name "*.AppImage" 2>/dev/null | head -n 1 || true)"
+            fi
+            if [[ -z "$deb_path" && -d "$root/bundle/deb" ]]; then
+              deb_path="$(find "$root/bundle/deb" -type f -name "*.deb" 2>/dev/null | head -n 1 || true)"
+            fi
+            if [[ -z "$rpm_path" && -d "$root/bundle/rpm" ]]; then
+              rpm_path="$(find "$root/bundle/rpm" -type f -name "*.rpm" 2>/dev/null | head -n 1 || true)"
+            fi
+          done
+
+          [[ -n "$appimage_path" ]] || { echo "Missing Linux AppImage bundle" >&2; exit 1; }
+          [[ -n "$deb_path" ]] || { echo "Missing Linux DEB bundle" >&2; exit 1; }
+          [[ -n "$rpm_path" ]] || { echo "Missing Linux RPM bundle" >&2; exit 1; }
+
+          cp "$appimage_path" "ci-artifacts/desktop/wavry-desktop-tauri-linux-${{ matrix.arch }}.AppImage"
+          cp "$deb_path" "ci-artifacts/desktop/wavry-desktop-tauri-linux-${{ matrix.arch }}.deb"
+          cp "$rpm_path" "ci-artifacts/desktop/wavry-desktop-tauri-linux-${{ matrix.arch }}.rpm"
+
+          chmod +x "ci-artifacts/desktop/wavry-desktop-tauri-linux-${{ matrix.arch }}.AppImage"
+          "ci-artifacts/desktop/wavry-desktop-tauri-linux-${{ matrix.arch }}.AppImage" --appimage-version >/dev/null
+          dpkg-deb --info "ci-artifacts/desktop/wavry-desktop-tauri-linux-${{ matrix.arch }}.deb" >/dev/null
+          rpm -qip "ci-artifacts/desktop/wavry-desktop-tauri-linux-${{ matrix.arch }}.rpm" >/dev/null
+
+      - name: Stage Windows desktop binary
+        if: runner.os == 'Windows'
         shell: bash
         run: |
           mkdir -p ci-artifacts/desktop
@@ -438,11 +529,12 @@ jobs:
 
   release:
     name: Create Release
-    needs: [pre-build, rust-tests, smoke-tests, rust-backend, desktop-tauri, android, macos-swift]
+    needs: [pre-build, rust-tests, smoke-tests, linux-wayland-runtime, rust-backend, desktop-tauri, android, macos-swift]
     if: |
       always() &&
       (needs.rust-tests.result == 'success' || needs.rust-tests.result == 'skipped') &&
       (needs.smoke-tests.result == 'success' || needs.smoke-tests.result == 'skipped') &&
+      (needs.linux-wayland-runtime.result == 'success' || needs.linux-wayland-runtime.result == 'skipped') &&
       (needs.rust-backend.result == 'success' || needs.rust-backend.result == 'skipped') &&
       (needs.desktop-tauri.result == 'success' || needs.desktop-tauri.result == 'skipped') &&
       (needs.android.result == 'success' || needs.android.result == 'skipped') &&
@@ -508,6 +600,14 @@ jobs:
             "release-assets/wavry-gateway-*"
             "release-assets/wavry-relay-*"
             "release-assets/wavry-server-*"
+            "release-assets/wavry-desktop-tauri-linux-*.AppImage"
+            "release-assets/wavry-desktop-tauri-linux-*.deb"
+            "release-assets/wavry-desktop-tauri-linux-*.rpm"
+            "release-assets/wavry-desktop-tauri-windows-*.exe"
+            "release-assets/wavry-desktop-tauri-macos-*.dmg"
+            "release-assets/wavry-desktop-native-macos-*.dmg"
+            "release-assets/wavry-mobile-android-arm64-release.apk"
+            "release-assets/wavry-quest-android-arm64-release.apk"
           )
           for pattern in "${required[@]}"; do
             if ! compgen -G "$pattern" > /dev/null; then
@@ -531,23 +631,102 @@ jobs:
           {
             echo "# Wavry Release Assets"
             echo
-            echo "| File | Description |"
-            echo "|---|---|"
+            echo "| File | Category | Platform | Architecture | Purpose |"
+            echo "|---|---|---|---|---|"
             while IFS= read -r file; do
-              desc="Release artifact"
+              category="Other"
+              platform="Unknown"
+              arch="Unknown"
+              purpose="Release artifact"
               case "$file" in
-                wavry-master-*) desc="Master coordination service binary" ;;
-                wavry-gateway-*) desc="Gateway control-plane service binary" ;;
-                wavry-relay-*) desc="Relay forwarding service binary" ;;
-                wavry-server-*) desc="Host runtime service binary" ;;
-                wavry-desktop-tauri-linux-*) desc="Desktop app (Tauri) for Linux" ;;
-                wavry-desktop-tauri-windows-*.exe) desc="Desktop app (Tauri) for Windows" ;;
-                wavry-desktop-tauri-macos-*.dmg) desc="Desktop app (Tauri) for macOS (DMG)" ;;
-                wavry-desktop-native-macos-*.dmg) desc="Native Swift desktop app for macOS (DMG)" ;;
-                wavry-mobile-android-arm64-release.apk) desc="Android mobile client (arm64 release APK)" ;;
-                wavry-quest-android-arm64-release.apk) desc="Android Quest client (arm64 release APK)" ;;
+                wavry-master-*)
+                  category="Backend Service"
+                  platform="${file#wavry-master-}"
+                  platform="${platform%-*}"
+                  arch="${file##*-}"
+                  arch="${arch%.exe}"
+                  purpose="Master coordination service binary"
+                  ;;
+                wavry-gateway-*)
+                  category="Backend Service"
+                  platform="${file#wavry-gateway-}"
+                  platform="${platform%-*}"
+                  arch="${file##*-}"
+                  arch="${arch%.exe}"
+                  purpose="Gateway control-plane API service binary"
+                  ;;
+                wavry-relay-*)
+                  category="Backend Service"
+                  platform="${file#wavry-relay-}"
+                  platform="${platform%-*}"
+                  arch="${file##*-}"
+                  arch="${arch%.exe}"
+                  purpose="Relay forwarding service binary"
+                  ;;
+                wavry-server-*)
+                  category="Backend Service"
+                  platform="${file#wavry-server-}"
+                  platform="${platform%-*}"
+                  arch="${file##*-}"
+                  arch="${arch%.exe}"
+                  purpose="Host runtime service binary"
+                  ;;
+                wavry-desktop-tauri-linux-*.AppImage)
+                  category="Desktop App"
+                  platform="Linux"
+                  arch="${file#wavry-desktop-tauri-linux-}"
+                  arch="${arch%.AppImage}"
+                  purpose="Portable Tauri desktop build (AppImage)"
+                  ;;
+                wavry-desktop-tauri-linux-*.deb)
+                  category="Desktop App"
+                  platform="Linux"
+                  arch="${file#wavry-desktop-tauri-linux-}"
+                  arch="${arch%.deb}"
+                  purpose="Debian/Ubuntu installable package (.deb)"
+                  ;;
+                wavry-desktop-tauri-linux-*.rpm)
+                  category="Desktop App"
+                  platform="Linux"
+                  arch="${file#wavry-desktop-tauri-linux-}"
+                  arch="${arch%.rpm}"
+                  purpose="Fedora/RHEL installable package (.rpm)"
+                  ;;
+                wavry-desktop-tauri-windows-*.exe)
+                  category="Desktop App"
+                  platform="Windows"
+                  arch="${file#wavry-desktop-tauri-windows-}"
+                  arch="${arch%.exe}"
+                  purpose="Tauri desktop executable"
+                  ;;
+                wavry-desktop-tauri-macos-*.dmg)
+                  category="Desktop App"
+                  platform="macOS"
+                  arch="${file#wavry-desktop-tauri-macos-}"
+                  arch="${arch%.dmg}"
+                  purpose="Tauri desktop disk image (DMG)"
+                  ;;
+                wavry-desktop-native-macos-*.dmg)
+                  category="Desktop App"
+                  platform="macOS"
+                  arch="${file#wavry-desktop-native-macos-}"
+                  arch="${arch%.dmg}"
+                  purpose="Native Swift desktop disk image (DMG)"
+                  ;;
+                wavry-mobile-android-arm64-release.apk)
+                  category="Android App"
+                  platform="Android"
+                  arch="arm64"
+                  purpose="Mobile Android client release APK"
+                  ;;
+                wavry-quest-android-arm64-release.apk)
+                  category="Android App"
+                  platform="Android (Quest)"
+                  arch="arm64"
+                  purpose="Quest Android client release APK"
+                  ;;
               esac
-              echo "| \`$file\` | $desc |"
+              echo "| \`$file\` | $category | $platform | $arch | $purpose |"
             done < <(find release-assets -maxdepth 1 -type f -printf '%f\n' | sort)
           } > RELEASE_ASSETS.md
       - name: Delete existing release assets
@@ -564,13 +743,33 @@ jobs:
         with:
           tag_name: v${{ needs.pre-build.outputs.wavry_version }}
           name: Wavry v${{ needs.pre-build.outputs.wavry_version }}
-          generate_release_notes: true
+          generate_release_notes: false
           allow_updates: true
-          prerelease: ${{ contains(needs.pre-build.outputs.wavry_version, 'canary') || contains(needs.pre-build.outputs.wavry_version, 'beta') || contains(needs.pre-build.outputs.wavry_version, 'unstable') }}
+          prerelease: ${{ needs.pre-build.outputs.is_prerelease == 'true' }}
           body: |
-            Wavry Core: v${{ needs.pre-build.outputs.wavry_version }}
-            RIFT Protocol: v${{ needs.pre-build.outputs.rift_version }}
-            DELTA CC: v${{ needs.pre-build.outputs.delta_version }}
+            ## Version Matrix
+            - **Wavry Core:** `v${{ needs.pre-build.outputs.wavry_version }}`
+            - **RIFT Protocol:** `v${{ needs.pre-build.outputs.rift_version }}`
+            - **DELTA Congestion Control:** `v${{ needs.pre-build.outputs.delta_version }}`
+
+            ## Asset Naming
+            All assets use explicit names:
+            `<component>-<variant>-<platform>-<arch>[.<ext>]`
+
+            ## Download Guide
+            - **Linux desktop:** download one of
+              - `wavry-desktop-tauri-linux-x64.AppImage` (portable)
+              - `wavry-desktop-tauri-linux-x64.deb` (Debian/Ubuntu)
+              - `wavry-desktop-tauri-linux-x64.rpm` (Fedora/RHEL)
+            - **Windows desktop:** `wavry-desktop-tauri-windows-x64.exe`
+            - **macOS desktop (Tauri):** `wavry-desktop-tauri-macos-arm64.dmg`
+            - **macOS desktop (Native Swift):** `wavry-desktop-native-macos-arm64.dmg`
+            - **Backend services:** `wavry-master-*`, `wavry-gateway-*`, `wavry-relay-*`, `wavry-server-*`
+            - **Android:** `wavry-mobile-android-arm64-release.apk`, `wavry-quest-android-arm64-release.apk`
+
+            ## Integrity and Catalog
+            - `SHA256SUMS.txt` contains checksums for every shipped file.
+            - `RELEASE_ASSETS.md` is the full labeled asset catalog.
           files: |
             release-assets/*
             SHA256SUMS.txt

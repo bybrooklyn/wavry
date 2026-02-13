@@ -75,6 +75,18 @@
         </div>
       {/if}
 
+      {#if appState.linuxRuntimeDiagnostics}
+        <p class="linux-runtime-text">
+          Linux runtime: {appState.linuxRuntimeDiagnostics.session_type.toUpperCase()} •
+          {appState.linuxRuntimeDiagnostics.required_video_source}
+        </p>
+        {#if appState.linuxRuntimeDiagnostics.recommendations.length > 0}
+          <p class="linux-runtime-warning">
+            {appState.linuxRuntimeDiagnostics.recommendations[0]}
+          </p>
+        {/if}
+      {/if}
+
       {#if appState.hostStatusMessage}
         <p class="status-text">{appState.hostStatusMessage}</p>
       {/if}
@@ -259,6 +271,18 @@
     margin-top: 8px;
     font-size: 11px;
     color: var(--colors-accent-success);
+  }
+
+  .linux-runtime-text {
+    margin-top: 8px;
+    font-size: 11px;
+    color: var(--colors-text-secondary);
+  }
+
+  .linux-runtime-warning {
+    margin-top: 6px;
+    font-size: 11px;
+    color: #f59e0b;
   }
 
   .error-text {

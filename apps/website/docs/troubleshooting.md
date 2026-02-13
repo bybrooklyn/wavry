@@ -66,6 +66,11 @@ Use this page as a first-pass runbook when sessions fail or degrade.
 2. Confirm Tauri dependencies and platform prerequisites.
 3. Validate that session start/stop commands are reflected in backend logs.
 4. Verify monitor/audio/input permissions in OS settings.
+5. Linux Wayland/KDE: if you see `Gdk-Message ... Error 71 (Protocol Error) dispatching to wayland display`:
+   - Wavry now applies Wayland-safe defaults automatically (no manual flags required):
+     `GDK_BACKEND=wayland`, `WINIT_UNIX_BACKEND=wayland`,
+     `WEBKIT_DISABLE_DMABUF_RENDERER=1`, and `WEBKIT_DISABLE_COMPOSITING_MODE=1`.
+6. On Linux host start failures, run `./scripts/linux-display-smoke.sh` and verify startup logs for Linux runtime diagnostics and missing plugin hints.
 
 ## 5. Relay Usage Is Unexpectedly High
 
@@ -105,6 +110,7 @@ Use this page as a first-pass runbook when sessions fail or degrade.
 ## Related Docs
 
 - [Getting Started](/getting-started)
+- [Linux and Wayland Support](/linux-wayland-support)
 - [Session Lifecycle](/lifecycle)
 - [Networking and Relay](/networking-and-relay)
 - [Operations](/operations)

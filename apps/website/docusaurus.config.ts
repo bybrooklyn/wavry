@@ -74,6 +74,12 @@ const config: Config = {
           label: 'Getting Started',
         },
         {
+          type: 'doc',
+          docId: 'linux-wayland-support',
+          position: 'left',
+          label: 'Linux + Wayland',
+        },
+        {
           to: '/pricing',
           label: 'Pricing',
           position: 'right',

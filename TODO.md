@@ -209,6 +209,11 @@ All infrastructure and core functionality is complete. Next phase focuses on new
 ### Platform Support
 - [ ] **iOS Client** - WebTransport or native app
 - [ ] **Full Wayland Support** - Proper xdg-desktop-portal integration
+  - [x] Wayland-first desktop runtime backend enforcement (`GDK_BACKEND`, `WINIT_UNIX_BACKEND`, WebKit safeguards)
+  - [x] Wayland capture error hardening with backend-specific portal hints
+  - [x] Linux startup preflight diagnostics for capture backend, encoder path, and plugin readiness
+  - [x] Linux monitor-aware host resolution selection (avoid fixed 1080p default)
+  - [ ] Add end-to-end Linux CI lane with virtualized Wayland compositor and portal permission flow
 - [ ] **HDR Capture** - Native HDR (HDR10, Dolby Vision)
 - [ ] **60fps+ Streaming** - Optimizations for 120fps+ displays
 

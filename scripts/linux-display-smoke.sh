@@ -84,6 +84,105 @@ check_any_gst_element() {
   fail "$label unavailable. Tried: $*"
 }
 
+check_any_user_service_active() {
+  local label="$1"
+  shift
+
+  if [[ "${WAVRY_PORTAL_SERVICE_MODE:-}" == "process" ]]; then
+    local candidate
+    for candidate in "$@"; do
+      local proc_name="${candidate%.service}"
+      if pgrep -x "$proc_name" >/dev/null 2>&1; then
+        pass "$label process active via: $proc_name"
+        return
+      fi
+    done
+    fail "$label process inactive. Tried: $*"
+    return
+  fi
+
+  if ! has_cmd "systemctl"; then
+    warn "systemctl not available; skipped $label service checks"
+    return
+  fi
+
+  local svc
+  for svc in "$@"; do
+    if systemctl --user is-active --quiet "$svc"; then
+      pass "$label service active via: $svc"
+      return
+    fi
+  done
+
+  fail "$label service inactive. Tried: $*"
+}
+
+portal_descriptor_exists() {
+  local descriptor="$1"
+  local roots=()
+
+  if [[ -n "${XDG_DATA_HOME:-}" ]]; then
+    roots+=("$XDG_DATA_HOME")
+  elif [[ -n "${HOME:-}" ]]; then
+    roots+=("$HOME/.local/share")
+  fi
+
+  if [[ -n "${XDG_DATA_DIRS:-}" ]]; then
+    IFS=':' read -r -a xdg_dirs <<<"$XDG_DATA_DIRS"
+    roots+=("${xdg_dirs[@]}")
+  else
+    roots+=("/usr/local/share" "/usr/share")
+  fi
+
+  local root
+  for root in "${roots[@]}"; do
+    [[ -z "$root" ]] && continue
+    if [[ -f "$root/xdg-desktop-portal/portals/$descriptor" ]]; then
+      return 0
+    fi
+  done
+  return 1
+}
+
+check_any_portal_descriptor() {
+  local label="$1"
+  shift
+
+  local descriptor
+  for descriptor in "$@"; do
+    if portal_descriptor_exists "$descriptor"; then
+      pass "$label descriptor present: $descriptor"
+      return
+    fi
+  done
+
+  fail "$label descriptor missing. Tried: $*"
+}
+
+expected_portal_descriptors_for_desktop() {
+  local desktop="${XDG_CURRENT_DESKTOP:-}"
+  desktop="$(echo "$desktop" | tr '[:upper:]' '[:lower:]')"
+
+  if [[ "$desktop" == *"kde"* || "$desktop" == *"plasma"* ]]; then
+    echo "kde.portal gtk.portal"
+    return
+  fi
+  if [[ "$desktop" == *"gnome"* || "$desktop" == *"unity"* || "$desktop" == *"cinnamon"* || "$desktop" == *"pantheon"* ]]; then
+    echo "gnome.portal gtk.portal"
+    return
+  fi
+  if [[ "$desktop" == *"hyprland"* ]]; then
+    echo "hyprland.portal wlr.portal gtk.portal"
+    return
+  fi
+  if [[ "$desktop" == *"sway"* || "$desktop" == *"wlroots"* || "$desktop" == *"river"* || "$desktop" == *"wayfire"* ]]; then
+    echo "wlr.portal gtk.portal"
+    return
+  fi
+
+  echo "kde.portal gnome.portal wlr.portal gtk.portal"
+}
+
 print_manual_matrix() {
   cat <<'EOF'
 
@@ -91,7 +190,7 @@ Manual runtime matrix (Wayland/X11):
 
 1. Start desktop app with logs:
    cd crates/wavry-desktop
-   RUST_LOG=info npm run tauri dev
+   RUST_LOG=info bun run tauri dev
 
 2. In Sessions -> Local Host:
    - Verify monitor dropdown is populated.
@@ -147,6 +246,7 @@ check_cmd "cargo"
 check_cmd "gst-inspect-1.0"
 check_cmd "xdg-desktop-portal"
 check_cmd "pw-cli"
+check_cmd "pactl"
 
 SESSION_TYPE="${XDG_SESSION_TYPE:-unknown}"
 WAYLAND_DISPLAY_VAR="${WAYLAND_DISPLAY:-}"
@@ -174,6 +274,20 @@ else
   warn "systemctl not available; skipped portal service health check"
 fi
 
+if [[ -n "$WAYLAND_DISPLAY_VAR" || "$SESSION_TYPE" == "wayland" ]]; then
+  expected_descriptors="$(expected_portal_descriptors_for_desktop)"
+  # shellcheck disable=SC2206
+  descriptor_list=($expected_descriptors)
+  check_any_portal_descriptor "Desktop portal backend" "${descriptor_list[@]}"
+
+  check_any_user_service_active "Desktop portal backend" \
+    "xdg-desktop-portal-gnome.service" \
+    "xdg-desktop-portal-kde.service" \
+    "xdg-desktop-portal-wlr.service" \
+    "xdg-desktop-portal-hyprland.service" \
+    "xdg-desktop-portal-gtk.service"
+fi
+
 check_gst_element "videoconvert"
 check_gst_element "videoscale"
 check_gst_element "queue"
@@ -191,6 +305,10 @@ if [[ -n "$X11_DISPLAY_VAR" ]]; then
   check_gst_element "ximagesrc"
   check_gst_element "videocrop"
 fi
+
+check_any_gst_element "Microphone source" \
+  "pulsesrc" \
+  "autoaudiosrc"
 
 check_any_gst_element "H264 encoder" \
   "vaapih264enc" \

@@ -14,6 +14,7 @@ const sidebars: SidebarsConfig = {
         'networking-and-relay',
         'configuration-reference',
         'desktop-app',
+        'linux-wayland-support',
       ],
     },
     {

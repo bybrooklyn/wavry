@@ -73,6 +73,11 @@ Desktop app config spans:
 
 The desktop UI maps these choices to runtime config passed into host/client processes.
 
+Linux desktop builds also expose runtime diagnostics commands:
+
+- `linux_runtime_health`: returns Linux session/backend/plugin diagnostics.
+- `linux_host_preflight(display_id)`: validates Linux host readiness and resolves the selected display + capture resolution before host start.
+
 ## Gateway and Relay
 
 Deployment configuration should define:

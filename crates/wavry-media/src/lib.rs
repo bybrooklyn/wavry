@@ -233,7 +233,8 @@ mod audio;
 
 #[cfg(target_os = "linux")]
 pub use linux::{
-    GstAudioRenderer, GstVideoRenderer, LinuxProbe, PipewireAudioCapturer, PipewireEncoder,
+    linux_runtime_diagnostics, GstAudioRenderer, GstVideoRenderer, LinuxProbe,
+    LinuxRuntimeDiagnostics, PipewireAudioCapturer, PipewireEncoder,
 };
 
 mod dummy;

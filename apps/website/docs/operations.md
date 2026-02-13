@@ -71,6 +71,16 @@ Plan for:
 - Backpressure and admission strategy
 - Regional failover/runbook procedures
 
+## Linux Fleet Operations
+
+For Linux host pools (especially Wayland hosts), standardize these controls:
+
+1. Pin compositor + portal backend versions by image.
+2. Pin GStreamer plugin sets and verify codec element availability before rollout.
+3. Monitor portal error rates (`xdg-desktop-portal`) and PipeWire health.
+4. Include `./scripts/linux-display-smoke.sh` in pre-release validation.
+5. Keep at least one KDE Wayland and one GNOME Wayland lane in release verification.
+
 ## Incident Management Suggestions
 
 - Maintain a severity rubric tied to user impact
@@ -90,3 +100,4 @@ Before major rollout:
 - [Troubleshooting](/troubleshooting)
 - [Security](/security)
 - [Configuration Reference](/configuration-reference)
+- [Linux and Wayland Support](/linux-wayland-support)

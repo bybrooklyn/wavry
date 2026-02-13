@@ -11,6 +11,31 @@ export interface DeltaConfig {
     epsilon_us: number;
 }
 
+interface LinuxRuntimeDiagnostics {
+    session_type: string;
+    wayland_display: boolean;
+    x11_display: boolean;
+    xdg_current_desktop: string | null;
+    expected_portal_backends: string[];
+    expected_portal_descriptors: string[];
+    available_portal_descriptors: string[];
+    missing_expected_portal_descriptors: string[];
+    required_video_source: string;
+    required_video_source_available: boolean;
+    available_audio_sources: string[];
+    available_h264_encoders: string[];
+    missing_gstreamer_elements: string[];
+    recommendations: string[];
+}
+
+interface LinuxHostPreflight {
+    requested_display_id: number | null;
+    selected_display_id: number;
+    selected_display_name: string;
+    selected_resolution: { width: number; height: number };
+    diagnostics: LinuxRuntimeDiagnostics;
+}
+
 export class AppState {
     displayName = $state("");
     connectivityMode = $state<"wavry" | "direct" | "custom">("wavry");
@@ -48,6 +73,8 @@ export class AppState {
     monitors = $state<{ id: number, name: string, resolution: { width: number, height: number } }[]>([]);
     selectedMonitorId = $state<number | null>(null);
     isLoadingMonitors = $state(false);
+    linuxRuntimeDiagnostics = $state<LinuxRuntimeDiagnostics | null>(null);
+    linuxPreflightSummary = $state("");
 
     // Resolution state
     resolutionMode = $state<"native" | "client" | "custom">("native");
@@ -84,6 +111,10 @@ export class AppState {
 
     private clamp(value: number, min: number, max: number): number {
         return Math.min(max, Math.max(min, value));
+    }
+
+    private isLinuxOnlyCommandError(message: string): boolean {
+        return message.toLowerCase().includes("only available on linux builds");
     }
 
     private sanitizeSettings() {
@@ -261,6 +292,7 @@ export class AppState {
         const parsedMonitor = storedMonitor == null ? null : Number(storedMonitor);
         this.selectedMonitorId = parsedMonitor != null && Number.isFinite(parsedMonitor) ? parsedMonitor : null;
         this.sanitizeSettings();
+        await this.refreshLinuxRuntimeHealth();
     }
 
     async register(details: any) {
@@ -363,11 +395,38 @@ export class AppState {
                 this.selectedMonitorId = list[0].id;
             }
             this.saveToStorage();
+            await this.refreshLinuxRuntimeHealth();
         } catch (e: unknown) {
             console.error("Failed to list monitors:", e);
             this.hostErrorMessage = `Failed to list monitors: ${this.normalizeError(e)}`;
         } finally {
             this.isLoadingMonitors = false;
+        }
+    }
+
+    async refreshLinuxRuntimeHealth() {
+        try {
+            const diagnostics = await invoke<LinuxRuntimeDiagnostics>("linux_runtime_health");
+            this.linuxRuntimeDiagnostics = diagnostics;
+        } catch (e: unknown) {
+            const message = this.normalizeError(e);
+            if (this.isLinuxOnlyCommandError(message)) return;
+            console.warn("Failed to load Linux runtime diagnostics:", message);
+        }
+    }
+
+    private async runLinuxHostPreflight(): Promise<LinuxHostPreflight | null> {
+        try {
+            const preflight = await invoke<LinuxHostPreflight>("linux_host_preflight", {
+                display_id: this.selectedMonitorId,
+            });
+            this.linuxRuntimeDiagnostics = preflight.diagnostics;
+            this.linuxPreflightSummary = `${preflight.selected_display_name} (${preflight.selected_resolution.width}x${preflight.selected_resolution.height})`;
+            return preflight;
+        } catch (e: unknown) {
+            const message = this.normalizeError(e);
+            if (this.isLinuxOnlyCommandError(message)) return null;
+            throw new Error(message);
         }
     }
 
@@ -427,6 +486,11 @@ export class AppState {
         this.hostStatusMessage = "Starting host...";
         this.isHostTransitioning = true;
         try {
+            const preflight = await this.runLinuxHostPreflight();
+            if (preflight) {
+                this.hostStatusMessage = `Linux preflight OK: ${this.linuxPreflightSummary}. Starting host...`;
+            }
+
             const backendMessage = await invoke<string>("start_host", {
                 port: this.hostPort,
                 display_id: this.selectedMonitorId,

@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::env;
 use std::fs;
 use std::os::fd::{AsRawFd, OwnedFd};
@@ -34,6 +35,296 @@ fn has_wayland_display() -> bool {
             env::var("XDG_SESSION_TYPE"),
             Ok(ref value) if value.eq_ignore_ascii_case("wayland")
         )
+}
+
+fn xdg_current_desktop() -> Option<String> {
+    env::var("XDG_CURRENT_DESKTOP")
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
+fn expected_portal_backends_from_desktop(desktop: Option<&str>) -> Vec<&'static str> {
+    let Some(desktop) = desktop else {
+        return vec![
+            "xdg-desktop-portal-kde",
+            "xdg-desktop-portal-gnome",
+            "xdg-desktop-portal-wlr",
+            "xdg-desktop-portal-gtk",
+        ];
+    };
+
+    let normalized = desktop.to_ascii_lowercase();
+    if normalized.contains("kde") || normalized.contains("plasma") {
+        return vec!["xdg-desktop-portal-kde", "xdg-desktop-portal-gtk"];
+    }
+    if normalized.contains("gnome")
+        || normalized.contains("unity")
+        || normalized.contains("cinnamon")
+        || normalized.contains("pantheon")
+    {
+        return vec!["xdg-desktop-portal-gnome", "xdg-desktop-portal-gtk"];
+    }
+    if normalized.contains("hyprland") {
+        return vec![
+            "xdg-desktop-portal-hyprland",
+            "xdg-desktop-portal-wlr",
+            "xdg-desktop-portal-gtk",
+        ];
+    }
+    if normalized.contains("sway")
+        || normalized.contains("wlroots")
+        || normalized.contains("river")
+        || normalized.contains("wayfire")
+    {
+        return vec!["xdg-desktop-portal-wlr", "xdg-desktop-portal-gtk"];
+    }
+    vec![
+        "xdg-desktop-portal-kde",
+        "xdg-desktop-portal-gnome",
+        "xdg-desktop-portal-wlr",
+        "xdg-desktop-portal-gtk",
+    ]
+}
+
+fn backend_to_portal_descriptor(backend: &str) -> Option<&'static str> {
+    match backend {
+        "xdg-desktop-portal-kde" => Some("kde.portal"),
+        "xdg-desktop-portal-gnome" => Some("gnome.portal"),
+        "xdg-desktop-portal-wlr" => Some("wlr.portal"),
+        "xdg-desktop-portal-hyprland" => Some("hyprland.portal"),
+        "xdg-desktop-portal-gtk" => Some("gtk.portal"),
+        _ => None,
+    }
+}
+
+fn portal_descriptor_search_roots() -> Vec<PathBuf> {
+    let mut roots = Vec::new();
+
+    if let Some(data_home) = env::var_os("XDG_DATA_HOME") {
+        roots.push(PathBuf::from(data_home));
+    } else if let Some(home) = env::var_os("HOME") {
+        roots.push(Path::new(&home).join(".local").join("share"));
+    }
+
+    if let Ok(data_dirs) = env::var("XDG_DATA_DIRS") {
+        for part in data_dirs.split(':') {
+            let trimmed = part.trim();
+            if !trimmed.is_empty() {
+                roots.push(PathBuf::from(trimmed));
+            }
+        }
+    } else {
+        roots.push(PathBuf::from("/usr/local/share"));
+        roots.push(PathBuf::from("/usr/share"));
+    }
+
+    roots
+}
+
+fn portal_descriptor_exists(descriptor_name: &str) -> bool {
+    portal_descriptor_search_roots().into_iter().any(|root| {
+        root.join("xdg-desktop-portal")
+            .join("portals")
+            .join(descriptor_name)
+            .is_file()
+    })
+}
+
+fn known_portal_descriptors() -> &'static [&'static str] {
+    &[
+        "kde.portal",
+        "gnome.portal",
+        "wlr.portal",
+        "hyprland.portal",
+        "gtk.portal",
+    ]
+}
+
+fn available_portal_descriptors() -> Vec<String> {
+    known_portal_descriptors()
+        .iter()
+        .copied()
+        .filter(|descriptor| portal_descriptor_exists(descriptor))
+        .map(str::to_string)
+        .collect()
+}
+
+fn portal_backend_hint_message() -> String {
+    let desktop = xdg_current_desktop();
+    let desktop_label = desktop.as_deref().unwrap_or("unknown desktop");
+    let expected = expected_portal_backends_from_desktop(desktop.as_deref()).join(", ");
+    format!(
+        "Desktop '{}': expected portal backend(s): {}",
+        desktop_label, expected
+    )
+}
+
+fn available_h264_encoder_candidates() -> Vec<String> {
+    hardware_encoder_candidates(Codec::H264)
+        .iter()
+        .chain(software_encoder_candidates(Codec::H264).iter())
+        .copied()
+        .filter(|name| element_available(name))
+        .map(str::to_string)
+        .collect()
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+pub struct LinuxRuntimeDiagnostics {
+    pub session_type: String,
+    pub wayland_display: bool,
+    pub x11_display: bool,
+    pub xdg_current_desktop: Option<String>,
+    pub expected_portal_backends: Vec<String>,
+    pub expected_portal_descriptors: Vec<String>,
+    pub available_portal_descriptors: Vec<String>,
+    pub missing_expected_portal_descriptors: Vec<String>,
+    pub required_video_source: String,
+    pub required_video_source_available: bool,
+    pub available_audio_sources: Vec<String>,
+    pub available_h264_encoders: Vec<String>,
+    pub missing_gstreamer_elements: Vec<String>,
+    pub recommendations: Vec<String>,
+}
+
+pub fn linux_runtime_diagnostics() -> Result<LinuxRuntimeDiagnostics> {
+    gst::init()?;
+
+    let wayland_display = has_wayland_display();
+    let x11_display = has_x11_display();
+    let session_type = if wayland_display {
+        "wayland"
+    } else if x11_display {
+        "x11"
+    } else {
+        "headless"
+    };
+
+    let xdg_desktop = xdg_current_desktop();
+    let expected_portal_backends_raw =
+        expected_portal_backends_from_desktop(xdg_desktop.as_deref());
+    let expected_portal_backends = expected_portal_backends_raw
+        .iter()
+        .copied()
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    let expected_portal_descriptors = expected_portal_backends_raw
+        .iter()
+        .filter_map(|backend| backend_to_portal_descriptor(backend))
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    let available_portal_descriptors = available_portal_descriptors();
+
+    let available_portal_descriptor_set = available_portal_descriptors
+        .iter()
+        .map(|value| value.as_str())
+        .collect::<BTreeSet<_>>();
+    let missing_expected_portal_descriptors = expected_portal_descriptors
+        .iter()
+        .filter(|descriptor| !available_portal_descriptor_set.contains(descriptor.as_str()))
+        .cloned()
+        .collect::<Vec<_>>();
+
+    let required_video_source = if wayland_display {
+        "pipewiresrc"
+    } else if x11_display {
+        "ximagesrc"
+    } else {
+        "none"
+    };
+    let required_video_source_available =
+        required_video_source == "none" || element_available(required_video_source);
+
+    let base_required = [
+        "videoconvert",
+        "videoscale",
+        "queue",
+        "appsink",
+        "audioconvert",
+        "audioresample",
+        "opusenc",
+    ];
+    let mut missing_gstreamer_elements = base_required
+        .iter()
+        .copied()
+        .filter(|name| !element_available(name))
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+
+    if !required_video_source_available {
+        missing_gstreamer_elements.push(required_video_source.to_string());
+    }
+    if x11_display && !element_available("videocrop") {
+        missing_gstreamer_elements.push("videocrop".to_string());
+    }
+
+    missing_gstreamer_elements.sort();
+    missing_gstreamer_elements.dedup();
+
+    let audio_source_candidates = ["pipewiresrc", "pulsesrc", "autoaudiosrc"];
+    let available_audio_sources = audio_source_candidates
+        .iter()
+        .copied()
+        .filter(|name| element_available(name))
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+
+    let available_h264_encoders = available_h264_encoder_candidates();
+
+    let mut recommendations = Vec::new();
+    if wayland_display {
+        recommendations.push(format!(
+            "Validate portal backend availability. {}",
+            portal_backend_hint_message()
+        ));
+        if !missing_expected_portal_descriptors.is_empty() {
+            recommendations.push(format!(
+                "Install missing portal backend descriptor(s): {}",
+                missing_expected_portal_descriptors.join(", ")
+            ));
+        }
+    }
+    if !required_video_source_available {
+        recommendations.push(format!(
+            "Install missing GStreamer video source plugin: {}",
+            required_video_source
+        ));
+    }
+    if available_audio_sources.is_empty() {
+        recommendations.push(
+            "Install an audio source plugin (pipewiresrc, pulsesrc, or autoaudiosrc).".to_string(),
+        );
+    }
+    if available_h264_encoders.is_empty() {
+        recommendations.push(
+            "Install at least one H264 encoder plugin (x264enc, openh264enc, VAAPI, NVENC, or V4L2)."
+                .to_string(),
+        );
+    }
+    if !missing_gstreamer_elements.is_empty() {
+        recommendations.push(format!(
+            "Install missing GStreamer elements: {}",
+            missing_gstreamer_elements.join(", ")
+        ));
+    }
+
+    Ok(LinuxRuntimeDiagnostics {
+        session_type: session_type.to_string(),
+        wayland_display,
+        x11_display,
+        xdg_current_desktop: xdg_desktop,
+        expected_portal_backends,
+        expected_portal_descriptors,
+        available_portal_descriptors,
+        missing_expected_portal_descriptors,
+        required_video_source: required_video_source.to_string(),
+        required_video_source_available,
+        available_audio_sources,
+        available_h264_encoders,
+        missing_gstreamer_elements,
+        recommendations,
+    })
 }
 
 fn clamp_portal_dim(dim: i32) -> u16 {
@@ -336,6 +627,15 @@ impl PipewireEncoder {
                 (pipeline_str, Some(fd))
             }
             Err(err) => {
+                if has_wayland_display() {
+                    let backend_hint = portal_backend_hint_message();
+                    return Err(anyhow!(
+                        "Wayland screencast portal failed: {}. Ensure xdg-desktop-portal + a desktop-specific portal backend are running, PipeWire is active, and screen capture permission is granted. {}",
+                        err,
+                        backend_hint
+                    ));
+                }
+
                 if has_x11_display() {
                     log::warn!(
                         "PipeWire portal failed, falling back to X11 capture: {}",
@@ -976,8 +1276,19 @@ impl crate::CapabilityProbe for LinuxProbe {
         if has_wayland_display() {
             match enumerate_wayland_displays() {
                 Ok(displays) if !displays.is_empty() => return Ok(displays),
-                Ok(_) => log::warn!("Wayland portal monitor probe returned no monitors"),
-                Err(err) => log::warn!("Wayland portal monitor probe failed: {}", err),
+                Ok(_) => {
+                    return Err(anyhow!(
+                        "Wayland session detected but portal monitor probe returned no displays. Check xdg-desktop-portal permissions and PipeWire session availability."
+                    ));
+                }
+                Err(err) => {
+                    let backend_hint = portal_backend_hint_message();
+                    return Err(anyhow!(
+                        "Wayland session detected but portal monitor probe failed: {}. Ensure xdg-desktop-portal (with desktop backend) and PipeWire are running. {}",
+                        err,
+                        backend_hint
+                    ));
+                }
             }
         }
 
@@ -1035,6 +1346,7 @@ async fn open_audio_portal_stream() -> Result<(OwnedFd, u32)> {
 #[cfg(test)]
 mod tests {
     use super::{
+        backend_to_portal_descriptor, expected_portal_backends_from_desktop,
         find_monitor_source_for_sink_from_sinks, find_sink_index_for_application_from_sink_inputs,
     };
 
@@ -1074,6 +1386,70 @@ Sink #4
         assert_eq!(
             source.as_deref(),
             Some("alsa_output.pci-0000_00_1f.3.analog-stereo.monitor")
+        );
+    }
+
+    #[test]
+    fn expected_portal_backends_match_kde() {
+        let backends = expected_portal_backends_from_desktop(Some("KDE"));
+        assert_eq!(
+            backends,
+            vec!["xdg-desktop-portal-kde", "xdg-desktop-portal-gtk"]
+        );
+    }
+
+    #[test]
+    fn expected_portal_backends_match_hyprland() {
+        let backends = expected_portal_backends_from_desktop(Some("Hyprland"));
+        assert_eq!(
+            backends,
+            vec![
+                "xdg-desktop-portal-hyprland",
+                "xdg-desktop-portal-wlr",
+                "xdg-desktop-portal-gtk"
+            ]
+        );
+    }
+
+    #[test]
+    fn expected_portal_backends_default_when_unknown() {
+        let backends = expected_portal_backends_from_desktop(Some("UnknownDesktop"));
+        assert_eq!(
+            backends,
+            vec![
+                "xdg-desktop-portal-kde",
+                "xdg-desktop-portal-gnome",
+                "xdg-desktop-portal-wlr",
+                "xdg-desktop-portal-gtk"
+            ]
+        );
+    }
+
+    #[test]
+    fn backend_descriptor_mapping_is_stable() {
+        assert_eq!(
+            backend_to_portal_descriptor("xdg-desktop-portal-kde"),
+            Some("kde.portal")
+        );
+        assert_eq!(
+            backend_to_portal_descriptor("xdg-desktop-portal-gnome"),
+            Some("gnome.portal")
+        );
+        assert_eq!(
+            backend_to_portal_descriptor("xdg-desktop-portal-wlr"),
+            Some("wlr.portal")
+        );
+        assert_eq!(
+            backend_to_portal_descriptor("xdg-desktop-portal-hyprland"),
+            Some("hyprland.portal")
+        );
+        assert_eq!(
+            backend_to_portal_descriptor("xdg-desktop-portal-gtk"),
+            Some("gtk.portal")
+        );
+        assert_eq!(
+            backend_to_portal_descriptor("xdg-desktop-portal-unknown"),
+            None
         );
     }
 }

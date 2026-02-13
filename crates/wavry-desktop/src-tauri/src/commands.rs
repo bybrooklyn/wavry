@@ -14,12 +14,133 @@ use wavry_media::MacProbe;
 #[cfg(target_os = "windows")]
 use wavry_media::WindowsProbe;
 #[cfg(target_os = "linux")]
-use wavry_media::{PipewireAudioCapturer, PipewireEncoder};
+use wavry_media::{linux_runtime_diagnostics, LinuxProbe, PipewireAudioCapturer, PipewireEncoder};
 
+#[cfg(target_os = "linux")]
+use serde::Serialize;
 use serde_json::json;
 use std::sync::atomic::Ordering;
 #[cfg(target_os = "linux")]
 use tokio::sync::{mpsc, oneshot};
+
+#[cfg(target_os = "linux")]
+#[derive(Debug, Clone, Serialize)]
+pub struct LinuxHostPreflight {
+    pub requested_display_id: Option<u32>,
+    pub selected_display_id: u32,
+    pub selected_display_name: String,
+    pub selected_resolution: wavry_media::Resolution,
+    pub diagnostics: wavry_media::LinuxRuntimeDiagnostics,
+}
+
+#[cfg(target_os = "linux")]
+fn sanitize_linux_capture_resolution(
+    resolution: wavry_media::Resolution,
+) -> wavry_media::Resolution {
+    // H.264 paths generally expect even dimensions; clamp to safe non-zero values.
+    let mut width = resolution.width.max(2);
+    let mut height = resolution.height.max(2);
+    if !width.is_multiple_of(2) {
+        width = width.saturating_sub(1).max(2);
+    }
+    if !height.is_multiple_of(2) {
+        height = height.saturating_sub(1).max(2);
+    }
+    wavry_media::Resolution { width, height }
+}
+
+#[cfg(target_os = "linux")]
+fn select_linux_display(
+    displays: &[wavry_media::DisplayInfo],
+    requested_id: Option<u32>,
+) -> Result<wavry_media::DisplayInfo, String> {
+    if displays.is_empty() {
+        return Err(
+            "No Linux displays are available for host capture. On Wayland, ensure portal permission is granted."
+                .to_string(),
+        );
+    }
+
+    if let Some(requested_id) = requested_id {
+        if let Some(display) = displays.iter().find(|display| display.id == requested_id) {
+            return Ok(display.clone());
+        }
+        let fallback = displays[0].clone();
+        log::warn!(
+            "Requested Linux display id {} unavailable; falling back to id {} ({})",
+            requested_id,
+            fallback.id,
+            fallback.name
+        );
+        return Ok(fallback);
+    }
+
+    Ok(displays[0].clone())
+}
+
+#[cfg(target_os = "linux")]
+fn linux_host_preflight_impl(
+    requested_display_id: Option<u32>,
+) -> Result<LinuxHostPreflight, String> {
+    let diagnostics = linux_runtime_diagnostics().map_err(|e| {
+        format!(
+            "Linux runtime diagnostics failed before host start: {}. Run ./scripts/linux-display-smoke.sh",
+            e
+        )
+    })?;
+
+    if !diagnostics.required_video_source_available {
+        let missing = if diagnostics.missing_gstreamer_elements.is_empty() {
+            "unknown".to_string()
+        } else {
+            diagnostics.missing_gstreamer_elements.join(", ")
+        };
+        return Err(format!(
+            "Missing Linux video capture backend '{}' (missing elements: {}). {}",
+            diagnostics.required_video_source,
+            missing,
+            diagnostics
+                .recommendations
+                .first()
+                .cloned()
+                .unwrap_or_else(
+                    || "Install Linux desktop capture dependencies and retry.".to_string()
+                )
+        ));
+    }
+
+    if diagnostics.available_h264_encoders.is_empty() {
+        return Err(
+            "No Linux H264 encoders detected. Install x264enc/openh264enc or hardware encoders (VAAPI/NVENC/V4L2)."
+                .to_string(),
+        );
+    }
+
+    let probe = LinuxProbe;
+    let displays = probe
+        .enumerate_displays()
+        .map_err(|e| format!("Linux display enumeration failed: {}", e))?;
+    let selected_display = select_linux_display(&displays, requested_display_id)?;
+
+    let selected_resolution = sanitize_linux_capture_resolution(selected_display.resolution);
+    if selected_resolution != selected_display.resolution {
+        log::warn!(
+            "Adjusted Linux display resolution {}x{} -> {}x{} for encoder compatibility",
+            selected_display.resolution.width,
+            selected_display.resolution.height,
+            selected_resolution.width,
+            selected_resolution.height
+        );
+    }
+
+    Ok(LinuxHostPreflight {
+        requested_display_id,
+        selected_display_id: selected_display.id,
+        selected_display_name: selected_display.name,
+        selected_resolution,
+        diagnostics,
+    })
+}
 
 #[tauri::command]
 pub async fn set_cc_config(config: rift_core::cc::DeltaConfig) -> Result<(), String> {
@@ -347,12 +468,36 @@ pub async fn list_monitors() -> Result<Vec<wavry_media::DisplayInfo>, String> {
     #[cfg(target_os = "windows")]
     let probe = WindowsProbe;
     #[cfg(target_os = "linux")]
-    let probe = wavry_media::LinuxProbe;
+    let probe = LinuxProbe;
 
     #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
     probe
         .enumerate_displays()
         .map_err(|e: anyhow::Error| e.to_string())
+}
+
+#[cfg(target_os = "linux")]
+#[tauri::command]
+pub fn linux_runtime_health() -> Result<wavry_media::LinuxRuntimeDiagnostics, String> {
+    linux_runtime_diagnostics().map_err(|e: anyhow::Error| e.to_string())
+}
+
+#[cfg(not(target_os = "linux"))]
+#[tauri::command]
+pub fn linux_runtime_health() -> Result<serde_json::Value, String> {
+    Err("Linux runtime health is only available on Linux builds".to_string())
+}
+
+#[cfg(target_os = "linux")]
+#[tauri::command]
+pub fn linux_host_preflight(display_id: Option<u32>) -> Result<LinuxHostPreflight, String> {
+    linux_host_preflight_impl(display_id)
+}
+
+#[cfg(not(target_os = "linux"))]
+#[tauri::command]
+pub fn linux_host_preflight(_display_id: Option<u32>) -> Result<serde_json::Value, String> {
+    Err("Linux host preflight is only available on Linux builds".to_string())
 }
 
 #[tauri::command]
@@ -556,6 +701,16 @@ pub async fn start_host(port: u16, display_id: Option<u32>) -> Result<String, St
         }
     }
 
+    let preflight = linux_host_preflight_impl(display_id)?;
+
+    log::info!(
+        "Linux host capture using display id {} '{}' at {}x{}",
+        preflight.selected_display_id,
+        preflight.selected_display_name,
+        preflight.selected_resolution.width,
+        preflight.selected_resolution.height
+    );
+
     let (cc_tx, mut cc_rx) = mpsc::unbounded_channel::<rift_core::cc::DeltaConfig>();
     let current_bitrate = Arc::new(AtomicU32::new(8000));
     let cc_state_shared = Arc::new(Mutex::new("Stable".to_string()));
@@ -574,14 +729,11 @@ pub async fn start_host(port: u16, display_id: Option<u32>) -> Result<String, St
 
     let config = EncodeConfig {
         codec: Codec::H264,
-        resolution: Resolution {
-            width: 1920,
-            height: 1080,
-        },
+        resolution: preflight.selected_resolution,
         fps: 60,
         bitrate_kbps: 8000,
         keyframe_interval_ms: 2000,
-        display_id,
+        display_id: Some(preflight.selected_display_id),
         enable_10bit: false,
         enable_hdr: false,
     };
@@ -891,4 +1043,50 @@ pub async fn start_host(port: u16, display_id: Option<u32>) -> Result<String, St
 #[tauri::command]
 pub async fn start_host(_port: u16, _display_id: Option<u32>) -> Result<String, String> {
     Err("Host not fully implemented for this platform in refactored version yet".into())
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod tests {
+    use super::{sanitize_linux_capture_resolution, select_linux_display};
+
+    fn display(id: u32, name: &str, width: u16, height: u16) -> wavry_media::DisplayInfo {
+        wavry_media::DisplayInfo {
+            id,
+            name: name.to_string(),
+            resolution: wavry_media::Resolution { width, height },
+        }
+    }
+
+    #[test]
+    fn sanitize_linux_capture_resolution_evenizes_and_clamps() {
+        let sanitized = sanitize_linux_capture_resolution(wavry_media::Resolution {
+            width: 1,
+            height: 719,
+        });
+        assert_eq!(sanitized.width, 2);
+        assert_eq!(sanitized.height, 718);
+    }
+
+    #[test]
+    fn select_linux_display_prefers_requested_when_present() {
+        let displays = vec![
+            display(0, "Primary", 1920, 1080),
+            display(2, "Secondary", 2560, 1440),
+        ];
+        let selected =
+            select_linux_display(&displays, Some(2)).expect("display should be selected");
+        assert_eq!(selected.id, 2);
+        assert_eq!(selected.name, "Secondary");
+    }
+
+    #[test]
+    fn select_linux_display_falls_back_to_first_when_missing() {
+        let displays = vec![
+            display(0, "Primary", 1920, 1080),
+            display(1, "Secondary", 2560, 1440),
+        ];
+        let selected = select_linux_display(&displays, Some(99)).expect("fallback should succeed");
+        assert_eq!(selected.id, 0);
+        assert_eq!(selected.name, "Primary");
+    }
 }

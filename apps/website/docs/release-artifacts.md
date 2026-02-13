@@ -1,51 +1,101 @@
 ---
 title: Release Artifacts
-description: Exactly what files ship in a Wavry release and how to identify each one.
+description: Human-readable catalog for every file in a Wavry release, with clear labels and install intent.
 ---
 
-Wavry release assets follow a strict naming format so each file is immediately identifiable.
+This page is the canonical release file catalog.
 
-## Naming Format
+If you are looking at a GitHub release and unsure what to download, start here.
 
-`<component>-<platform>-<arch>[.<ext>]`
+## Quick Download Guide
+
+| If You Need | Download This File | Why |
+|---|---|---|
+| Linux desktop (portable) | `wavry-desktop-tauri-linux-x64.AppImage` | Runs without system package install |
+| Linux desktop (Debian/Ubuntu) | `wavry-desktop-tauri-linux-x64.deb` | Native package install via APT/dpkg |
+| Linux desktop (Fedora/RHEL) | `wavry-desktop-tauri-linux-x64.rpm` | Native package install via DNF/RPM |
+| Windows desktop | `wavry-desktop-tauri-windows-x64.exe` | Desktop app executable |
+| macOS desktop (Tauri) | `wavry-desktop-tauri-macos-arm64.dmg` | Tauri app DMG package |
+| macOS desktop (Native Swift) | `wavry-desktop-native-macos-arm64.dmg` | Native Swift app DMG package |
+| Gateway API service | `wavry-gateway-<platform>-<arch>[.exe]` | Control plane service |
+| Relay service | `wavry-relay-<platform>-<arch>[.exe]` | UDP relay service |
+| Host runtime service | `wavry-server-<platform>-<arch>[.exe]` | Host runtime for capture/stream |
+| Android mobile app | `wavry-mobile-android-arm64-release.apk` | Mobile Android client |
+| Android Quest app | `wavry-quest-android-arm64-release.apk` | Quest client |
+
+## Naming Rules
+
+Every release file uses:
+
+`<component>-<variant>-<platform>-<arch>[.<ext>]`
 
 Examples:
 
 - `wavry-gateway-linux-x64`
 - `wavry-server-windows-x64.exe`
-- `wavry-desktop-tauri-macos-arm64.dmg`
-- `wavry-mobile-android-arm64-release.apk`
-
-## What Is Included
-
-### Backend services
-
-- `wavry-master-*` (coordination service)
-- `wavry-gateway-*` (auth + control plane API)
-- `wavry-relay-*` (traffic relay)
-- `wavry-server-*` (host runtime)
-
-### Desktop apps
-
-- `wavry-desktop-tauri-linux-x64`
-- `wavry-desktop-tauri-windows-x64.exe`
-- `wavry-desktop-tauri-macos-arm64.dmg`
+- `wavry-desktop-tauri-linux-x64.deb`
 - `wavry-desktop-native-macos-arm64.dmg`
 
-### Android apps
+## Full Asset Catalog
 
-- `wavry-mobile-android-arm64-release.apk`
-- `wavry-quest-android-arm64-release.apk`
+| File Pattern | Category | Platform | Architecture | Purpose |
+|---|---|---|---|---|
+| `wavry-master-<platform>-<arch>[.exe]` | Backend Service | Linux/macOS/Windows | x64/arm64 | Master coordination service binary |
+| `wavry-gateway-<platform>-<arch>[.exe]` | Backend Service | Linux/macOS/Windows | x64/arm64 | Gateway control-plane API service |
+| `wavry-relay-<platform>-<arch>[.exe]` | Backend Service | Linux/macOS/Windows | x64/arm64 | Relay forwarding service |
+| `wavry-server-<platform>-<arch>[.exe]` | Backend Service | Linux/macOS/Windows | x64/arm64 | Host runtime service |
+| `wavry-desktop-tauri-linux-x64.AppImage` | Desktop App | Linux | x64 | Portable Linux desktop package |
+| `wavry-desktop-tauri-linux-x64.deb` | Desktop App | Linux | x64 | Debian/Ubuntu package |
+| `wavry-desktop-tauri-linux-x64.rpm` | Desktop App | Linux | x64 | Fedora/RHEL package |
+| `wavry-desktop-tauri-windows-x64.exe` | Desktop App | Windows | x64 | Windows desktop executable |
+| `wavry-desktop-tauri-macos-arm64.dmg` | Desktop App | macOS | arm64 | Tauri desktop DMG |
+| `wavry-desktop-native-macos-arm64.dmg` | Desktop App | macOS | arm64 | Native Swift desktop DMG |
+| `wavry-mobile-android-arm64-release.apk` | Android App | Android | arm64 | Mobile client APK |
+| `wavry-quest-android-arm64-release.apk` | Android App | Android (Quest) | arm64 | Quest client APK |
+| `SHA256SUMS.txt` | Integrity | All | n/a | SHA-256 checksums for all shipped files |
+| `RELEASE_ASSETS.md` | Metadata | All | n/a | Machine-generated labeled release manifest |
 
-### Integrity/metadata files
+## Linux Package Install Notes
 
-- `SHA256SUMS.txt`
-- `RELEASE_ASSETS.md`
+### AppImage
 
-## What Is Not Included
+```bash
+chmod +x wavry-desktop-tauri-linux-x64.AppImage
+./wavry-desktop-tauri-linux-x64.AppImage
+```
 
-- CI intermediate artifacts
-- debug binaries
-- local-only `dist/` helper files
+### Debian/Ubuntu
 
-If required release assets are missing, the CI release job fails before publication.
+```bash
+sudo dpkg -i wavry-desktop-tauri-linux-x64.deb
+sudo apt-get install -f
+```
+
+### Fedora/RHEL
+
+```bash
+sudo dnf install ./wavry-desktop-tauri-linux-x64.rpm
+```
+
+## What Should Never Be in a Release
+
+- CI intermediary directories
+- `target/` tree dumps
+- Debug binaries
+- Build cache content
+- Temporary helper files
+
+## Integrity Verification
+
+```bash
+sha256sum -c SHA256SUMS.txt
+```
+
+If any file does not verify, discard the artifact and redownload.
+
+## Related Docs
+
+- [Getting Started](/getting-started)
+- [Desktop App](/desktop-app)
+- [Linux and Wayland Support](/linux-wayland-support)
+- [Operations](/operations)

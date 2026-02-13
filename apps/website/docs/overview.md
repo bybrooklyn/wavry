@@ -6,6 +6,8 @@ slug: /
 
 Wavry is a low-latency remote compute platform built for sessions where responsiveness matters more than static image quality.
 
+Wavry is engineered to provide **the best Wayland support on the market** for latency-sensitive remote desktop and streaming workloads.
+
 It is designed for:
 
 - Remote desktop control where input delay is unacceptable
@@ -61,6 +63,16 @@ Wavry is not intended to be:
 | `wavry-gateway` | Signaling and coordination APIs |
 | `wavry-relay` | Encrypted UDP relay fallback |
 | `wavry-desktop` | Desktop UX and operator controls |
+
+## Linux and Wayland Position
+
+Linux is a first-class target for Wavry, with a native Wayland-first path for capture and desktop runtime behavior.
+
+- Wayland host capture runs through portal + PipeWire.
+- Desktop runtime on Wayland enforces native backend defaults to avoid mixed-backend instability.
+- X11 remains supported for legacy Linux sessions.
+
+Read the full Linux implementation guide in [Linux and Wayland Support](/linux-wayland-support).
 
 ## Licensing and Commercial Use
 

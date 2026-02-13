@@ -48,6 +48,18 @@ Typical outputs by platform:
 - Linux: distro-appropriate bundles
 - macOS: app bundle and disk image workflow
 
+## Linux Runtime Behavior (Wayland and X11)
+
+Wavry desktop treats Linux as a first-class runtime target.
+
+- On Wayland sessions, Wavry enforces native runtime backends (`GDK_BACKEND=wayland`, `WINIT_UNIX_BACKEND=wayland`) and conservative WebKit flags for stability.
+- On X11 sessions, Wavry uses the X11 desktop path.
+- Host display capture on Wayland uses the portal + PipeWire flow.
+- Linux host startup runs preflight checks (capture backend, encoder availability) and aligns encode resolution to the chosen monitor.
+- The host card surfaces Linux runtime diagnostics and first-action recommendations directly in the UI.
+
+For full setup and compatibility detail, see [Linux and Wayland Support](/linux-wayland-support).
+
 ## Production Validation Checklist
 
 1. Launch packaged app on a clean environment.
@@ -66,5 +78,6 @@ If packaged app loads a localhost error, confirm:
 ## Related Docs
 
 - [Getting Started](/getting-started)
+- [Linux and Wayland Support](/linux-wayland-support)
 - [Troubleshooting](/troubleshooting)
 - [Operations](/operations)
