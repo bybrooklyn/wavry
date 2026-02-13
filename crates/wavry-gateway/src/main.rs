@@ -61,7 +61,7 @@ async fn health(State(state): State<AppState>) -> impl IntoResponse {
 async fn prometheus_metrics(State(state): State<AppState>) -> impl IntoResponse {
     let active_ws_connections = state.connections.read().await.len();
     let active_relay_sessions = state.relay_sessions.read().await.len();
-    
+
     let prometheus_text = format!(
         r#"# HELP wavry_gateway_websocket_connections Active WebSocket connections
 # TYPE wavry_gateway_websocket_connections gauge
@@ -73,14 +73,13 @@ wavry_gateway_relay_sessions {active_relay_sessions}
         active_ws_connections = active_ws_connections,
         active_relay_sessions = active_relay_sessions,
     );
-    
+
     (
         StatusCode::OK,
         [(header::CONTENT_TYPE, "text/plain; version=0.0.4")],
         prometheus_text,
     )
 }
-
 
 async fn global_api_rate_limit(req: Request<axum::body::Body>, next: middleware::Next) -> Response {
     let path = req.uri().path();

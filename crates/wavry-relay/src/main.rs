@@ -1100,7 +1100,7 @@ async fn relay_metrics(State(state): State<RelayHttpState>) -> impl IntoResponse
 async fn relay_metrics_prometheus(State(state): State<RelayHttpState>) -> impl IntoResponse {
     let snapshot = state.server.metrics.snapshot();
     let relay_id = &state.server.relay_id;
-    
+
     let prometheus_text = format!(
         r#"# HELP wavry_relay_packets_rx Total packets received
 # TYPE wavry_relay_packets_rx counter
@@ -1197,7 +1197,7 @@ wavry_relay_uptime_seconds{{relay_id="{relay_id}"}} {uptime_seconds}
         active_sessions = 0, // Will be computed below
         uptime_seconds = state.server.started_at.elapsed().as_secs(),
     );
-    
+
     (
         StatusCode::OK,
         [("Content-Type", "text/plain; version=0.0.4")],
@@ -1376,7 +1376,7 @@ async fn main() -> Result<()> {
             }
         }
     });
-    
+
     // Setup graceful shutdown handler
     let shutdown_server = server.clone();
     tokio::spawn(async move {
@@ -1398,7 +1398,7 @@ async fn main() -> Result<()> {
             }
         }
     });
-    
+
     server.run().await
 }
 

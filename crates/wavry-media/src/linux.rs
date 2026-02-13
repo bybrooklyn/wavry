@@ -212,12 +212,12 @@ fn detect_compositor_name() -> Option<String> {
         }
         return Some(format!("Wayland ({})", compositor));
     }
-    
+
     // X11 fallback
     if env::var("DISPLAY").is_ok() {
         return Some("X11".to_string());
     }
-    
+
     None
 }
 
@@ -387,10 +387,13 @@ pub fn linux_runtime_diagnostics() -> Result<LinuxRuntimeDiagnostics> {
     let compositor_name = detect_compositor_name();
     let pipewire_running = check_pipewire_running();
     let portal_service_running = check_portal_service_running();
-    
+
     // Add recommendations for missing services
     if wayland_display && !pipewire_running {
-        recommendations.push("PipeWire service is not running. Start it with 'systemctl --user start pipewire'.".to_string());
+        recommendations.push(
+            "PipeWire service is not running. Start it with 'systemctl --user start pipewire'."
+                .to_string(),
+        );
     }
     if wayland_display && !portal_service_running {
         recommendations.push("xdg-desktop-portal service is not running. Start it or install the portal backend for your desktop environment.".to_string());
