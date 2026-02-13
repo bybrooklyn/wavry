@@ -78,8 +78,8 @@ Last updated: 2026-02-13
 
 - [ ] Finalize and enforce macOS client strategy: Swift-only or dual-client; remove conflicting CI/release paths.
 - [ ] Define supported platform matrix and support policy (stable/beta/experimental) in docs.
-- [ ] Define release channels and versioning policy (`stable`, `canary`, internal `unstable`) and enforce in scripts/workflows.
-- [ ] Create a strict release checklist and gate publishing on checklist completion.
+- [x] Define release channels and versioning policy (`stable`, `canary`, internal `unstable`) and enforce in scripts/workflows.
+- [x] Create a strict release checklist and gate publishing on checklist completion.
 
 ## Priority 2: Performance + Reliability Roadmap
 

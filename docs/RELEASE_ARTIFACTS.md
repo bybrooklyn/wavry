@@ -2,6 +2,10 @@
 
 This document defines the files attached to GitHub releases and the naming rules.
 
+See also:
+- `docs/RELEASE_POLICY.md`
+- `docs/RELEASE_CHECKLIST.md`
+
 ## Naming Convention
 
 Artifact filenames are intentionally explicit:

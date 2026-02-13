@@ -703,6 +703,9 @@ jobs:
             echo "No release assets were collected." >&2
             exit 1
           fi
+      - name: Verify release checklist (tag pushes)
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: ./scripts/verify-release-checklist.sh
       - name: Checksums
         shell: bash
         run: |
