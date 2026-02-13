@@ -54,6 +54,16 @@ Alert examples:
 - handshake failures spike above normal envelope
 - direct-path ratio sharply drops after rollout
 
+## Control-Plane Operating Discipline
+
+For gateway/master/relay operations:
+
+1. Keep lease/signing key status visible in dashboards.
+2. Track relay state distribution (`Active`, `Draining`, `Probation`) over time.
+3. Alert on relay rejection reason spikes (signature mismatch, wrong relay id, expired lease).
+4. Keep an explicit drain-and-recover runbook for unstable relays.
+5. Treat gateway auth/signal errors as user-impacting indicators.
+
 ## Runbook: Daily
 
 1. Confirm control-plane container health.
@@ -111,6 +121,15 @@ Keep headroom and avoid running near steady-state capacity ceilings.
 4. Capture root cause with precise timeline.
 5. Assign follow-up fixes with owners and due dates.
 
+## Monthly Reliability Drills
+
+Run at least one rehearsal per month:
+
+1. relay drain/recover drill in non-production
+2. master restart and readiness validation
+3. gateway restart and auth/signal continuity validation
+4. rollback drill using previous known-good release tags/images
+
 ## Backup and Recovery
 
 Minimum recommendations:
@@ -122,6 +141,7 @@ Minimum recommendations:
 ## Related Docs
 
 - [Docker Control Plane](/docker-control-plane)
+- [Control Plane Deep Dive](/control-plane-deep-dive)
 - [Security](/security)
 - [Troubleshooting](/troubleshooting)
 - [Runbooks and Checklists](/runbooks-and-checklists)

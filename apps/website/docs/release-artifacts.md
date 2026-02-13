@@ -104,6 +104,7 @@ If any file does not verify, discard the artifact and redownload.
 
 - [Getting Started](/getting-started)
 - [Desktop App](/desktop-app)
+- [Versioning and Release Policy](/versioning-and-release-policy)
 - [Docker Control Plane](/docker-control-plane)
 - [Linux and Wayland Support](/linux-wayland-support)
 - [Operations](/operations)

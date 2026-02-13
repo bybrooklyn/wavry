@@ -109,15 +109,28 @@ wait_for_pid() {
 
 cleanup() {
   local code=$?
+  set +e
+
+  # Stop named processes in reverse startup order so portal-backed sockets
+  # release cleanly before deleting the runtime directory.
+  for name in portal portal_gtk weston wireplumber pipewire; do
+    local pid="${NAMED_PIDS[$name]:-}"
+    if [[ -n "$pid" ]] && kill -0 "$pid" >/dev/null 2>&1; then
+      kill "$pid" >/dev/null 2>&1 || true
+      wait "$pid" >/dev/null 2>&1 || true
+    fi
+  done
 
   for pid in "${PIDS[@]:-}"; do
     if kill -0 "$pid" >/dev/null 2>&1; then
       kill "$pid" >/dev/null 2>&1 || true
+      wait "$pid" >/dev/null 2>&1 || true
     fi
   done
 
   if [[ -n "$DBUS_PID" ]] && kill -0 "$DBUS_PID" >/dev/null 2>&1; then
     kill "$DBUS_PID" >/dev/null 2>&1 || true
+    wait "$DBUS_PID" >/dev/null 2>&1 || true
   fi
 
   if [[ "$code" -ne 0 ]]; then
@@ -130,7 +143,20 @@ cleanup() {
     done
   fi
 
-  rm -rf "$TMP_DIR"
+  # xdg-desktop-portal may keep the document portal mount busy briefly.
+  if [[ -n "${XDG_RUNTIME_DIR:-}" && -d "$XDG_RUNTIME_DIR/doc" ]]; then
+    if command -v mountpoint >/dev/null 2>&1 && mountpoint -q "$XDG_RUNTIME_DIR/doc"; then
+      if command -v fusermount >/dev/null 2>&1; then
+        fusermount -u "$XDG_RUNTIME_DIR/doc" >/dev/null 2>&1 || true
+      fi
+      umount -l "$XDG_RUNTIME_DIR/doc" >/dev/null 2>&1 || true
+    fi
+    rm -rf "$XDG_RUNTIME_DIR/doc" >/dev/null 2>&1 || true
+  fi
+
+  if ! rm -rf "$TMP_DIR" >/dev/null 2>&1; then
+    echo "[WARN] Failed to fully remove temporary runtime dir: $TMP_DIR" >&2
+  fi
   exit "$code"
 }
 

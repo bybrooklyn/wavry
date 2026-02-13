@@ -1688,8 +1688,8 @@ where
     F: FnMut() -> Fut,
     Fut: Future<Output = Result<T>>,
 {
-    const MAX_ATTEMPTS: usize = 3;
-    const BASE_DELAY_MS: u64 = 500;
+    const MAX_ATTEMPTS: usize = 4;
+    const BASE_DELAY_MS: u64 = 350;
 
     let mut last_err = None;
     for attempt in 1..=MAX_ATTEMPTS {
@@ -1712,11 +1712,27 @@ where
         }
     }
     let err = last_err.unwrap_or_else(|| anyhow!("unknown portal error"));
+    let mut hints = Vec::new();
+    if has_wayland_display() {
+        if !check_portal_service_running() {
+            hints.push("xdg-desktop-portal process not detected".to_string());
+        }
+        if !check_pipewire_running() {
+            hints.push("PipeWire process not detected".to_string());
+        }
+        hints.push(portal_backend_hint_message());
+    }
+    let hint_suffix = if hints.is_empty() {
+        String::new()
+    } else {
+        format!(" Guidance: {}", hints.join(" | "))
+    };
     Err(anyhow!(
-        "Portal {} failed after {} attempts. Check permissions and portal availability: {}",
+        "Portal {} failed after {} attempts. Check permissions and portal availability: {}.{}",
         label,
         MAX_ATTEMPTS,
-        err
+        err,
+        hint_suffix
     ))
 }
 

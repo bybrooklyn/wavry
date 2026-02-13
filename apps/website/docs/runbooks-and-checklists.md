@@ -48,6 +48,8 @@ Use this page as a practical checklist hub.
 4. verify runtime backend behavior on KDE and GNOME lanes
 5. capture and track failure matrix outcomes
 
+If recurring Linux failures occur, use [Linux Production Playbook](/linux-production-playbook) as the primary escalation document.
+
 ## Change Approval Checklist
 
 Before rolling out high-impact changes:
@@ -75,6 +77,13 @@ Recover a quarantined relay:
 3. run packet-path smoke checks (lease + forward)
 4. set relay state back to `Probation` first, then `Active` after stability window
 
+## Release Channel Checklist
+
+1. confirm target version follows policy (`stable` or `-canary` prerelease for public tags)
+2. ensure `-unstable` builds are not pushed as public release tags
+3. validate release artifact names are platform/arch labeled
+4. verify `SHA256SUMS.txt` and release manifest are present
+
 ## Master Signing Key Rotation Runbook
 
 1. provision new signing key material and choose a new `WAVRY_MASTER_KEY_ID`
@@ -87,6 +96,8 @@ Recover a quarantined relay:
 ## Related Docs
 
 - [Operations](/operations)
+- [Control Plane Deep Dive](/control-plane-deep-dive)
 - [Troubleshooting](/troubleshooting)
 - [Linux and Wayland Support](/linux-wayland-support)
+- [Linux Production Playbook](/linux-production-playbook)
 - [Docker Control Plane](/docker-control-plane)

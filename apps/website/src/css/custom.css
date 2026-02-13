@@ -40,6 +40,7 @@
 
   --doc-border: rgba(135, 190, 205, 0.24);
   --doc-surface: #0d2835;
+  --doc-surface-alt: #0b2230;
   --doc-shadow: 0 12px 34px rgba(0, 0, 0, 0.32);
 
   --docusaurus-highlighted-code-line-bg: rgba(110, 208, 222, 0.14);
@@ -52,6 +53,11 @@ body {
 
 html {
   scroll-behavior: smooth;
+}
+
+::selection {
+  background: rgba(123, 230, 242, 0.28);
+  color: #edf9ff;
 }
 
 .navbar {
@@ -68,6 +74,7 @@ html {
 .navbar__link:hover,
 .navbar__link--active {
   color: #b9f4fa;
+  background: transparent;
 }
 
 .navbar-pricing-button .navbar__link {
@@ -88,20 +95,26 @@ html {
 
 .footer {
   border-top: 1px solid rgba(135, 190, 205, 0.24);
+  background: var(--ifm-footer-background-color);
 }
 
 .footer__links {
   margin-bottom: 0.8rem;
+  width: 100%;
 }
 
 .footer__links .row {
   max-width: 1100px;
   margin: 0 auto;
   justify-content: center;
+  text-align: center;
 }
 
 .footer__col {
   min-width: 220px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
 }
 
 .footer__title {
@@ -203,7 +216,22 @@ html {
 .markdown pre {
   border: 1px solid var(--doc-border);
   box-shadow: var(--doc-shadow);
-  background: #0b2230;
+  background: var(--doc-surface-alt);
+}
+
+.theme-doc-markdown .card,
+.card {
+  background: var(--doc-surface);
+  border: 1px solid var(--doc-border);
+  box-shadow: var(--doc-shadow);
+}
+
+.theme-doc-markdown .card a {
+  color: var(--ifm-link-color);
+}
+
+.theme-doc-markdown .card a:hover {
+  color: var(--ifm-link-hover-color);
 }
 
 .theme-doc-sidebar-container {
@@ -231,6 +259,14 @@ html {
 }
 
 @media (max-width: 996px) {
+  .navbar__toggle {
+    display: none !important;
+  }
+
+  .navbar__items--left {
+    display: none !important;
+  }
+
   .theme-doc-sidebar-container {
     border-right: none;
   }
@@ -257,6 +293,7 @@ html {
     display: flex;
     margin-left: auto;
     gap: 0.4rem;
+    flex-wrap: wrap;
   }
 
   .navbar__items--right .navbar__item {

@@ -95,6 +95,24 @@ cargo run --bin wavry-client -- --connect 127.0.0.1:0
 
 Use Docker for gateway/relay in production.
 
+## Dynamic Port Allocation
+
+Wavry supports dynamic bind allocation to reduce collisions with common local ports.
+
+Examples:
+
+- host runtime: `--listen 0.0.0.0:0`
+- relay: `--listen 0.0.0.0:0 --health-listen 127.0.0.1:0`
+- gateway bind fallback: automatic fallback to random local port when configured bind is already in use
+
+For scripted local stacks, use the provisioning helper:
+
+```bash
+./scripts/provision-infrastructure.sh ./secrets
+```
+
+This script allocates free TCP/UDP ports and exports consistent environment values.
+
 ## Gateway API Surface
 
 From `crates/wavry-gateway/src/main.rs`:
@@ -180,6 +198,7 @@ Treat these flags as development-only unless a security review approves their us
 
 ## Related Docs
 
+- [Control Plane Deep Dive](/control-plane-deep-dive)
 - [Configuration Reference](/configuration-reference)
 - [Environment Variable Reference](/environment-variable-reference)
 - [Network Ports and Firewall](/network-ports-and-firewall)

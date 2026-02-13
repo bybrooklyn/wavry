@@ -5,6 +5,7 @@
 # Last updated: 2026-02-13
 FROM lukemathwalker/cargo-chef:latest-rust-1-bookworm@sha256:68c8f8b92cca1647e7622e8d76754b922412915e556e687d797667171fd7ef23 AS chef-base
 WORKDIR /app
+ENV CARGO_TARGET_DIR=/app/target
 
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt,sharing=locked \
@@ -28,7 +29,16 @@ COPY . .
 RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
     --mount=type=cache,target=/usr/local/cargo/git,sharing=locked \
     --mount=type=cache,target=/app/target,sharing=locked \
-    cargo build --locked --release -p wavry-gateway --bin wavry-gateway
+    cargo build --locked --release -p wavry-gateway --bin wavry-gateway && \
+    mkdir -p /out && \
+    if [ -x /app/target/release/wavry-gateway ]; then \
+      install -m 0755 /app/target/release/wavry-gateway /out/wavry-gateway; \
+    elif [ -x /app/crates/target/release/wavry-gateway ]; then \
+      install -m 0755 /app/crates/target/release/wavry-gateway /out/wavry-gateway; \
+    else \
+      echo "wavry-gateway binary not found in expected Cargo target directories" >&2; \
+      exit 1; \
+    fi
 
 # Runtime base image pinned by digest for security
 # Tag: debian:bookworm-slim
@@ -42,7 +52,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && useradd --system --create-home --home-dir /var/lib/wavry --shell /usr/sbin/nologin wavry
 
 WORKDIR /var/lib/wavry
-COPY --from=builder /app/target/release/wavry-gateway /usr/local/bin/wavry-gateway
+COPY --from=builder /out/wavry-gateway /usr/local/bin/wavry-gateway
 COPY docker/gateway-entrypoint.sh /usr/local/bin/gateway-entrypoint.sh
 RUN chmod +x /usr/local/bin/gateway-entrypoint.sh
 

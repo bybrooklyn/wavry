@@ -191,6 +191,11 @@ jobs:
             gstreamer1.0-plugins-base \
             gstreamer1.0-plugins-good \
             gstreamer1.0-plugins-bad
+          for optional_pkg in pipewire-bin pipewire-pulse pulseaudio; do
+            if apt-cache show "$optional_pkg" >/dev/null 2>&1; then
+              sudo apt-get install -y "$optional_pkg"
+            fi
+          done
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
       - name: Wayland runtime smoke

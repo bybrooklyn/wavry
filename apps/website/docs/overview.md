@@ -6,6 +6,8 @@ slug: /
 
 Wavry is a low-latency remote compute stack for sessions where input responsiveness matters more than perfect visual smoothness.
 
+In practical terms, Wavry is software for running and controlling remote desktop/game/app sessions with encrypted transport, Linux-first runtime behavior, and an operator-owned control plane.
+
 Wavry is engineered with a Linux-first runtime model and aims to provide best-in-class Wayland behavior for interactive workloads.
 
 ## What Wavry Includes
@@ -17,6 +19,8 @@ Wavry is a full stack, not just a desktop UI:
 - `wavry-server` and `wavry-client`: host/client runtime loops
 - `wavry-desktop`: desktop control surface (Linux and Windows Tauri, macOS native Swift release)
 - Control plane services (`gateway`, `relay`) distributed as Docker images
+
+Wavry is not a passive video CDN or buffered media playback stack. It is designed for interactive control and low-latency input round-trip.
 
 ## What Ships in Releases
 
@@ -64,6 +68,7 @@ Pick a path based on your role:
 | Linux operator | [Linux and Wayland Support](/linux-wayland-support) | [Operations](/operations), [Troubleshooting](/troubleshooting) |
 | Platform engineer | [Architecture](/architecture) | [Configuration Reference](/configuration-reference), [Security](/security) |
 | Infra/DevOps | [Docker Control Plane](/docker-control-plane) | [Operations](/operations), [Runbooks and Checklists](/runbooks-and-checklists) |
+| Control-plane owner | [Control Plane Deep Dive](/control-plane-deep-dive) | [Docker Control Plane](/docker-control-plane), [Versioning and Release Policy](/versioning-and-release-policy) |
 | Commercial evaluator | [Deployment Modes](/deployment-modes) | [Pricing](/pricing), [FAQ](/faq) |
 | New contributor | [Codebase Reference](/codebase-reference) | [Developer Workflows](/developer-workflows), [Internal Design Docs](/internal-design-docs) |
 
@@ -85,8 +90,8 @@ See [Deployment Modes](/deployment-modes), [Pricing](/pricing), and [LICENSE](ht
 3. [Architecture](/architecture)
 4. [Session Lifecycle](/lifecycle)
 5. [Linux and Wayland Support](/linux-wayland-support)
-6. [Security](/security)
-7. [Operations](/operations)
-8. [Troubleshooting](/troubleshooting)
-9. [Codebase Reference](/codebase-reference)
-10. [Environment Variable Reference](/environment-variable-reference)
+6. [Linux Production Playbook](/linux-production-playbook)
+7. [Security](/security)
+8. [Control Plane Deep Dive](/control-plane-deep-dive)
+9. [Operations](/operations)
+10. [Troubleshooting](/troubleshooting)

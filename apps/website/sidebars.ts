@@ -8,6 +8,7 @@ const sidebars: SidebarsConfig = {
     'installation-and-prerequisites',
     'codebase-reference',
     'runtime-and-service-reference',
+    'control-plane-deep-dive',
     'environment-variable-reference',
     'developer-workflows',
     'internal-design-docs',
@@ -24,6 +25,7 @@ const sidebars: SidebarsConfig = {
         'configuration-reference',
         'desktop-app',
         'linux-wayland-support',
+        'linux-production-playbook',
       ],
     },
     {
@@ -36,6 +38,7 @@ const sidebars: SidebarsConfig = {
         'docker-control-plane',
         'network-ports-and-firewall',
         'observability-and-alerting',
+        'versioning-and-release-policy',
         'upgrade-and-rollback',
         'pricing',
         'security',

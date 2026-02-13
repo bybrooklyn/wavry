@@ -27,6 +27,8 @@ Then determine if failure is primarily:
 - client runtime (receive/decode/render/input)
 - network path (direct route vs relay fallback)
 
+If control-plane behavior is unclear, use [Control Plane Deep Dive](/control-plane-deep-dive) for expected service interactions and failure boundaries.
+
 ## 1. Cannot Establish Session
 
 Symptoms:
@@ -102,6 +104,8 @@ Linux Wayland/KDE note:
 
 - if `Gdk-Message ... Error 71 (Protocol Error) dispatching to wayland display` appears, run Linux preflight and confirm portal/compositor health.
 
+Use [Linux Production Playbook](/linux-production-playbook) for recovery sequencing and hardening guidance.
+
 ## 5. Linux Capture and Portal Failures
 
 Checks:
@@ -154,5 +158,7 @@ When escalating an issue, provide:
 
 - [Getting Started](/getting-started)
 - [Operations](/operations)
+- [Control Plane Deep Dive](/control-plane-deep-dive)
 - [Linux and Wayland Support](/linux-wayland-support)
+- [Linux Production Playbook](/linux-production-playbook)
 - [Security](/security)

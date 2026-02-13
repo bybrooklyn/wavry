@@ -692,7 +692,7 @@ pub async fn start_host(port: u16, display_id: Option<u32>) -> Result<String, St
     use std::sync::{Arc, Mutex};
     use std::thread;
     use wavry_client::signaling::{SignalMessage, SignalingClient};
-    use wavry_media::{Codec, EncodeConfig, Resolution};
+    use wavry_media::{Codec, EncodeConfig};
 
     {
         let state = SESSION_STATE.lock().unwrap();
