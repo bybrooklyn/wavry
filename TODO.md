@@ -83,7 +83,7 @@ Last updated: 2026-02-13
 
 ## Priority 2: Performance + Reliability Roadmap
 
-- [ ] Add adaptive resolution/bandwidth control roadmap with concrete milestones.
+- [x] Add adaptive resolution/bandwidth control roadmap with concrete milestones.
 - [ ] Add end-to-end latency budget instrumentation and reporting.
 - [ ] Add long-session memory stability tests and leak detection automation.
 - [ ] Add reconnect/migration test cases for unstable network conditions.
