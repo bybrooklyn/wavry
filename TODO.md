@@ -17,8 +17,8 @@ Last updated: 2026-02-13
 - [x] Generate and publish checksums (`SHA256SUMS`) for every release artifact.
 - [x] Generate and publish a machine-readable release manifest (`release-manifest.json`) listing file name, platform, arch, and checksum.
 - [x] Remove unnecessary release artifacts from CI upload/publish jobs.
-- [ ] Fix macOS desktop artifact workflow to handle missing DMG directories safely without failing unrelated jobs.
-- [ ] Confirm no macOS Tauri release artifacts are produced if Swift-only macOS policy is adopted.
+- [x] Fix macOS desktop artifact workflow to handle missing DMG directories safely without failing unrelated jobs.
+- [x] Confirm no macOS Tauri release artifacts are produced if Swift-only macOS policy is adopted.
 
 ## Priority 0: Control Plane (Master + Relay + Auth)
 

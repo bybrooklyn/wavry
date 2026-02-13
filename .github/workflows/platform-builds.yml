@@ -482,15 +482,22 @@ jobs:
       - name: Build
         run: ./scripts/build-macos.sh release
       - name: Validate app bundle safety
+        id: validate_bundle
         shell: bash
         run: |
           set -euo pipefail
           app_path="dist/Wavry.app"
           
           if [[ ! -d "$app_path" ]]; then
+            if [[ "${GITHUB_EVENT_NAME}" == "pull_request" ]]; then
+              echo "::warning::Native macOS app bundle not found at $app_path. Skipping DMG packaging for pull request validation."
+              echo "bundle_present=false" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
             echo "Native macOS app bundle not found at $app_path" >&2
             exit 1
           fi
+          echo "bundle_present=true" >> "$GITHUB_OUTPUT"
           
           # Check for suspicious symlinks that could cause path traversal
           echo "Checking for suspicious symlinks in app bundle..."
@@ -536,6 +543,7 @@ jobs:
           
           echo "App bundle validation passed"
       - name: Stage
+        if: steps.validate_bundle.outputs.bundle_present == 'true'
         shell: bash
         run: |
           mkdir -p ci-artifacts/macos-app
@@ -547,10 +555,14 @@ jobs:
             -format UDZO \
             "ci-artifacts/macos-app/wavry-desktop-native-macos-arm64.dmg"
       - name: Upload
+        if: steps.validate_bundle.outputs.bundle_present == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: macos-app-v${{ needs.pre-build.outputs.wavry_version }}
           path: ci-artifacts/macos-app/
+      - name: Skip upload (no app bundle)
+        if: steps.validate_bundle.outputs.bundle_present != 'true'
+        run: echo "Skipping macOS DMG artifact upload because no validated app bundle was produced."
 
   release:
     name: Create Release
