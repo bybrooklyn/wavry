@@ -76,8 +76,8 @@ Last updated: 2026-02-13
 
 ## Priority 1: Product/Platform Decisions
 
-- [ ] Finalize and enforce macOS client strategy: Swift-only or dual-client; remove conflicting CI/release paths.
-- [ ] Define supported platform matrix and support policy (stable/beta/experimental) in docs.
+- [x] Finalize and enforce macOS client strategy: Swift-only or dual-client; remove conflicting CI/release paths.
+- [x] Define supported platform matrix and support policy (stable/beta/experimental) in docs.
 - [x] Define release channels and versioning policy (`stable`, `canary`, internal `unstable`) and enforce in scripts/workflows.
 - [x] Create a strict release checklist and gate publishing on checklist completion.
 
