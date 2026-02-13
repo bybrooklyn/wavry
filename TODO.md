@@ -41,7 +41,7 @@ Last updated: 2026-02-13
 
 ## Priority 1: Linux-First Product Quality
 
-- [ ] Expand Linux-specific diagnostics to include compositor, portal service status, PipeWire session state, and encoder availability.
+- [x] Expand Linux-specific diagnostics to include compositor, portal service status, PipeWire session state, and encoder availability.
 - [ ] Implement Linux integration tests that exercise real capture paths (Wayland portal + PipeWire) in CI or nightly runners.
 - [ ] Improve Linux input parity and edge-case handling (gamepad hotplug, key mapping edge cases, clipboard behavior).
 - [ ] Improve Linux audio routing coverage with explicit tests for default/mic/app routes.

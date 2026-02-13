@@ -132,6 +132,34 @@ check_any_user_service_active() {
   fail "$label service inactive. Tried: $*"
 }
 
+detect_compositor() {
+  if [[ -n "${WAYLAND_DISPLAY:-}" || "${XDG_SESSION_TYPE:-}" == "wayland" ]]; then
+    if pgrep -x kwin_wayland >/dev/null 2>&1; then
+      echo "KWin (KDE Plasma)"
+      return
+    fi
+    if pgrep -x gnome-shell >/dev/null 2>&1; then
+      echo "GNOME Shell (Mutter)"
+      return
+    fi
+    if pgrep -x sway >/dev/null 2>&1; then
+      echo "Sway"
+      return
+    fi
+    if pgrep -x Hyprland >/dev/null 2>&1; then
+      echo "Hyprland"
+      return
+    fi
+    echo "Wayland (${WAYLAND_DISPLAY:-unknown})"
+    return
+  fi
+  if [[ -n "${DISPLAY:-}" ]]; then
+    echo "X11"
+    return
+  fi
+  echo "unknown"
+}
+
 portal_descriptor_exists() {
   local descriptor="$1"
   local roots=()
@@ -281,6 +309,34 @@ if [[ -n "$X11_DISPLAY_VAR" ]]; then
   pass "X11 DISPLAY detected ($X11_DISPLAY_VAR)"
 else
   warn "X11 DISPLAY not detected"
+fi
+
+COMPOSITOR_NAME="$(detect_compositor)"
+if [[ "$COMPOSITOR_NAME" == "unknown" ]]; then
+  warn "Compositor could not be determined from environment/processes"
+else
+  pass "Compositor detected: $COMPOSITOR_NAME"
+fi
+
+if has_cmd "systemctl"; then
+  if systemctl --user is-active --quiet pipewire.service; then
+    pass "PipeWire service is active"
+  else
+    warn "PipeWire service not active (or no user systemd session)"
+  fi
+  if systemctl --user is-active --quiet wireplumber.service; then
+    pass "WirePlumber service is active"
+  else
+    warn "WirePlumber service not active (PipeWire policy service may be unavailable)"
+  fi
+else
+  warn "systemctl not available; skipped PipeWire service health checks"
+fi
+
+if pw-cli info 0 >/dev/null 2>&1; then
+  pass "PipeWire session core is reachable via pw-cli"
+else
+  warn "PipeWire session core not reachable via pw-cli"
 fi
 
 if has_cmd "systemctl"; then

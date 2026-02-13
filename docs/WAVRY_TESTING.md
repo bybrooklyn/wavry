@@ -110,6 +110,12 @@ cargo build -p wavry-server -p wavry-client
 ./scripts/linux-display-smoke.sh
 ```
 
+This smoke script now captures Linux runtime diagnostics for:
+- compositor/session detection (KDE/GNOME/Sway/Hyprland/Wayland/X11)
+- portal service/backend presence (`xdg-desktop-portal` + backend descriptors/services)
+- PipeWire process/session health (`pipewire`, `wireplumber`, `pw-cli info 0`)
+- encoder and source availability (for example `pipewiresrc`, `ximagesrc`, H264 encoders)
+
 **Manual Validation:**
 ```bash
 # Launch Desktop with Logs
