@@ -56,6 +56,7 @@ docker run -d \
 | `WAVRY_RELAY_MASTER_PUBLIC_KEY` | None | Ed25519 public key (hex) from Master |
 | `WAVRY_RELAY_MASTER_TOKEN` | None | Bearer token for authenticated relay register/heartbeat requests |
 | `WAVRY_RELAY_ALLOW_PUBLIC_BIND` | `0` | Allow binding to public IPs (required in production) |
+| `WAVRY_RELAY_ALLOW_HOST_PROD_BIND` | `0` | Override Docker-first policy and allow non-container production bind (not supported) |
 | `WAVRY_RELAY_ALLOW_INSECURE_DEV` | `0` | Skip signature validation (dev only, never use in prod) |
 | `WAVRY_RELAY_REGION` | None | Geographic region (e.g., `us-east-1`, `eu-west-1`) |
 | `WAVRY_RELAY_ASN` | None | Autonomous System Number |

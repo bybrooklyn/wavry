@@ -136,16 +136,27 @@ fn env_bool(name: &str, default: bool) -> bool {
     }
 }
 
+fn running_in_container() -> bool {
+    std::path::Path::new("/.dockerenv").exists()
+        || std::path::Path::new("/run/.containerenv").exists()
+        || std::env::var_os("container").is_some()
+}
+
 fn check_public_bind_allowed(addr: SocketAddr) -> anyhow::Result<()> {
     if addr.ip().is_loopback() {
         return Ok(());
     }
-    if env_bool("WAVRY_ALLOW_PUBLIC_BIND", false) {
-        return Ok(());
+    if !env_bool("WAVRY_ALLOW_PUBLIC_BIND", false) {
+        return Err(anyhow::anyhow!(
+            "refusing non-loopback bind without WAVRY_ALLOW_PUBLIC_BIND=1"
+        ));
     }
-    Err(anyhow::anyhow!(
-        "refusing non-loopback bind without WAVRY_ALLOW_PUBLIC_BIND=1"
-    ))
+    if !running_in_container() && !env_bool("WAVRY_GATEWAY_ALLOW_HOST_PROD_BIND", false) {
+        return Err(anyhow::anyhow!(
+            "non-loopback gateway bind outside containers is unsupported for production; run via container or set WAVRY_GATEWAY_ALLOW_HOST_PROD_BIND=1 for local override"
+        ));
+    }
+    Ok(())
 }
 
 fn ws_signaling_url_for_bound_addr(bound_addr: SocketAddr) -> String {

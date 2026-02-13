@@ -125,6 +125,12 @@ fn env_bool(name: &str, default: bool) -> bool {
     }
 }
 
+fn running_in_container() -> bool {
+    std::path::Path::new("/.dockerenv").exists()
+        || std::path::Path::new("/run/.containerenv").exists()
+        || std::env::var_os("container").is_some()
+}
+
 fn with_master_auth(
     request: reqwest::RequestBuilder,
     master_auth_token: Option<&str>,
@@ -1303,15 +1309,17 @@ async fn serve_health_http(server: Arc<RelayServer>, listen: SocketAddr) -> Resu
 #[tokio::main]
 async fn main() -> Result<()> {
     let args = Args::parse();
-    if !args.listen.ip().is_loopback() && !env_bool("WAVRY_RELAY_ALLOW_PUBLIC_BIND", false) {
-        return Err(anyhow::anyhow!(
-            "refusing non-loopback relay bind without WAVRY_RELAY_ALLOW_PUBLIC_BIND=1"
-        ));
-    }
-    if !args.health_listen.ip().is_loopback() && !env_bool("WAVRY_RELAY_ALLOW_PUBLIC_BIND", false) {
-        return Err(anyhow::anyhow!(
-            "refusing non-loopback relay health bind without WAVRY_RELAY_ALLOW_PUBLIC_BIND=1"
-        ));
+    if !args.listen.ip().is_loopback() || !args.health_listen.ip().is_loopback() {
+        if !env_bool("WAVRY_RELAY_ALLOW_PUBLIC_BIND", false) {
+            return Err(anyhow::anyhow!(
+                "refusing non-loopback relay bind without WAVRY_RELAY_ALLOW_PUBLIC_BIND=1"
+            ));
+        }
+        if !running_in_container() && !env_bool("WAVRY_RELAY_ALLOW_HOST_PROD_BIND", false) {
+            return Err(anyhow::anyhow!(
+                "non-loopback relay bind outside containers is unsupported for production; run via container or set WAVRY_RELAY_ALLOW_HOST_PROD_BIND=1 for local override"
+            ));
+        }
     }
     let filter = format!("{},hyper=warn,tokio=warn", args.log_level);
     tracing_subscriber::fmt().with_env_filter(filter).init();

@@ -58,10 +58,13 @@ docker run -d \
 |----------|---------|-------------|
 | `DATABASE_URL` | `sqlite:gateway.db` | Database connection string |
 | `WAVRY_GATEWAY_ALLOW_PUBLIC_BIND` | `0` | Allow binding to public IPs |
+| `WAVRY_GATEWAY_ALLOW_HOST_PROD_BIND` | `0` | Override Docker-first policy and allow non-container production bind (not supported) |
 | `WAVRY_ADMIN_TOKEN` | None | Admin dashboard authentication token |
 | `WAVRY_TOTP_ENCRYPTION_KEY` | Generated | Base64-encoded 32-byte key for TOTP secret encryption |
 | `ALLOWED_ORIGINS` | Localhost only | Comma-separated CORS origins |
 | `WAVRY_GATEWAY_RELAY_PORT` | `0` (random) | Internal relay server port |
+| `WAVRY_GATEWAY_RELAY_ALLOW_PUBLIC_BIND` | `0` | Allow non-loopback UDP relay bind |
+| `WAVRY_GATEWAY_RELAY_ALLOW_HOST_PROD_BIND` | `0` | Override Docker-first policy for non-container UDP relay bind (not supported) |
 | `WAVRY_RELAY_SESSION_TTL_SECS` | `300` | Relay session timeout |
 | `WAVRY_RELAY_SESSION_LIMIT` | `4096` | Maximum concurrent relay sessions |
 | `RUST_LOG` | `wavry_gateway=info` | Logging level |
@@ -540,4 +543,3 @@ echo "Backup completed: gateway-$DATE.tar.gz.gpg"
 - **Documentation:** https://github.com/bybrooklyn/wavry/tree/main/docs
 - **Issues:** https://github.com/bybrooklyn/wavry/issues
 - **Email:** support@wavry.dev
-

@@ -38,6 +38,12 @@ const BAN_DURATION: Duration = Duration::from_secs(300);
 
 pub type RelayMap = Arc<RwLock<HashMap<String, RelaySession>>>;
 
+fn running_in_container() -> bool {
+    std::path::Path::new("/.dockerenv").exists()
+        || std::path::Path::new("/run/.containerenv").exists()
+        || std::env::var_os("container").is_some()
+}
+
 struct IpRateLimiter {
     counts: HashMap<std::net::IpAddr, (u64, Instant)>,
     max_pps: u64,
@@ -150,6 +156,21 @@ pub async fn run_relay_server(port: u16, state: RelayMap) -> Result<()> {
         if !parsed.ip().is_loopback() && !allow_public {
             return Err(anyhow::anyhow!(
                 "refusing non-loopback gateway relay bind without WAVRY_GATEWAY_RELAY_ALLOW_PUBLIC_BIND=1"
+            ));
+        }
+        if !parsed.ip().is_loopback()
+            && !running_in_container()
+            && !std::env::var("WAVRY_GATEWAY_RELAY_ALLOW_HOST_PROD_BIND")
+                .map(|v| {
+                    matches!(
+                        v.trim().to_ascii_lowercase().as_str(),
+                        "1" | "true" | "yes" | "on"
+                    )
+                })
+                .unwrap_or(false)
+        {
+            return Err(anyhow::anyhow!(
+                "non-loopback gateway relay bind outside containers is unsupported for production; run via container or set WAVRY_GATEWAY_RELAY_ALLOW_HOST_PROD_BIND=1 for local override"
             ));
         }
     }

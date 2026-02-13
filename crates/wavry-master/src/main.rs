@@ -323,6 +323,12 @@ fn ws_origin_allowed(headers: &HeaderMap) -> bool {
     })
 }
 
+fn running_in_container() -> bool {
+    std::path::Path::new("/.dockerenv").exists()
+        || std::path::Path::new("/run/.containerenv").exists()
+        || std::env::var_os("container").is_some()
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let args = Args::parse();
@@ -332,10 +338,17 @@ async fn main() -> anyhow::Result<()> {
         .listen
         .parse()
         .map_err(|e| anyhow!("invalid --listen address: {e}"))?;
-    if !listen_addr.ip().is_loopback() && !env_bool("WAVRY_MASTER_ALLOW_PUBLIC_BIND", false) {
-        return Err(anyhow!(
-            "refusing non-loopback master bind without WAVRY_MASTER_ALLOW_PUBLIC_BIND=1"
-        ));
+    if !listen_addr.ip().is_loopback() {
+        if !env_bool("WAVRY_MASTER_ALLOW_PUBLIC_BIND", false) {
+            return Err(anyhow!(
+                "refusing non-loopback master bind without WAVRY_MASTER_ALLOW_PUBLIC_BIND=1"
+            ));
+        }
+        if !running_in_container() && !env_bool("WAVRY_MASTER_ALLOW_HOST_PROD_BIND", false) {
+            return Err(anyhow!(
+                "non-loopback master bind outside containers is unsupported for production; run via container or set WAVRY_MASTER_ALLOW_HOST_PROD_BIND=1 for local override"
+            ));
+        }
     }
 
     #[cfg(feature = "insecure-dev-auth")]
