@@ -31,6 +31,7 @@ const DEFAULT_IDLE_TIMEOUT_SECS: u64 = 60;
 const DEFAULT_LEASE_DURATION_SECS: u64 = 300;
 const DEFAULT_CLEANUP_INTERVAL_SECS: u64 = 10;
 const DEFAULT_IP_RATE_LIMIT_PPS: u64 = 1000;
+const DEFAULT_IDENTITY_RATE_LIMIT_PPS: u64 = 200;
 const DEFAULT_STATS_LOG_INTERVAL_SECS: u64 = 30;
 const DEFAULT_LOAD_SHED_THRESHOLD_PCT: u8 = 95;
 const DEFAULT_HEALTH_LISTEN: &str = "127.0.0.1:9091";
@@ -79,8 +80,20 @@ struct Args {
     log_level: String,
 
     /// Per-source-IP packet rate limit (packets/sec)
-    #[arg(long, default_value_t = DEFAULT_IP_RATE_LIMIT_PPS)]
+    #[arg(
+        long,
+        env = "WAVRY_RELAY_IP_RATE_LIMIT_PPS",
+        default_value_t = DEFAULT_IP_RATE_LIMIT_PPS
+    )]
     ip_rate_limit_pps: u64,
+
+    /// Per-identity lease registration rate limit (requests/sec)
+    #[arg(
+        long,
+        env = "WAVRY_RELAY_IDENTITY_RATE_LIMIT_PPS",
+        default_value_t = DEFAULT_IDENTITY_RATE_LIMIT_PPS
+    )]
+    identity_rate_limit_pps: u64,
 
     /// Session cleanup interval in seconds
     #[arg(long, default_value_t = DEFAULT_CLEANUP_INTERVAL_SECS)]
@@ -232,6 +245,41 @@ impl IpRateLimiter {
     }
 }
 
+/// Per-identity lease registration rate limiter to prevent noisy identity churn.
+///
+/// Uses the same fixed-window policy as IP rate limiting.
+struct IdentityRateLimiter {
+    counts: HashMap<String, (u64, std::time::Instant)>,
+    max_pps: u64,
+    window: Duration,
+}
+
+impl IdentityRateLimiter {
+    fn new(max_pps: u64) -> Self {
+        Self {
+            counts: HashMap::new(),
+            max_pps,
+            window: Duration::from_secs(1),
+        }
+    }
+
+    fn check(&mut self, identity: &str) -> bool {
+        let now = std::time::Instant::now();
+        let entry = self.counts.entry(identity.to_string()).or_insert((0, now));
+        if now.duration_since(entry.1) > self.window {
+            *entry = (0, now);
+        }
+        entry.0 += 1;
+        entry.0 <= self.max_pps
+    }
+
+    fn cleanup(&mut self) {
+        let now = std::time::Instant::now();
+        self.counts
+            .retain(|_, (_, start)| now.duration_since(*start) < self.window * 2);
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 struct LeaseClaims {
     #[serde(rename = "sub")]
@@ -265,6 +313,7 @@ struct RelayMetrics {
     lease_renew_packets: AtomicU64,
     dropped_packets: AtomicU64,
     rate_limited_packets: AtomicU64,
+    identity_rate_limited_packets: AtomicU64,
     invalid_packets: AtomicU64,
     auth_reject_packets: AtomicU64,
     session_not_found_packets: AtomicU64,
@@ -290,6 +339,7 @@ struct RelayMetricsSnapshot {
     lease_renew_packets: u64,
     dropped_packets: u64,
     rate_limited_packets: u64,
+    identity_rate_limited_packets: u64,
     invalid_packets: u64,
     auth_reject_packets: u64,
     session_not_found_packets: u64,
@@ -316,6 +366,9 @@ impl RelayMetrics {
             lease_renew_packets: self.lease_renew_packets.load(Ordering::Relaxed),
             dropped_packets: self.dropped_packets.load(Ordering::Relaxed),
             rate_limited_packets: self.rate_limited_packets.load(Ordering::Relaxed),
+            identity_rate_limited_packets: self
+                .identity_rate_limited_packets
+                .load(Ordering::Relaxed),
             invalid_packets: self.invalid_packets.load(Ordering::Relaxed),
             auth_reject_packets: self.auth_reject_packets.load(Ordering::Relaxed),
             session_not_found_packets: self.session_not_found_packets.load(Ordering::Relaxed),
@@ -356,6 +409,7 @@ struct RelayServer {
     socket: UdpSocket,
     sessions: RwLock<SessionPool>,
     ip_limiter: RwLock<IpRateLimiter>,
+    identity_limiter: RwLock<IdentityRateLimiter>,
     max_sessions: usize,
     load_shed_threshold_pct: u8,
     lease_duration: Duration,
@@ -380,6 +434,7 @@ impl RelayServer {
         stats_log_interval: Duration,
         load_shed_threshold_pct: u8,
         ip_rate_limit_pps: u64,
+        identity_rate_limit_pps: u64,
         master_key_hex: Option<&str>,
         registration_master_key: Option<&[u8]>,
         expected_master_key_id: Option<String>,
@@ -413,6 +468,7 @@ impl RelayServer {
             socket,
             sessions: RwLock::new(SessionPool::new(max_sessions, idle_timeout)),
             ip_limiter: RwLock::new(IpRateLimiter::new(ip_rate_limit_pps.max(1))),
+            identity_limiter: RwLock::new(IdentityRateLimiter::new(identity_rate_limit_pps.max(1))),
             max_sessions: max_sessions.max(1),
             load_shed_threshold_pct: load_shed_threshold_pct.clamp(50, 100),
             lease_duration,
@@ -636,6 +692,17 @@ impl RelayServer {
         } else {
             format!("dev-peer-{}", src)
         };
+        {
+            let mut limiter = self.identity_limiter.write().await;
+            if !limiter.check(&wavry_id) {
+                self.metrics
+                    .identity_rate_limited_packets
+                    .fetch_add(1, Ordering::Relaxed);
+                self.send_lease_reject(header.session_id, src, LeaseRejectReason::RateLimited)
+                    .await;
+                return Err(PacketError::RateLimited);
+            }
+        }
         let session_lock = {
             let mut sessions = self.sessions.write().await;
             match sessions.get_or_create(header.session_id, self.lease_duration) {
@@ -855,6 +922,8 @@ impl RelayServer {
         }
         let mut limiter = self.ip_limiter.write().await;
         limiter.cleanup();
+        let mut identity_limiter = self.identity_limiter.write().await;
+        identity_limiter.cleanup();
     }
 
     fn record_packet_error(&self, err: &PacketError, src: SocketAddr) {
@@ -936,7 +1005,7 @@ impl RelayServer {
         let total_sessions = self.total_session_count().await;
         let snapshot = self.metrics.snapshot();
         info!(
-            "relay metrics relay_id={} active_sessions={} total_sessions={} packets_rx={} bytes_rx={} forwarded_packets={} forwarded_bytes={} lease_present={} lease_renew={} dropped={} rate_limited={} invalid={} auth_rejects={} session_not_found={} session_not_active={} unknown_peer={} replay_drops={} session_full={} wrong_relay={} expired_leases={} cleanup_expired={} cleanup_idle={} overload_shed={} nat_rebinds={}",
+            "relay metrics relay_id={} active_sessions={} total_sessions={} packets_rx={} bytes_rx={} forwarded_packets={} forwarded_bytes={} lease_present={} lease_renew={} dropped={} rate_limited={} identity_rate_limited={} invalid={} auth_rejects={} session_not_found={} session_not_active={} unknown_peer={} replay_drops={} session_full={} wrong_relay={} expired_leases={} cleanup_expired={} cleanup_idle={} overload_shed={} nat_rebinds={}",
             self.relay_id,
             active_sessions,
             total_sessions,
@@ -948,6 +1017,7 @@ impl RelayServer {
             snapshot.lease_renew_packets,
             snapshot.dropped_packets,
             snapshot.rate_limited_packets,
+            snapshot.identity_rate_limited_packets,
             snapshot.invalid_packets,
             snapshot.auth_reject_packets,
             snapshot.session_not_found_packets,
@@ -1201,6 +1271,9 @@ wavry_relay_dropped_packets{{relay_id="{relay_id}"}} {dropped_packets}
 # HELP wavry_relay_rate_limited_packets Packets dropped due to rate limiting
 # TYPE wavry_relay_rate_limited_packets counter
 wavry_relay_rate_limited_packets{{relay_id="{relay_id}"}} {rate_limited_packets}
+# HELP wavry_relay_identity_rate_limited_packets Lease packets dropped by identity rate limiting
+# TYPE wavry_relay_identity_rate_limited_packets counter
+wavry_relay_identity_rate_limited_packets{{relay_id="{relay_id}"}} {identity_rate_limited_packets}
 # HELP wavry_relay_invalid_packets Invalid packets received
 # TYPE wavry_relay_invalid_packets counter
 wavry_relay_invalid_packets{{relay_id="{relay_id}"}} {invalid_packets}
@@ -1256,6 +1329,7 @@ wavry_relay_uptime_seconds{{relay_id="{relay_id}"}} {uptime_seconds}
         lease_renew_packets = snapshot.lease_renew_packets,
         dropped_packets = snapshot.dropped_packets,
         rate_limited_packets = snapshot.rate_limited_packets,
+        identity_rate_limited_packets = snapshot.identity_rate_limited_packets,
         invalid_packets = snapshot.invalid_packets,
         auth_reject_packets = snapshot.auth_reject_packets,
         session_not_found_packets = snapshot.session_not_found_packets,
@@ -1373,6 +1447,7 @@ async fn main() -> Result<()> {
             Duration::from_secs(args.stats_log_interval_secs.max(5)),
             args.load_shed_threshold_pct,
             args.ip_rate_limit_pps.max(1),
+            args.identity_rate_limit_pps.max(1),
             args.master_public_key.as_deref(),
             Some(&reg_data.master_public_key),
             reg_data.master_key_id.clone(),
@@ -1507,6 +1582,7 @@ async fn main() -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::thread;
 
     fn build_claims(session_id: Uuid) -> LeaseClaims {
         let now = chrono::Utc::now();
@@ -1584,5 +1660,19 @@ mod tests {
         )
         .expect_err("expired lease should fail");
         assert!(matches!(err, PacketError::ExpiredLease));
+    }
+
+    #[test]
+    fn identity_rate_limiter_enforces_window() {
+        let mut limiter = IdentityRateLimiter::new(2);
+        limiter.window = Duration::from_millis(1);
+
+        assert!(limiter.check("user-1"));
+        assert!(limiter.check("user-1"));
+        assert!(!limiter.check("user-1"));
+
+        thread::sleep(Duration::from_millis(3));
+        assert!(limiter.check("user-1"));
+        assert!(limiter.check("user-2"));
     }
 }

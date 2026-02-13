@@ -58,6 +58,8 @@ docker run -d \
 | `WAVRY_RELAY_ALLOW_PUBLIC_BIND` | `0` | Allow binding to public IPs (required in production) |
 | `WAVRY_RELAY_ALLOW_HOST_PROD_BIND` | `0` | Override Docker-first policy and allow non-container production bind (not supported) |
 | `WAVRY_RELAY_ALLOW_INSECURE_DEV` | `0` | Skip signature validation (dev only, never use in prod) |
+| `WAVRY_RELAY_IP_RATE_LIMIT_PPS` | `1000` | Per-source-IP packet rate limit |
+| `WAVRY_RELAY_IDENTITY_RATE_LIMIT_PPS` | `200` | Per-identity lease registration rate limit |
 | `WAVRY_RELAY_REGION` | None | Geographic region (e.g., `us-east-1`, `eu-west-1`) |
 | `WAVRY_RELAY_ASN` | None | Autonomous System Number |
 | `WAVRY_RELAY_MAX_BITRATE` | `20000` | Maximum supported bitrate in kbps |
