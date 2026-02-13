@@ -185,10 +185,21 @@ async function runChecks() {
     });
     assert(mobileSidebarVisible, 'Mobile navigation toggle does not open a visible sidebar');
 
+    const mobileFooterMetrics = await mobile.evaluate(() => {
+      const footerRow = document.querySelector('.footer__links .row');
+      return {
+        hasHorizontalOverflow:
+          (document.documentElement.scrollWidth ?? 0) > (document.documentElement.clientWidth ?? 0) + 1 ||
+          (footerRow?.scrollWidth ?? 0) > (footerRow?.clientWidth ?? 0) + 1,
+      };
+    });
+    assert(!mobileFooterMetrics.hasHorizontalOverflow, 'Mobile footer has horizontal overflow');
+
     const controlPlanePage = await browser.newPage({viewport: {width: 1366, height: 900}});
     await controlPlanePage.goto(CONTROL_PLANE_URL, {waitUntil: 'networkidle'});
     const controlPlaneMetrics = await controlPlanePage.evaluate(() => {
       const doc = document.documentElement;
+      const bodyBg = window.getComputedStyle(document.body).backgroundColor;
       const container = document.querySelector('.main-wrapper .container');
       const containerRect = container?.getBoundingClientRect();
       const article = document.querySelector('.theme-doc-markdown');
@@ -214,6 +225,8 @@ async function runChecks() {
       );
 
       return {
+        theme: doc.getAttribute('data-theme') ?? '',
+        bodyBg,
         hasHorizontalOverflow: doc.scrollWidth > doc.clientWidth + 1,
         containerWithinViewport: Boolean(
           containerRect &&
@@ -225,6 +238,8 @@ async function runChecks() {
       };
     });
 
+    assert(controlPlaneMetrics.theme === 'dark', `Unexpected control-plane theme: ${controlPlaneMetrics.theme || 'unset'}`);
+    assert(controlPlaneMetrics.bodyBg !== 'rgb(255, 255, 255)', 'Control-plane page background rendered as white');
     assert(!controlPlaneMetrics.hasHorizontalOverflow, 'Control-plane docs page has horizontal overflow');
     assert(
       controlPlaneMetrics.containerWithinViewport,
@@ -239,7 +254,18 @@ async function runChecks() {
     const pricingPage = await browser.newPage({viewport: {width: 1366, height: 900}});
     await pricingPage.goto(PRICING_URL, {waitUntil: 'networkidle'});
     const pricingHeading = await pricingPage.textContent('h1');
+    const pricingPageMetrics = await pricingPage.evaluate(() => {
+      const doc = document.documentElement;
+      return {
+        theme: doc.getAttribute('data-theme') ?? '',
+        bodyBg: window.getComputedStyle(document.body).backgroundColor,
+        hasHorizontalOverflow: doc.scrollWidth > doc.clientWidth + 1,
+      };
+    });
     const pricingBody = (await pricingPage.textContent('main')) ?? '';
+    assert(pricingPageMetrics.theme === 'dark', `Unexpected pricing theme: ${pricingPageMetrics.theme || 'unset'}`);
+    assert(pricingPageMetrics.bodyBg !== 'rgb(255, 255, 255)', 'Pricing page background rendered as white');
+    assert(!pricingPageMetrics.hasHorizontalOverflow, 'Pricing page has horizontal overflow');
     assert(
       typeof pricingHeading === 'string' && pricingHeading.includes('Pricing'),
       'Pricing docs page did not render expected heading',

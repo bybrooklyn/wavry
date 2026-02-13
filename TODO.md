@@ -59,11 +59,11 @@ Last updated: 2026-02-13
 
 ## Priority 1: Website + Documentation
 
-- [ ] Keep website docs-first, with no oversized marketing landing experience.
-- [ ] Ensure theme consistency across all pages, including pricing cards and docs components.
+- [x] Keep website docs-first, with no oversized marketing landing experience.
+- [x] Ensure theme consistency across all pages, including pricing cards and docs components.
 - [x] Remove any text highlight/hover behavior that turns content unreadable (for example black-on-dark issues).
-- [ ] Fix footer alignment and responsive spacing across breakpoints.
-- [ ] Fix dark mode toggle behavior so it does not break layout or theming.
+- [x] Fix footer alignment and responsive spacing across breakpoints.
+- [x] Fix dark mode toggle behavior so it does not break layout or theming.
 - [x] Remove mobile sidebar trigger if it conflicts with required UX, and keep navigation usable on small screens.
 - [x] Fix docs separators and content container alignment on all docs pages.
 - [x] Expand docs for relay/master architecture, data flow, failure modes, and scaling guidance.
