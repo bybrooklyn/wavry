@@ -43,7 +43,8 @@ Android applications:
 
 Metadata:
 
-- `SHA256SUMS.txt`
+- `SHA256SUMS`
+- `release-manifest.json`
 - `RELEASE_ASSETS.md`
 
 ## Excluded Files
@@ -62,4 +63,4 @@ The release workflow fails if required backend binaries are missing:
 - `wavry-master-*`
 - `wavry-server-*`
 
-It also generates checksums and an asset manifest for every published release.
+It also generates checksums, a machine-readable release manifest, and a human-readable asset catalog for every published release.

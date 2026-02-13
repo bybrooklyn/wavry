@@ -654,9 +654,119 @@ jobs:
             exit 1
           fi
       - name: Checksums
+        shell: bash
         run: |
+          set -euo pipefail
           cd release-assets
-          find . -type f -exec sha256sum {} + > ../SHA256SUMS.txt
+          while IFS= read -r file; do
+            sha256sum "$file"
+          done < <(find . -maxdepth 1 -type f -print | sed 's|^\./||' | sort) > ../SHA256SUMS
+      - name: Generate machine-readable release manifest
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          declare -A checksums
+          while read -r checksum file; do
+            checksums["$file"]="$checksum"
+          done < SHA256SUMS
+
+          {
+            while IFS= read -r file; do
+              category="Other"
+              platform="Unknown"
+              arch="Unknown"
+              case "$file" in
+                wavry-master-*)
+                  category="Backend Service"
+                  platform="${file#wavry-master-}"
+                  platform="${platform%-*}"
+                  arch="${file##*-}"
+                  arch="${arch%.exe}"
+                  ;;
+                wavry-server-*)
+                  category="Backend Service"
+                  platform="${file#wavry-server-}"
+                  platform="${platform%-*}"
+                  arch="${file##*-}"
+                  arch="${arch%.exe}"
+                  ;;
+                wavry-desktop-tauri-linux-*.AppImage)
+                  category="Desktop App"
+                  platform="Linux"
+                  arch="${file#wavry-desktop-tauri-linux-}"
+                  arch="${arch%.AppImage}"
+                  ;;
+                wavry-desktop-tauri-linux-*.deb)
+                  category="Desktop App"
+                  platform="Linux"
+                  arch="${file#wavry-desktop-tauri-linux-}"
+                  arch="${arch%.deb}"
+                  ;;
+                wavry-desktop-tauri-linux-*.rpm)
+                  category="Desktop App"
+                  platform="Linux"
+                  arch="${file#wavry-desktop-tauri-linux-}"
+                  arch="${arch%.rpm}"
+                  ;;
+                wavry-desktop-tauri-windows-*.exe)
+                  category="Desktop App"
+                  platform="Windows"
+                  arch="${file#wavry-desktop-tauri-windows-}"
+                  arch="${arch%.exe}"
+                  ;;
+                wavry-desktop-native-macos-*.dmg)
+                  category="Desktop App"
+                  platform="macOS"
+                  arch="${file#wavry-desktop-native-macos-}"
+                  arch="${arch%.dmg}"
+                  ;;
+                wavry-mobile-android-arm64-release.apk)
+                  category="Android App"
+                  platform="Android"
+                  arch="arm64"
+                  ;;
+                wavry-quest-android-arm64-release.apk)
+                  category="Android App"
+                  platform="Android (Quest)"
+                  arch="arm64"
+                  ;;
+              esac
+
+              checksum="${checksums["$file"]:-}"
+              if [[ -z "$checksum" ]]; then
+                echo "Missing checksum for $file" >&2
+                exit 1
+              fi
+
+              printf '%s\t%s\t%s\t%s\t%s\n' "$file" "$platform" "$arch" "$checksum" "$category"
+            done < <(find release-assets -maxdepth 1 -type f -print | sed 's|^release-assets/||' | sort)
+          } > release-manifest.tsv
+
+          jq \
+            --raw-input \
+            --slurp \
+            --arg version "v${{ needs.pre-build.outputs.wavry_version }}" \
+            --arg generated_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            '
+            split("\n")
+            | map(select(length > 0))
+            | map(split("\t"))
+            | map({
+                file: .[0],
+                platform: .[1],
+                arch: .[2],
+                checksum: .[3],
+                category: .[4]
+              })
+            | {
+                version: $version,
+                generated_at: $generated_at,
+                assets: .
+              }
+            ' release-manifest.tsv > release-manifest.json
+
+          rm -f release-manifest.tsv
       - name: Generate asset manifest
         shell: bash
         run: |
@@ -736,7 +846,7 @@ jobs:
                   ;;
               esac
               echo "| \`$file\` | $category | $platform | $arch | $purpose |"
-            done < <(find release-assets -maxdepth 1 -type f -printf '%f\n' | sort)
+            done < <(find release-assets -maxdepth 1 -type f -print | sed 's|^release-assets/||' | sort)
           } > RELEASE_ASSETS.md
       - name: Generate docker image manifest
         shell: bash
@@ -799,10 +909,12 @@ jobs:
             - **Android:** `wavry-mobile-android-arm64-release.apk`, `wavry-quest-android-arm64-release.apk`
 
             ## Integrity and Catalog
-            - `SHA256SUMS.txt` contains checksums for every shipped file.
+            - `SHA256SUMS` contains checksums for every shipped file.
+            - `release-manifest.json` provides machine-readable file/platform/arch/checksum metadata.
             - `RELEASE_ASSETS.md` is the full labeled asset catalog.
           files: |
             release-assets/*
-            SHA256SUMS.txt
+            SHA256SUMS
+            release-manifest.json
             RELEASE_ASSETS.md
             DOCKER_IMAGES.md
