@@ -260,11 +260,14 @@ html {
 
 @media (max-width: 996px) {
   .navbar__toggle {
-    display: none !important;
+    display: inline-flex !important;
+    align-items: center;
+    justify-content: center;
+    color: #d8ebf3;
   }
 
-  .navbar__items--left {
-    display: none !important;
+  .navbar__toggle:hover {
+    color: #b9f4fa;
   }
 
   .theme-doc-sidebar-container {
