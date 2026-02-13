@@ -24,7 +24,7 @@ Last updated: 2026-02-13
 
 - [x] Make relay and auth deployment Docker-first and production-supported only through containerized paths.
 - [x] Harden relay session lifecycle: lease validation, expiration behavior, reconnect behavior, and cleanup under churn.
-- [ ] Add relay overload protection: per-IP and per-identity rate limiting, bounded queues, and backpressure metrics.
+- [x] Add relay overload protection: per-IP and per-identity rate limiting, bounded queues, and backpressure metrics.
 - [x] Add stronger control-plane auth boundaries between gateway/master/relay (service identity validation and explicit trust model).
 - [x] Add control-plane chaos/failure tests: relay restart, master restart, packet loss, and high latency.
 - [x] Add load and soak tests for relay/master with success thresholds and regression baselines.

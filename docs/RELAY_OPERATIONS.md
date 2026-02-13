@@ -60,6 +60,7 @@ docker run -d \
 | `WAVRY_RELAY_ALLOW_INSECURE_DEV` | `0` | Skip signature validation (dev only, never use in prod) |
 | `WAVRY_RELAY_IP_RATE_LIMIT_PPS` | `1000` | Per-source-IP packet rate limit |
 | `WAVRY_RELAY_IDENTITY_RATE_LIMIT_PPS` | `200` | Per-identity lease registration rate limit |
+| `WAVRY_RELAY_PACKET_QUEUE_CAPACITY` | `2048` | Inbound packet queue size before backpressure drops |
 | `WAVRY_RELAY_REGION` | None | Geographic region (e.g., `us-east-1`, `eu-west-1`) |
 | `WAVRY_RELAY_ASN` | None | Autonomous System Number |
 | `WAVRY_RELAY_MAX_BITRATE` | `20000` | Maximum supported bitrate in kbps |
@@ -144,6 +145,7 @@ wavry_relay_bytes_forwarded{relay_id="..."} 98765432
 | `packets_forwarded` | Successfully forwarded packets | < 95% of packets_rx |
 | `dropped_packets` | Packets dropped (all reasons) | > 5% of packets_rx |
 | `rate_limited_packets` | Packets dropped due to rate limiting | > 1% of packets_rx |
+| `backpressure_dropped_packets` | Packets dropped because relay queue is full | > 0 (increase capacity or scale out) |
 | `invalid_packets` | Malformed packets | > 0.1% of packets_rx |
 | `auth_reject_packets` | Failed authentication | Monitor for abuse |
 | `session_full_rejects` | Capacity limit reached | > 0 (scale up) |

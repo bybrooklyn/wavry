@@ -21,7 +21,7 @@ use rift_core::PhysicalPacket;
 use serde::{Deserialize, Serialize};
 use session::{PeerRole, SessionError, SessionPool};
 use tokio::net::{TcpListener, UdpSocket};
-use tokio::sync::RwLock;
+use tokio::sync::{mpsc, RwLock};
 use tracing::{debug, info, warn};
 use uuid::Uuid;
 use wavry_common::protocol::{RelayHeartbeatRequest, RelayRegisterRequest, RelayRegisterResponse};
@@ -32,6 +32,7 @@ const DEFAULT_LEASE_DURATION_SECS: u64 = 300;
 const DEFAULT_CLEANUP_INTERVAL_SECS: u64 = 10;
 const DEFAULT_IP_RATE_LIMIT_PPS: u64 = 1000;
 const DEFAULT_IDENTITY_RATE_LIMIT_PPS: u64 = 200;
+const DEFAULT_PACKET_QUEUE_CAPACITY: usize = 2048;
 const DEFAULT_STATS_LOG_INTERVAL_SECS: u64 = 30;
 const DEFAULT_LOAD_SHED_THRESHOLD_PCT: u8 = 95;
 const DEFAULT_HEALTH_LISTEN: &str = "127.0.0.1:9091";
@@ -94,6 +95,14 @@ struct Args {
         default_value_t = DEFAULT_IDENTITY_RATE_LIMIT_PPS
     )]
     identity_rate_limit_pps: u64,
+
+    /// Bounded inbound packet queue capacity before backpressure drops.
+    #[arg(
+        long,
+        env = "WAVRY_RELAY_PACKET_QUEUE_CAPACITY",
+        default_value_t = DEFAULT_PACKET_QUEUE_CAPACITY
+    )]
+    packet_queue_capacity: usize,
 
     /// Session cleanup interval in seconds
     #[arg(long, default_value_t = DEFAULT_CLEANUP_INTERVAL_SECS)]
@@ -320,6 +329,7 @@ struct RelayMetrics {
     session_not_active_packets: AtomicU64,
     unknown_peer_packets: AtomicU64,
     replay_dropped_packets: AtomicU64,
+    backpressure_dropped_packets: AtomicU64,
     session_full_rejects: AtomicU64,
     wrong_relay_rejects: AtomicU64,
     expired_lease_rejects: AtomicU64,
@@ -346,6 +356,7 @@ struct RelayMetricsSnapshot {
     session_not_active_packets: u64,
     unknown_peer_packets: u64,
     replay_dropped_packets: u64,
+    backpressure_dropped_packets: u64,
     session_full_rejects: u64,
     wrong_relay_rejects: u64,
     expired_lease_rejects: u64,
@@ -375,6 +386,7 @@ impl RelayMetrics {
             session_not_active_packets: self.session_not_active_packets.load(Ordering::Relaxed),
             unknown_peer_packets: self.unknown_peer_packets.load(Ordering::Relaxed),
             replay_dropped_packets: self.replay_dropped_packets.load(Ordering::Relaxed),
+            backpressure_dropped_packets: self.backpressure_dropped_packets.load(Ordering::Relaxed),
             session_full_rejects: self.session_full_rejects.load(Ordering::Relaxed),
             wrong_relay_rejects: self.wrong_relay_rejects.load(Ordering::Relaxed),
             expired_lease_rejects: self.expired_lease_rejects.load(Ordering::Relaxed),
@@ -411,6 +423,7 @@ struct RelayServer {
     ip_limiter: RwLock<IpRateLimiter>,
     identity_limiter: RwLock<IdentityRateLimiter>,
     max_sessions: usize,
+    packet_queue_capacity: usize,
     load_shed_threshold_pct: u8,
     lease_duration: Duration,
     cleanup_interval: Duration,
@@ -435,6 +448,7 @@ impl RelayServer {
         load_shed_threshold_pct: u8,
         ip_rate_limit_pps: u64,
         identity_rate_limit_pps: u64,
+        packet_queue_capacity: usize,
         master_key_hex: Option<&str>,
         registration_master_key: Option<&[u8]>,
         expected_master_key_id: Option<String>,
@@ -470,6 +484,7 @@ impl RelayServer {
             ip_limiter: RwLock::new(IpRateLimiter::new(ip_rate_limit_pps.max(1))),
             identity_limiter: RwLock::new(IdentityRateLimiter::new(identity_rate_limit_pps.max(1))),
             max_sessions: max_sessions.max(1),
+            packet_queue_capacity: packet_queue_capacity.max(64),
             load_shed_threshold_pct: load_shed_threshold_pct.clamp(50, 100),
             lease_duration,
             cleanup_interval,
@@ -512,6 +527,7 @@ impl RelayServer {
         let mut buf = vec![0u8; RELAY_MAX_PACKET_SIZE];
         let mut cleanup_interval = tokio::time::interval(self.cleanup_interval);
         let mut last_stats_log = std::time::Instant::now();
+        let (tx, mut rx) = mpsc::channel::<(Vec<u8>, SocketAddr)>(self.packet_queue_capacity);
 
         loop {
             tokio::select! {
@@ -520,9 +536,20 @@ impl RelayServer {
                     let packet = &buf[..len];
                     self.metrics.packets_rx.fetch_add(1, Ordering::Relaxed);
                     self.metrics.bytes_rx.fetch_add(packet.len() as u64, Ordering::Relaxed);
-
-                    if let Err(e) = self.handle_packet(packet, src).await {
-                        self.record_packet_error(&e, src);
+                    if tx.try_send((packet.to_vec(), src)).is_err() {
+                        self.metrics
+                            .dropped_packets
+                            .fetch_add(1, Ordering::Relaxed);
+                        self.metrics
+                            .backpressure_dropped_packets
+                            .fetch_add(1, Ordering::Relaxed);
+                    }
+                }
+                maybe_packet = rx.recv() => {
+                    if let Some((packet, src)) = maybe_packet {
+                        if let Err(e) = self.handle_packet(&packet, src).await {
+                            self.record_packet_error(&e, src);
+                        }
                     }
                 }
                 _ = cleanup_interval.tick() => {
@@ -1005,7 +1032,7 @@ impl RelayServer {
         let total_sessions = self.total_session_count().await;
         let snapshot = self.metrics.snapshot();
         info!(
-            "relay metrics relay_id={} active_sessions={} total_sessions={} packets_rx={} bytes_rx={} forwarded_packets={} forwarded_bytes={} lease_present={} lease_renew={} dropped={} rate_limited={} identity_rate_limited={} invalid={} auth_rejects={} session_not_found={} session_not_active={} unknown_peer={} replay_drops={} session_full={} wrong_relay={} expired_leases={} cleanup_expired={} cleanup_idle={} overload_shed={} nat_rebinds={}",
+            "relay metrics relay_id={} active_sessions={} total_sessions={} packets_rx={} bytes_rx={} forwarded_packets={} forwarded_bytes={} lease_present={} lease_renew={} dropped={} rate_limited={} identity_rate_limited={} invalid={} auth_rejects={} session_not_found={} session_not_active={} unknown_peer={} replay_drops={} backpressure_drops={} session_full={} wrong_relay={} expired_leases={} cleanup_expired={} cleanup_idle={} overload_shed={} nat_rebinds={}",
             self.relay_id,
             active_sessions,
             total_sessions,
@@ -1024,6 +1051,7 @@ impl RelayServer {
             snapshot.session_not_active_packets,
             snapshot.unknown_peer_packets,
             snapshot.replay_dropped_packets,
+            snapshot.backpressure_dropped_packets,
             snapshot.session_full_rejects,
             snapshot.wrong_relay_rejects,
             snapshot.expired_lease_rejects,
@@ -1292,6 +1320,9 @@ wavry_relay_unknown_peer_packets{{relay_id="{relay_id}"}} {unknown_peer_packets}
 # HELP wavry_relay_replay_dropped_packets Packets dropped due to replay detection
 # TYPE wavry_relay_replay_dropped_packets counter
 wavry_relay_replay_dropped_packets{{relay_id="{relay_id}"}} {replay_dropped_packets}
+# HELP wavry_relay_backpressure_dropped_packets Packets dropped because inbound queue was full
+# TYPE wavry_relay_backpressure_dropped_packets counter
+wavry_relay_backpressure_dropped_packets{{relay_id="{relay_id}"}} {backpressure_dropped_packets}
 # HELP wavry_relay_session_full_rejects Session creations rejected (capacity)
 # TYPE wavry_relay_session_full_rejects counter
 wavry_relay_session_full_rejects{{relay_id="{relay_id}"}} {session_full_rejects}
@@ -1336,6 +1367,7 @@ wavry_relay_uptime_seconds{{relay_id="{relay_id}"}} {uptime_seconds}
         session_not_active_packets = snapshot.session_not_active_packets,
         unknown_peer_packets = snapshot.unknown_peer_packets,
         replay_dropped_packets = snapshot.replay_dropped_packets,
+        backpressure_dropped_packets = snapshot.backpressure_dropped_packets,
         session_full_rejects = snapshot.session_full_rejects,
         wrong_relay_rejects = snapshot.wrong_relay_rejects,
         expired_lease_rejects = snapshot.expired_lease_rejects,
@@ -1448,6 +1480,7 @@ async fn main() -> Result<()> {
             args.load_shed_threshold_pct,
             args.ip_rate_limit_pps.max(1),
             args.identity_rate_limit_pps.max(1),
+            args.packet_queue_capacity.max(64),
             args.master_public_key.as_deref(),
             Some(&reg_data.master_public_key),
             reg_data.master_key_id.clone(),
