@@ -11,9 +11,9 @@ Last updated: 2026-02-13
 - [ ] Close remaining Windows build regressions (including thread-safety around Windows audio capture types) and keep Windows CI green.
 - [x] Enforce prerelease policy in tooling and CI so only `-canary` is accepted for prerelease tags.
 - [x] Keep `-unstable` for internal/development versioning only (not release tag channels).
-- [ ] Ensure `cargo fmt --all`, `cargo clippy --workspace --all-targets -- -D warnings`, and `cargo test --workspace` are required CI gates for merge.
+- [x] Ensure `cargo fmt --all`, `cargo clippy --workspace --all-targets -- -D warnings`, and `cargo test --workspace` are required CI gates for merge.
 - [x] Add a CI step that fails if release packaging emits unnamed or ambiguous artifacts.
-- [ ] Ensure release artifacts are deterministic, minimal, and consistently named across all platforms.
+- [x] Ensure release artifacts are deterministic, minimal, and consistently named across all platforms.
 - [x] Generate and publish checksums (`SHA256SUMS`) for every release artifact.
 - [x] Generate and publish a machine-readable release manifest (`release-manifest.json`) listing file name, platform, arch, and checksum.
 - [x] Remove unnecessary release artifacts from CI upload/publish jobs.

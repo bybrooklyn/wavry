@@ -132,6 +132,10 @@ jobs:
       - name: Linux display preflight (compile-time)
         if: runner.os == 'Linux'
         run: ./scripts/linux-display-smoke.sh --skip-runtime
+      - name: Format Check
+        run: cargo fmt --all -- --check
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
       - name: Run tests
         run: cargo test --workspace --locked
 
@@ -578,12 +582,25 @@ jobs:
           shopt -s nullglob
           mkdir -p release-assets
 
+          copy_release_asset() {
+            local src="$1"
+            local base
+            local dst
+            base="$(basename "$src")"
+            dst="release-assets/$base"
+            if [[ -e "$dst" ]]; then
+              echo "Duplicate release asset name detected: $base" >&2
+              exit 1
+            fi
+            cp "$src" "$dst"
+          }
+
           # Infrastructure/service binaries.
           for file in artifacts/backend-*/*; do
             base="$(basename "$file")"
             case "$base" in
               wavry-master-*|wavry-server-*)
-                cp "$file" "release-assets/$base"
+                copy_release_asset "$file"
                 ;;
             esac
           done
@@ -593,7 +610,7 @@ jobs:
             base="$(basename "$file")"
             case "$base" in
               wavry-desktop-tauri-*)
-                cp "$file" "release-assets/$base"
+                copy_release_asset "$file"
                 ;;
             esac
           done
@@ -603,7 +620,7 @@ jobs:
             base="$(basename "$file")"
             case "$base" in
               wavry-desktop-native-macos-*.dmg)
-                cp "$file" "release-assets/$base"
+                copy_release_asset "$file"
                 ;;
             esac
           done
@@ -613,7 +630,7 @@ jobs:
             base="$(basename "$file")"
             case "$base" in
               wavry-mobile-android-arm64-release.apk|wavry-quest-android-arm64-release.apk)
-                cp "$file" "release-assets/$base"
+                copy_release_asset "$file"
                 ;;
             esac
           done
