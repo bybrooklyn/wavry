@@ -1,3 +1,4 @@
+use crate::audit::{log_security_event, FailureReason, SecurityEventType};
 use crate::db::{self, Session, User};
 use crate::security;
 use argon2::{
@@ -401,16 +402,26 @@ pub async fn login(
         Ok(None) => {
             AUTH_METRICS.auth_failures.fetch_add(1, Ordering::Relaxed);
             db::record_login_failure(&pool, &ip_failure_key).await.ok();
-            tracing::warn!(
-                client_ip = %client_ip,
-                email = %email,
-                "login failed: user not found"
+            log_security_event(
+                SecurityEventType::LoginFailure,
+                Some(client_ip),
+                None,
+                Some(&email),
+                Some(FailureReason::UserNotFound),
+                None,
             );
             return error_response(StatusCode::UNAUTHORIZED, "Invalid credentials");
         }
         Err(err) => {
             AUTH_METRICS.db_errors.fetch_add(1, Ordering::Relaxed);
-            tracing::error!("database error during login: {}", err);
+            log_security_event(
+                SecurityEventType::DatabaseError,
+                Some(client_ip),
+                None,
+                Some(&email),
+                None,
+                Some(&err.to_string()),
+            );
             return error_response(StatusCode::INTERNAL_SERVER_ERROR, "Database error");
         }
     };
@@ -440,10 +451,13 @@ pub async fn login(
         AUTH_METRICS.auth_failures.fetch_add(1, Ordering::Relaxed);
         db::record_login_failure(&pool, &failure_key).await.ok();
         db::record_login_failure(&pool, &ip_failure_key).await.ok();
-        tracing::warn!(
-            client_ip = %client_ip,
-            user_id = %user.id,
-            "login failed: invalid password"
+        log_security_event(
+            SecurityEventType::LoginFailure,
+            Some(client_ip),
+            Some(&user.id),
+            Some(&email),
+            Some(FailureReason::InvalidPassword),
+            None,
         );
         return error_response(StatusCode::UNAUTHORIZED, "Invalid credentials");
     }
@@ -451,10 +465,13 @@ pub async fn login(
     if let Some(stored_secret) = &user.totp_secret {
         let Some(code) = payload.totp_code.as_deref() else {
             AUTH_METRICS.auth_failures.fetch_add(1, Ordering::Relaxed);
-            tracing::warn!(
-                client_ip = %client_ip,
-                user_id = %user.id,
-                "login failed: 2FA required but missing"
+            log_security_event(
+                SecurityEventType::LoginFailure,
+                Some(client_ip),
+                Some(&user.id),
+                Some(&email),
+                Some(FailureReason::TotpRequired),
+                None,
             );
             return error_response(StatusCode::UNAUTHORIZED, "2FA required");
         };
@@ -516,6 +533,14 @@ pub async fn login(
     };
 
     AUTH_METRICS.login_success.fetch_add(1, Ordering::Relaxed);
+    log_security_event(
+        SecurityEventType::LoginSuccess,
+        Some(client_ip),
+        Some(&user.id),
+        Some(&email),
+        None,
+        None,
+    );
     (StatusCode::OK, Json(auth_response(user, session))).into_response()
 }
 

@@ -1,4 +1,5 @@
 pub mod admin;
+pub mod audit;
 pub mod auth;
 pub mod db;
 pub mod relay;
@@ -7,6 +8,7 @@ pub mod signal;
 pub mod web;
 
 pub use admin::{AdminOverview, BanUserRequest, RevokeSessionRequest};
+pub use audit::{log_security_event, FailureReason, SecurityEventType};
 pub use auth::{AuthResponse, ErrorResponse, LoginRequest, RegisterRequest};
 pub use db::{Session, User};
 pub use security::hash_token;
