@@ -22,6 +22,8 @@ pub struct FrameBuffer {
     pub keyframe: bool,
     pub chunk_count: u32,
     pub chunks: Vec<Option<Vec<u8>>>,
+    pub capture_duration_us: u32,
+    pub encode_duration_us: u32,
 }
 
 pub struct AssembledFrame {
@@ -29,6 +31,8 @@ pub struct AssembledFrame {
     pub timestamp_us: u64,
     pub keyframe: bool,
     pub data: Vec<u8>,
+    pub capture_duration_us: u32,
+    pub encode_duration_us: u32,
 }
 
 impl FrameAssembler {
@@ -53,6 +57,8 @@ impl FrameAssembler {
                 keyframe: chunk.keyframe,
                 chunk_count: chunk.chunk_count,
                 chunks: vec![None; chunk.chunk_count as usize],
+                capture_duration_us: chunk.capture_us,
+                encode_duration_us: chunk.encode_us,
             });
 
         if chunk.chunk_index < entry.chunk_count {
@@ -69,12 +75,16 @@ impl FrameAssembler {
             let timestamp_us = entry.timestamp_us;
             let keyframe = entry.keyframe;
             let frame_id = chunk.frame_id;
+            let capture_duration_us = entry.capture_duration_us;
+            let encode_duration_us = entry.encode_duration_us;
             self.frames.remove(&chunk.frame_id);
             return Some(AssembledFrame {
                 frame_id,
                 timestamp_us,
                 keyframe,
                 data: assembled,
+                capture_duration_us,
+                encode_duration_us,
             });
         }
         None

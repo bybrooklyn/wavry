@@ -1,0 +1,33 @@
+name: Release Dry-Run
+
+on:
+  pull_request:
+    paths:
+      - 'scripts/release-dry-run.sh'
+      - '.github/workflows/release-dry-run.yml'
+      - 'VERSION'
+  workflow_dispatch:
+
+jobs:
+  validate-artifacts:
+    name: Validate Artifacts (Dummy)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Create Dummy Artifacts
+        run: |
+          mkdir -p test-dist
+          touch test-dist/wavry-master-linux-x64
+          touch test-dist/wavry-server-linux-x64
+          touch test-dist/wavry-desktop-tauri-linux-x64.AppImage
+          touch test-dist/wavry-desktop-tauri-windows-x64.exe
+          touch test-dist/wavry-desktop-native-macos-arm64.dmg
+          touch test-dist/wavry-mobile-android-arm64-release.apk
+          touch test-dist/wavry-quest-android-arm64-release.apk
+          
+      - name: Run Dry-Run Script
+        run: ./scripts/release-dry-run.sh test-dist
+        
+      - name: Inspect Manifest
+        run: cat release-manifest.json

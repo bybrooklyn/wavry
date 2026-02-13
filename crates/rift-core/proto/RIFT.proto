@@ -167,6 +167,16 @@ message FileStatus {
     string message = 3;
 }
 
+message LatencyStats {
+    uint64 frame_id = 1;
+    uint32 capture_us = 2;
+    uint32 encode_us = 3;
+    uint32 network_us = 4;
+    uint32 decode_us = 5;
+    uint32 render_us = 6;
+    uint32 total_us = 7;
+}
+
 message ControlMessage {
     oneof content {
         Hello hello = 1;
@@ -186,6 +196,7 @@ message ControlMessage {
         ClipboardMessage clipboard = 15;
         FileHeader file_header = 16;
         FileStatus file_status = 17;
+        LatencyStats latency = 18;
     }
 }
 
@@ -251,6 +262,8 @@ message VideoChunk {
     uint64 timestamp_us = 4;
     bool keyframe = 5;
     bytes payload = 6;
+    uint32 capture_us = 7;
+    uint32 encode_us = 8;
 }
 
 message AudioPacket {

@@ -19,7 +19,7 @@ use tokio::time::{sleep, Duration};
 use x11rb::connection::Connection;
 use x11rb::protocol::randr::ConnectionExt as RandrExt;
 
-use crate::{Codec, DecodeConfig, EncodeConfig, EncodedFrame, Renderer};
+use crate::{Codec, DecodeConfig, EncodeConfig, EncodedFrame, MediaError, MediaResult, Renderer};
 
 fn element_available(name: &str) -> bool {
     gst::ElementFactory::find(name).is_some()
@@ -720,19 +720,25 @@ pub struct PipewireEncoder {
 }
 
 impl PipewireEncoder {
-    pub async fn new(config: EncodeConfig) -> Result<Self> {
-        gst::init()?;
-        let (encoder_name, input_format) = select_encoder(config.codec, config.enable_10bit)?;
-        let parser = select_parser(config.codec)?;
-        require_elements(&["videoconvert", "queue", "appsink"])?;
+    pub async fn new(config: EncodeConfig) -> MediaResult<Self> {
+        gst::init().map_err(|e| MediaError::GStreamerError(e.to_string()))?;
+        let (encoder_name, input_format) = select_encoder(config.codec, config.enable_10bit)
+            .map_err(|e| MediaError::Unsupported(e.to_string()))?;
+        let parser =
+            select_parser(config.codec).map_err(|e| MediaError::GStreamerError(e.to_string()))?;
+        require_elements(&["videoconvert", "queue", "appsink"])
+            .map_err(|e| MediaError::GStreamerError(e.to_string()))?;
         if !element_available(&encoder_name) {
-            return Err(anyhow!(
+            return Err(MediaError::GStreamerError(format!(
                 "missing GStreamer encoder element: {}",
                 encoder_name
-            ));
+            )));
         }
         if !element_available(parser) {
-            return Err(anyhow!("missing GStreamer parser element: {}", parser));
+            return Err(MediaError::GStreamerError(format!(
+                "missing GStreamer parser element: {}",
+                parser
+            )));
         }
 
         let keyframe_interval_frames =
@@ -743,7 +749,8 @@ impl PipewireEncoder {
 
         let (pipeline_str, fd_opt) = match portal_stream {
             Ok((fd, node_id)) => {
-                require_elements(&["pipewiresrc"])?;
+                require_elements(&["pipewiresrc"])
+                    .map_err(|e| MediaError::GStreamerError(e.to_string()))?;
                 let pipeline_str = format!(
                     "pipewiresrc fd={} path={} do-timestamp=true ! videoconvert ! video/x-raw,format={},width={},height={},framerate={}/1 ! queue max-size-buffers=1 leaky=downstream ! {} name=encoder ! {} config-interval=-1 ! appsink name=sink max-buffers=1 drop=true sync=false",
                     fd.as_raw_fd(),
@@ -760,11 +767,11 @@ impl PipewireEncoder {
             Err(err) => {
                 if has_wayland_display() {
                     let backend_hint = portal_backend_hint_message();
-                    return Err(anyhow!(
+                    return Err(MediaError::PortalUnavailable(format!(
                         "Wayland screencast portal failed: {}. Ensure xdg-desktop-portal + a desktop-specific portal backend are running, PipeWire is active, and screen capture permission is granted. {}",
                         err,
                         backend_hint
-                    ));
+                    )));
                 }
 
                 if has_x11_display() {
@@ -792,7 +799,8 @@ impl PipewireEncoder {
                     if crop.is_some() {
                         required.push("videocrop");
                     }
-                    require_elements(&required)?;
+                    require_elements(&required)
+                        .map_err(|e| MediaError::GStreamerError(e.to_string()))?;
 
                     let crop_str = if let Some((left, right, top, bottom)) = crop {
                         format!(
@@ -815,24 +823,25 @@ impl PipewireEncoder {
                     );
                     (pipeline_str, None)
                 } else {
-                    return Err(err);
+                    return Err(MediaError::PlatformError(err.to_string()));
                 }
             }
         };
 
-        let pipeline = gst::parse::launch(&pipeline_str)?
+        let pipeline = gst::parse::launch(&pipeline_str)
+            .map_err(|e| MediaError::GStreamerError(e.to_string()))?
             .downcast::<gst::Pipeline>()
-            .map_err(|_| anyhow!("failed to downcast pipeline"))?;
+            .map_err(|_| MediaError::GStreamerError("failed to downcast pipeline".to_string()))?;
 
         let appsink = pipeline
             .by_name("sink")
-            .ok_or_else(|| anyhow!("appsink not found"))?
+            .ok_or_else(|| MediaError::GStreamerError("appsink not found".to_string()))?
             .downcast::<gst_app::AppSink>()
-            .map_err(|_| anyhow!("appsink type mismatch"))?;
+            .map_err(|_| MediaError::GStreamerError("appsink type mismatch".to_string()))?;
 
         let encoder_element = pipeline
             .by_name("encoder")
-            .ok_or_else(|| anyhow!("encoder element not found"))?;
+            .ok_or_else(|| MediaError::GStreamerError("encoder element not found".to_string()))?;
 
         configure_low_latency_encoder(
             &encoder_element,
@@ -840,9 +849,12 @@ impl PipewireEncoder {
             config.bitrate_kbps,
             keyframe_interval_frames,
             config.enable_10bit,
-        )?;
+        )
+        .map_err(|e| MediaError::GStreamerError(e.to_string()))?;
 
-        pipeline.set_state(gst::State::Playing)?;
+        pipeline
+            .set_state(gst::State::Playing)
+            .map_err(|e| MediaError::GStreamerError(e.to_string()))?;
 
         Ok(Self {
             _fd: fd_opt,
@@ -852,21 +864,60 @@ impl PipewireEncoder {
         })
     }
 
-    pub fn next_frame(&mut self) -> Result<EncodedFrame> {
-        let sample = self
-            .appsink
-            .pull_sample()
-            .map_err(|_| anyhow!("failed to pull sample"))?;
-        let buffer = sample.buffer().ok_or_else(|| anyhow!("missing buffer"))?;
+    fn check_bus_errors(&self) -> MediaResult<()> {
+        let bus = self
+            .pipeline
+            .bus()
+            .ok_or_else(|| MediaError::GStreamerError("failed to get pipeline bus".to_string()))?;
+        if let Some(msg) = bus.pop_filtered(&[gst::MessageType::Error]) {
+            if let Some(err) = msg.view().error() {
+                let err_msg = format!(
+                    "GStreamer error: {} ({})",
+                    err.error(),
+                    err.debug().unwrap_or_default()
+                );
+                let err_str = err.error().to_string();
+
+                if err_str.contains("Protocol Error") || err_str.contains("Error 71") {
+                    return Err(MediaError::ProtocolViolation(err_msg));
+                }
+                if err_str.contains("Compositor") || err_str.contains("display connection") {
+                    return Err(MediaError::CompositorDisconnect(err_msg));
+                }
+                if err_str.contains("PipeWire") || err_str.contains("node") {
+                    return Err(MediaError::StreamNodeLoss(err_msg));
+                }
+
+                return Err(MediaError::GStreamerError(err_msg));
+            }
+        }
+        Ok(())
+    }
+
+    pub fn next_frame(&mut self) -> MediaResult<EncodedFrame> {
+        let sample = match self.appsink.pull_sample() {
+            Ok(s) => s,
+            Err(_) => {
+                self.check_bus_errors()?;
+                return Err(MediaError::GStreamerError(
+                    "failed to pull sample (no bus error found)".to_string(),
+                ));
+            }
+        };
+        let buffer = sample
+            .buffer()
+            .ok_or_else(|| MediaError::GStreamerError("missing buffer".to_string()))?;
         let map = buffer
             .map_readable()
-            .map_err(|_| anyhow!("buffer map failed"))?;
+            .map_err(|_| MediaError::GStreamerError("buffer map failed".to_string()))?;
         let pts = buffer.pts().map(|t| t.nseconds() / 1_000).unwrap_or(0);
         let keyframe = !buffer.flags().contains(gst::BufferFlags::DELTA_UNIT);
         Ok(EncodedFrame {
             timestamp_us: pts,
             keyframe,
             data: map.as_slice().to_vec(),
+            capture_duration_us: 0,
+            encode_duration_us: 0,
         })
     }
 
@@ -955,24 +1006,24 @@ pub struct PipewireAudioCapturer {
 }
 
 impl PipewireAudioCapturer {
-    pub async fn new() -> Result<Self> {
+    pub async fn new() -> MediaResult<Self> {
         Self::new_system_mix().await
     }
 
-    pub async fn new_system_mix() -> Result<Self> {
+    pub async fn new_system_mix() -> MediaResult<Self> {
         Self::new_with_route_linux(PipewireAudioRoute::SystemMix).await
     }
 
-    pub async fn new_microphone() -> Result<Self> {
+    pub async fn new_microphone() -> MediaResult<Self> {
         Self::new_with_route_linux(PipewireAudioRoute::Microphone).await
     }
 
-    pub async fn new_application(app_name: String) -> Result<Self> {
+    pub async fn new_application(app_name: String) -> MediaResult<Self> {
         Self::new_with_route_linux(PipewireAudioRoute::Application(app_name)).await
     }
 
-    async fn new_with_route_linux(route: PipewireAudioRoute) -> Result<Self> {
-        gst::init()?;
+    async fn new_with_route_linux(route: PipewireAudioRoute) -> MediaResult<Self> {
+        gst::init().map_err(|e| MediaError::GStreamerError(e.to_string()))?;
         let (pipeline_str, fd_opt) = match route {
             PipewireAudioRoute::SystemMix => {
                 let portal = open_audio_portal_stream().await;
@@ -984,7 +1035,8 @@ impl PipewireAudioCapturer {
                             "audioresample",
                             "opusenc",
                             "appsink",
-                        ])?;
+                        ])
+                        .map_err(|e| MediaError::GStreamerError(e.to_string()))?;
                         let pipeline_str = format!(
                             "pipewiresrc fd={} path={} do-timestamp=true ! audioconvert ! audioresample ! opusenc bitrate=128000 frame-size=5 ! appsink name=sink max-buffers=4 drop=true sync=false",
                             fd.as_raw_fd(),
@@ -1000,7 +1052,8 @@ impl PipewireAudioCapturer {
                                 "audioresample",
                                 "opusenc",
                                 "appsink",
-                            ])?;
+                            ])
+                            .map_err(|e| MediaError::GStreamerError(e.to_string()))?;
                             log::warn!(
                                 "PipeWire audio portal failed, falling back to PulseAudio: {}",
                                 err
@@ -1008,10 +1061,10 @@ impl PipewireAudioCapturer {
                             let pipeline_str = "pulsesrc ! audioconvert ! audioresample ! opusenc bitrate=128000 frame-size=5 ! appsink name=sink max-buffers=4 drop=true sync=false".to_string();
                             (pipeline_str, None)
                         } else {
-                            return Err(anyhow!(
+                            return Err(MediaError::PortalUnavailable(format!(
                                 "audio portal failed and pulsesrc unavailable: {}",
                                 err
-                            ));
+                            )));
                         }
                     }
                 }
@@ -1024,7 +1077,8 @@ impl PipewireAudioCapturer {
                         "audioresample",
                         "opusenc",
                         "appsink",
-                    ])?;
+                    ])
+                    .map_err(|e| MediaError::GStreamerError(e.to_string()))?;
                     let pipeline_str = "pulsesrc ! audioconvert ! audioresample ! opusenc bitrate=128000 frame-size=5 ! appsink name=sink max-buffers=4 drop=true sync=false".to_string();
                     (pipeline_str, None)
                 } else if element_available("autoaudiosrc") {
@@ -1034,12 +1088,13 @@ impl PipewireAudioCapturer {
                         "audioresample",
                         "opusenc",
                         "appsink",
-                    ])?;
+                    ])
+                    .map_err(|e| MediaError::GStreamerError(e.to_string()))?;
                     let pipeline_str = "autoaudiosrc ! audioconvert ! audioresample ! opusenc bitrate=128000 frame-size=5 ! appsink name=sink max-buffers=4 drop=true sync=false".to_string();
                     (pipeline_str, None)
                 } else {
-                    return Err(anyhow!(
-                        "no supported microphone source element found (expected pulsesrc or autoaudiosrc)"
+                    return Err(MediaError::GStreamerError(
+                        "no supported microphone source element found (expected pulsesrc or autoaudiosrc)".to_string()
                     ));
                 }
             }
@@ -1051,7 +1106,8 @@ impl PipewireAudioCapturer {
                         "audioresample",
                         "opusenc",
                         "appsink",
-                    ])?;
+                    ])
+                    .map_err(|e| MediaError::GStreamerError(e.to_string()))?;
                     match resolve_pulse_monitor_for_application(&app_name) {
                         Ok(source_name) => {
                             let escaped = gst_escape_property_value(&source_name);
@@ -1081,7 +1137,8 @@ impl PipewireAudioCapturer {
                                         "audioresample",
                                         "opusenc",
                                         "appsink",
-                                    ])?;
+                                    ])
+                                    .map_err(|e| MediaError::GStreamerError(e.to_string()))?;
                                     let pipeline_str = format!(
                                         "pipewiresrc fd={} path={} do-timestamp=true ! audioconvert ! audioresample ! opusenc bitrate=128000 frame-size=5 ! appsink name=sink max-buffers=4 drop=true sync=false",
                                         fd.as_raw_fd(),
@@ -1097,7 +1154,8 @@ impl PipewireAudioCapturer {
                                             "audioresample",
                                             "opusenc",
                                             "appsink",
-                                        ])?;
+                                        ])
+                                        .map_err(|e| MediaError::GStreamerError(e.to_string()))?;
                                         log::warn!(
                                             "PipeWire audio portal failed, falling back to PulseAudio: {}",
                                             portal_err
@@ -1105,34 +1163,37 @@ impl PipewireAudioCapturer {
                                         let pipeline_str = "pulsesrc ! audioconvert ! audioresample ! opusenc bitrate=128000 frame-size=5 ! appsink name=sink max-buffers=4 drop=true sync=false".to_string();
                                         (pipeline_str, None)
                                     } else {
-                                        return Err(anyhow!(
+                                        return Err(MediaError::PortalUnavailable(format!(
                                             "audio portal failed and pulsesrc unavailable: {}",
                                             portal_err
-                                        ));
+                                        )));
                                     }
                                 }
                             }
                         }
                     }
                 } else {
-                    return Err(anyhow!(
-                        "application route requires pulsesrc but it is unavailable"
+                    return Err(MediaError::GStreamerError(
+                        "application route requires pulsesrc but it is unavailable".to_string(),
                     ));
                 }
             }
         };
 
-        let pipeline = gst::parse::launch(&pipeline_str)?
+        let pipeline = gst::parse::launch(&pipeline_str)
+            .map_err(|e| MediaError::GStreamerError(e.to_string()))?
             .downcast::<gst::Pipeline>()
-            .map_err(|_| anyhow!("failed to downcast pipeline"))?;
+            .map_err(|_| MediaError::GStreamerError("failed to downcast pipeline".to_string()))?;
 
         let appsink = pipeline
             .by_name("sink")
-            .ok_or_else(|| anyhow!("appsink not found"))?
+            .ok_or_else(|| MediaError::GStreamerError("appsink not found".to_string()))?
             .downcast::<gst_app::AppSink>()
-            .map_err(|_| anyhow!("appsink type mismatch"))?;
+            .map_err(|_| MediaError::GStreamerError("appsink type mismatch".to_string()))?;
 
-        pipeline.set_state(gst::State::Playing)?;
+        pipeline
+            .set_state(gst::State::Playing)
+            .map_err(|e| MediaError::GStreamerError(e.to_string()))?;
 
         Ok(Self {
             _fd: fd_opt,
@@ -1141,23 +1202,37 @@ impl PipewireAudioCapturer {
         })
     }
 
-    pub fn next_packet(&mut self) -> Result<EncodedFrame> {
-        let sample = self
-            .appsink
-            .pull_sample()
-            .map_err(|_| anyhow!("failed to pull audio sample"))?;
+    pub fn next_packet(&mut self) -> MediaResult<EncodedFrame> {
+        let sample = self.appsink.pull_sample().map_err(|_| {
+            // Check bus for specific errors if possible
+            let bus = self.pipeline.bus();
+            if let Some(bus) = bus {
+                if let Some(msg) = bus.pop_filtered(&[gst::MessageType::Error]) {
+                    if let Some(err) = msg.view().error() {
+                        return MediaError::StreamNodeLoss(format!(
+                            "Audio capture failed: {} ({})",
+                            err.error(),
+                            err.debug().unwrap_or_default()
+                        ));
+                    }
+                }
+            }
+            MediaError::GStreamerError("failed to pull audio sample".to_string())
+        })?;
         let buffer = sample
             .buffer()
-            .ok_or_else(|| anyhow!("missing audio buffer"))?;
+            .ok_or_else(|| MediaError::GStreamerError("missing audio buffer".to_string()))?;
         let map = buffer
             .map_readable()
-            .map_err(|_| anyhow!("audio buffer map failed"))?;
+            .map_err(|_| MediaError::GStreamerError("audio buffer map failed".to_string()))?;
         let pts = buffer.pts().map(|t| t.nseconds() / 1_000).unwrap_or(0);
 
         Ok(EncodedFrame {
             timestamp_us: pts,
             keyframe: true, // Audio packets are essentially all keyframes in Opus
             data: map.as_slice().to_vec(),
+            capture_duration_us: 0,
+            encode_duration_us: 0,
         })
     }
 }
@@ -1724,6 +1799,87 @@ Sink #4
                 "xdg-desktop-portal-wlr",
                 "xdg-desktop-portal-gtk"
             ]
+        );
+    }
+
+    #[tokio::test]
+    async fn test_wayland_capture_smoke() {
+        if std::env::var("WAVRY_CI_WAYLAND_CAPTURE_TEST").is_err() {
+            return;
+        }
+
+        use crate::{Codec, EncodeConfig, Resolution};
+        let config = EncodeConfig {
+            codec: Codec::H264,
+            resolution: Resolution {
+                width: 640,
+                height: 480,
+            },
+            fps: 30,
+            bitrate_kbps: 1000,
+            keyframe_interval_ms: 2000,
+            display_id: None,
+            enable_10bit: false,
+            enable_hdr: false,
+        };
+
+        let mut encoder = super::PipewireEncoder::new(config)
+            .await
+            .expect("Failed to create encoder");
+        // Pull a few frames to ensure it's actually working
+        for _ in 0..5 {
+            let _frame = encoder.next_frame().expect("Failed to get frame");
+        }
+    }
+
+    #[test]
+    fn test_pulse_monitor_resolution_syntax() {
+        // This test ensures the parsing logic for pactl output is correct.
+        let sink_inputs = r#"
+Sink Input #1
+    Driver: module-protocol-native.c
+    Owner Module: 15
+    Client: 22
+    Sink: 0
+    Sample Specification: s16le 2ch 44100Hz
+    Channel Map: front-left,front-right
+    Format: pcm, format.sample_format = "\"s16le\""  format.rate = "44100"  format.channels = "2"  format.channel_map = "\"front-left,front-right\""
+    Corked: no
+    Mute: no
+    Volume: front-left: 65536 / 100% / 0.00 dB,   front-right: 65536 / 100% / 0.00 dB
+            balance 0.00
+    Buffer Latency: 0 usec
+    Sink Latency: 0 usec
+    Resample method: n/a
+    Properties:
+        media.name = "Playback"
+        application.name = "Spotify"
+        application.process.id = "1234"
+        application.process.binary = "spotify"
+"#;
+        let sink_id =
+            super::find_sink_index_for_application_from_sink_inputs(sink_inputs, "spotify");
+        assert_eq!(sink_id, Some(0));
+
+        let sinks = r#"
+Sink #0
+    State: RUNNING
+    Name: alsa_output.pci-0000_00_1f.3.analog-stereo
+    Description: Built-in Audio Analog Stereo
+    Driver: module-alsa-card.c
+    Sample Specification: s16le 2ch 44100Hz
+    Channel Map: front-left,front-right
+    Owner Module: 7
+    Mute: no
+    Volume: front-left: 65536 / 100% / 0.00 dB,   front-right: 65536 / 100% / 0.00 dB
+            balance 0.00
+    Base Volume: 65536 / 100% / 0.00 dB
+    Monitor Source: alsa_output.pci-0000_00_1f.3.analog-stereo.monitor
+"#;
+        let monitor = super::find_monitor_source_for_sink_from_sinks(sinks, 0);
+        assert_eq!(
+            monitor.as_deref(),
+            Some("alsa_output.pci-0000_00_1f.3.analog-stereo.monitor")
         );
     }
 

@@ -63,6 +63,23 @@ const WAVE_FORMAT_EXTENSIBLE: u32 = 0xFFFE;
 const WINDOWS_AUDIO_ACTIVATION_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[cfg(target_os = "windows")]
+struct WaveFormatGuard(*mut WAVEFORMATEX);
+
+#[cfg(target_os = "windows")]
+impl Drop for WaveFormatGuard {
+    fn drop(&mut self) {
+        unsafe {
+            CoTaskMemFree(Some(self.0 as *const _));
+        }
+    }
+}
+
+#[cfg(target_os = "windows")]
+unsafe impl Send for WaveFormatGuard {}
+#[cfg(target_os = "windows")]
+unsafe impl Sync for WaveFormatGuard {}
+
+#[cfg(target_os = "windows")]
 fn pack_u64(hi: u32, lo: u32) -> u64 {
     ((hi as u64) << 32) | (lo as u64)
 }
@@ -502,7 +519,7 @@ impl Renderer for WindowsAudioRenderer {
 pub struct WindowsAudioCapturer {
     audio_client: IAudioClient,
     capture_client: IAudioCaptureClient,
-    format: *mut WAVEFORMATEX,
+    format: WaveFormatGuard,
     #[cfg(feature = "opus-support")]
     encoder: OpusEncoder,
     pcm: VecDeque<i16>,
@@ -516,6 +533,11 @@ pub struct WindowsAudioCapturer {
     resample_pos: f64,
     resample_prev: Option<[f32; 2]>,
 }
+
+#[cfg(target_os = "windows")]
+unsafe impl Send for WindowsAudioCapturer {}
+#[cfg(target_os = "windows")]
+unsafe impl Sync for WindowsAudioCapturer {}
 
 #[cfg(target_os = "windows")]
 struct HandleGuard(HANDLE);
@@ -796,7 +818,7 @@ impl WindowsAudioCapturer {
             Ok(Self {
                 audio_client,
                 capture_client,
-                format,
+                format: WaveFormatGuard(format),
                 #[cfg(feature = "opus-support")]
                 encoder,
                 pcm: VecDeque::with_capacity(AUDIO_MAX_BUFFER_SAMPLES),
@@ -846,6 +868,8 @@ impl WindowsAudioCapturer {
             timestamp_us,
             keyframe: true,
             data: _out,
+            capture_duration_us: 0,
+            encode_duration_us: 0,
         })
     }
 
@@ -923,10 +947,10 @@ impl WindowsAudioCapturer {
                         let zeros = vec![0i16; total_samples];
                         self.push_resampled_samples(&zeros)?;
                     } else {
-                        let block_align = (*self.format).nBlockAlign as usize;
+                        let block_align = (*self.format.0).nBlockAlign as usize;
                         let byte_size = frames_available as usize * block_align;
                         let bytes = std::slice::from_raw_parts(data as *const u8, byte_size);
-                        let samples = decode_pcm_samples(bytes, &*self.format, total_samples)?;
+                        let samples = decode_pcm_samples(bytes, &*self.format.0, total_samples)?;
                         self.push_resampled_samples(&samples)?;
                     }
 
@@ -1598,5 +1622,33 @@ fn supported_mft_codecs(category: GUID) -> Result<Vec<Codec>> {
             }
         }
         Ok(supported)
+    }
+}
+
+#[cfg(all(test, target_os = "windows"))]
+mod tests {
+    use super::*;
+    use std::sync::Arc;
+    use tokio::sync::Mutex;
+
+    #[tokio::test]
+    async fn test_audio_capture_threading_lifecycle() {
+        // This test ensures that WindowsAudioCapturer can be initialized and dropped
+        // from different threads, which is common in our host implementation.
+        // Even if no audio device is present, the focus is on thread safety.
+        let capturer_res = WindowsAudioCapturer::new().await;
+        if let Ok(capturer) = capturer_res {
+            let capturer = Arc::new(Mutex::new(capturer));
+
+            let capturer_clone = capturer.clone();
+            let handle = tokio::spawn(async move {
+                let mut lock = capturer_clone.lock().await;
+                // Just try to call next_frame once (might fail if no audio, but shouldn't panic)
+                let _ = lock.next_frame();
+            });
+
+            handle.await.unwrap();
+            // Dropping here ensures Drop is thread-safe too
+        }
     }
 }

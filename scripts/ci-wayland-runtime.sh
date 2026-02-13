@@ -200,4 +200,11 @@ echo "[INFO] Running Linux display smoke runtime checks in Wayland session"
   ./scripts/linux-display-smoke.sh --skip-cargo
 )
 
+echo "[INFO] Running Wayland capture smoke test"
+(
+  cd "$REPO_ROOT"
+  export WAVRY_CI_WAYLAND_CAPTURE_TEST=1
+  cargo test -p wavry-media --lib linux::tests::test_wayland_capture_smoke -- --nocapture
+)
+
 echo "[PASS] Wayland runtime CI harness completed"

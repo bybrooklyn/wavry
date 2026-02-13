@@ -443,8 +443,7 @@
     gap: var(--spacing-xl);
   }
 
-  .session-grid,
-  .settings-grid {
+  .session-grid {
     padding: 0 var(--spacing-xxl);
   }
 
@@ -543,41 +542,6 @@
   .success {
     color: var(--colors-accent-success);
     font-size: 12px;
-  }
-
-  .active-session {
-    display: flex;
-    flex-direction: column;
-    gap: 10px;
-  }
-
-  .session-line {
-    display: flex;
-    justify-content: space-between;
-    padding: 8px 10px;
-    background: rgba(0, 0, 0, 0.25);
-    border-radius: 6px;
-    font-size: 12px;
-  }
-
-  .danger-btn {
-    padding: 10px;
-    background: var(--colors-accent-danger);
-    color: white;
-    border-radius: 6px;
-    font-weight: 600;
-  }
-
-  .placeholder-box {
-    min-height: 110px;
-    border: 1px dashed rgba(255, 255, 255, 0.16);
-    border-radius: 8px;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    gap: 8px;
-    color: var(--colors-text-secondary);
   }
 
   .settings-header {

@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 
 export interface DeltaConfig {
     target_delay_us: number;
@@ -293,6 +294,20 @@ export class AppState {
         this.selectedMonitorId = parsedMonitor != null && Number.isFinite(parsedMonitor) ? parsedMonitor : null;
         this.sanitizeSettings();
         await this.refreshLinuxRuntimeHealth();
+
+        listen("host-error", (event: any) => {
+            const payload = event.payload;
+            console.error("Host error received:", payload);
+            this.hostErrorMessage = `Host error: ${payload.message}`;
+            if (!payload.can_retry) {
+                this.isHosting = false;
+                this.isConnected = false;
+                this.connectionStatus = "offline";
+                this.stopCCStatsPolling();
+            } else {
+                this.hostStatusMessage = "Host error occurred. Retrying automatically...";
+            }
+        });
     }
 
     async register(details: any) {

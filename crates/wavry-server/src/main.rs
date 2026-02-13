@@ -401,8 +401,14 @@ mod host {
         std::thread::spawn(move || {
             let mut encoder = encoder;
             loop {
+                let start = std::time::Instant::now();
                 match encoder.next_frame() {
-                    Ok(frame) => {
+                    Ok(mut frame) => {
+                        let encode_duration = start.elapsed().as_micros() as u32;
+                        frame.encode_duration_us = encode_duration;
+                        // For backends where capture is combined with next_frame,
+                        // we can't easily separate them, so we just use the total time for now
+                        // or assume capture is fast and encode takes most of the time.
                         if frame_tx.blocking_send(frame).is_err() {
                             break;
                         }
@@ -2012,6 +2018,8 @@ mod host {
             frame.keyframe,
             &frame.data,
             MAX_DATAGRAM_SIZE,
+            frame.capture_duration_us,
+            frame.encode_duration_us,
         )
         .map_err(|e| anyhow!("Chunking error: {}", e))?;
         peer_state.frame_id = peer_state.frame_id.wrapping_add(1);

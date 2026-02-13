@@ -195,6 +195,8 @@ pub fn chunk_video_payload(
     keyframe: bool,
     payload: &[u8],
     max_payload: usize,
+    capture_us: u32,
+    encode_us: u32,
 ) -> Result<Vec<VideoChunk>, ChunkError> {
     if max_payload == 0 {
         return Err(ChunkError::InvalidMaxPayload);
@@ -212,6 +214,8 @@ pub fn chunk_video_payload(
             timestamp_us,
             keyframe,
             payload: chunk.to_vec(),
+            capture_us,
+            encode_us,
         });
     }
     Ok(chunks)
@@ -594,7 +598,7 @@ mod tests {
     #[test]
     fn chunk_video_payload_single_chunk() {
         let payload = vec![1, 2, 3, 4, 5];
-        let chunks = chunk_video_payload(1, 1000, true, &payload, 1000).unwrap();
+        let chunks = chunk_video_payload(1, 1000, true, &payload, 1000, 0, 0).unwrap();
         assert_eq!(chunks.len(), 1);
         assert_eq!(chunks[0].chunk_count, 1);
         assert_eq!(chunks[0].chunk_index, 0);
@@ -604,7 +608,7 @@ mod tests {
     #[test]
     fn chunk_video_payload_multiple_chunks() {
         let payload = vec![0; 1000];
-        let chunks = chunk_video_payload(1, 1000, false, &payload, 300).unwrap();
+        let chunks = chunk_video_payload(1, 1000, false, &payload, 300, 0, 0).unwrap();
         assert_eq!(chunks.len(), 4); // 1000 / 300 = 4 (rounded up)
         for (i, chunk) in chunks.iter().enumerate() {
             assert_eq!(chunk.chunk_count, 4);
@@ -617,7 +621,7 @@ mod tests {
     #[test]
     fn chunk_video_payload_invalid_max_payload() {
         let payload = vec![1, 2, 3];
-        let result = chunk_video_payload(1, 1000, true, &payload, 0);
+        let result = chunk_video_payload(1, 1000, true, &payload, 0, 0, 0);
         assert!(matches!(result, Err(ChunkError::InvalidMaxPayload)));
     }
 

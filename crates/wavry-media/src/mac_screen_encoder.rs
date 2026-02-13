@@ -294,6 +294,8 @@ pub unsafe extern "C-unwind" fn compression_callback(
         timestamp_us,
         keyframe,
         data,
+        capture_duration_us: 0,
+        encode_duration_us: 0,
     };
 
     // Send frame (non-blocking)

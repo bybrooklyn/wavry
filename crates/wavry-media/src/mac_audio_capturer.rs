@@ -129,6 +129,8 @@ impl AudioContext {
                     timestamp_us,
                     keyframe: true,
                     data: out,
+                    capture_duration_us: 0,
+                    encode_duration_us: 0,
                 };
                 let _ = self.tx.try_send(packet);
             }

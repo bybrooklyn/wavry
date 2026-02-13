@@ -5,6 +5,38 @@ use serde::{Deserialize, Serialize};
 #[cfg(unix)]
 use std::os::fd::OwnedFd;
 
+#[derive(Debug, thiserror::Error)]
+pub enum MediaError {
+    #[error("Wayland protocol violation: {0}")]
+    ProtocolViolation(String),
+
+    #[error("XDG Desktop Portal unavailable or denied: {0}")]
+    PortalUnavailable(String),
+
+    #[error("PipeWire node loss or stream failure: {0}")]
+    StreamNodeLoss(String),
+
+    #[error("Compositor disconnect: {0}")]
+    CompositorDisconnect(String),
+
+    #[error("GStreamer error: {0}")]
+    GStreamerError(String),
+
+    #[error("Hardware encoder failure: {0}")]
+    HardwareFailure(String),
+
+    #[error("Unsupported feature: {0}")]
+    Unsupported(String),
+
+    #[error("Platform-specific error: {0}")]
+    PlatformError(String),
+
+    #[error("Generic error: {0}")]
+    Other(#[from] anyhow::Error),
+}
+
+pub type MediaResult<T> = std::result::Result<T, MediaError>;
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 pub enum Codec {
     Av1,
@@ -48,6 +80,8 @@ pub struct EncodedFrame {
     pub timestamp_us: u64,
     pub keyframe: bool,
     pub data: Vec<u8>,
+    pub capture_duration_us: u32,
+    pub encode_duration_us: u32,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]

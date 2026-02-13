@@ -229,20 +229,52 @@ impl UinputInner {
         for code in 0u16..=255u16 {
             keys.insert(Key::new(code));
         }
+        // Add common gamepad buttons
+        for code in 0x130u16..=0x13Fu16 {
+            keys.insert(Key::new(code));
+        }
 
         let mut rel_axes = AttributeSet::<RelativeAxisType>::new();
         rel_axes.insert(RelativeAxisType::REL_X);
         rel_axes.insert(RelativeAxisType::REL_Y);
+        rel_axes.insert(RelativeAxisType::REL_WHEEL);
+        rel_axes.insert(RelativeAxisType::REL_HWHEEL);
 
-        let abs_x = AbsInfo::new(0, 65535, 0, 0, 0, 0);
-        let abs_y = AbsInfo::new(0, 65535, 0, 0, 0, 0);
+        let abs_info = AbsInfo::new(0, 65535, 0, 0, 0, 0);
+        let gamepad_abs_info = AbsInfo::new(-32768, 32767, 0, 0, 0, 0);
+        let trigger_abs_info = AbsInfo::new(0, 255, 0, 0, 0, 0);
 
         let device = VirtualDeviceBuilder::new()?
             .name("wavry-uinput")
             .with_keys(&keys)?
             .with_relative_axes(&rel_axes)?
-            .with_absolute_axis(&UinputAbsSetup::new(AbsoluteAxisType::ABS_X, abs_x))?
-            .with_absolute_axis(&UinputAbsSetup::new(AbsoluteAxisType::ABS_Y, abs_y))?
+            .with_absolute_axis(&UinputAbsSetup::new(AbsoluteAxisType::ABS_X, abs_info))?
+            .with_absolute_axis(&UinputAbsSetup::new(AbsoluteAxisType::ABS_Y, abs_info))?
+            // Gamepad axes
+            .with_absolute_axis(&UinputAbsSetup::new(
+                AbsoluteAxisType::ABS_RX,
+                gamepad_abs_info,
+            ))?
+            .with_absolute_axis(&UinputAbsSetup::new(
+                AbsoluteAxisType::ABS_RY,
+                gamepad_abs_info,
+            ))?
+            .with_absolute_axis(&UinputAbsSetup::new(
+                AbsoluteAxisType::ABS_Z,
+                trigger_abs_info,
+            ))?
+            .with_absolute_axis(&UinputAbsSetup::new(
+                AbsoluteAxisType::ABS_RZ,
+                trigger_abs_info,
+            ))?
+            .with_absolute_axis(&UinputAbsSetup::new(
+                AbsoluteAxisType::ABS_HAT0X,
+                AbsInfo::new(-1, 1, 0, 0, 0, 0),
+            ))?
+            .with_absolute_axis(&UinputAbsSetup::new(
+                AbsoluteAxisType::ABS_HAT0Y,
+                AbsInfo::new(-1, 1, 0, 0, 0, 0),
+            ))?
             .build()?;
         Ok(Self { device })
     }
@@ -331,11 +363,52 @@ impl InputInjector for UinputInner {
     fn gamepad(
         &mut self,
         _gamepad_id: u32,
-        _axes: &[(u32, f32)],
-        _buttons: &[(u32, bool)],
+        axes: &[(u32, f32)],
+        buttons: &[(u32, bool)],
     ) -> Result<()> {
-        // Gamepad support via uinput would require additional device capabilities
-        // For now, provide a stub implementation
+        let mut events = Vec::new();
+
+        for &(axis, value) in axes {
+            let (code, val) = match axis {
+                0 => (AbsoluteAxisType::ABS_X.0, (value * 32767.0) as i32),
+                1 => (AbsoluteAxisType::ABS_Y.0, (value * 32767.0) as i32),
+                2 => (AbsoluteAxisType::ABS_RX.0, (value * 32767.0) as i32),
+                3 => (AbsoluteAxisType::ABS_RY.0, (value * 32767.0) as i32),
+                4 => (AbsoluteAxisType::ABS_Z.0, (value * 255.0) as i32),
+                5 => (AbsoluteAxisType::ABS_RZ.0, (value * 255.0) as i32),
+                6 => (AbsoluteAxisType::ABS_HAT0X.0, value as i32),
+                7 => (AbsoluteAxisType::ABS_HAT0Y.0, value as i32),
+                _ => continue,
+            };
+            events.push(InputEvent::new(EventType::ABSOLUTE, code, val));
+        }
+
+        for &(button, pressed) in buttons {
+            let code = match button {
+                0 => 0x130,  // BTN_SOUTH (A)
+                1 => 0x131,  // BTN_EAST (B)
+                2 => 0x133,  // BTN_WEST (X)
+                3 => 0x134,  // BTN_NORTH (Y)
+                4 => 0x136,  // BTN_TL (LB)
+                5 => 0x137,  // BTN_TR (RB)
+                6 => 0x13a,  // BTN_SELECT
+                7 => 0x13b,  // BTN_START
+                8 => 0x13c,  // BTN_MODE (Guide)
+                9 => 0x13d,  // BTN_THUMBL
+                10 => 0x13e, // BTN_THUMBR
+                _ => continue,
+            };
+            events.push(InputEvent::new(
+                EventType::KEY,
+                code,
+                if pressed { 1 } else { 0 },
+            ));
+        }
+
+        if !events.is_empty() {
+            self.device.emit(&events)?;
+            self.sync()?;
+        }
         Ok(())
     }
 }
@@ -526,12 +599,12 @@ enum PortalEvent {
     Key { keycode: u32, pressed: bool },
     Button { button: i32, pressed: bool },
     Motion { dx: f64, dy: f64 },
+    MotionAbsolute { x: f64, y: f64 },
 }
 
 pub struct PortalInjector {
     tx: mpsc::UnboundedSender<PortalEvent>,
     ready: Arc<AtomicBool>,
-    last_abs: Option<(f32, f32)>,
 }
 
 impl PortalInjector {
@@ -568,9 +641,9 @@ impl PortalInjector {
                     }
 
                     let request = proxy.start(&session, None).await?;
-                    if request.response().is_err() {
-                        return Err(anyhow!("RemoteDesktop start denied"));
-                    }
+                    let response = request.response()?;
+                    let streams = response.streams();
+                    let stream_id = streams.first().map(|s| s.pipe_wire_node_id()).unwrap_or(0);
 
                     ready_flag.store(true, Ordering::SeqCst);
 
@@ -597,6 +670,13 @@ impl PortalInjector {
                             PortalEvent::Motion { dx, dy } => {
                                 let _ = proxy.notify_pointer_motion(&session, dx, dy).await;
                             }
+                            PortalEvent::MotionAbsolute { x, y } => {
+                                // Portal absolute motion usually requires a stream ID to map to.
+                                // We use the first stream returned during start().
+                                let _ = proxy
+                                    .notify_pointer_motion_absolute(&session, stream_id, x, y)
+                                    .await;
+                            }
                         }
                     }
                     Ok(())
@@ -615,11 +695,7 @@ impl PortalInjector {
             }
         });
 
-        Ok(Self {
-            tx,
-            ready,
-            last_abs: None,
-        })
+        Ok(Self { tx, ready })
     }
 
     fn ready(&self) -> Result<()> {
@@ -661,7 +737,6 @@ impl InputInjector for PortalInjector {
     }
 
     fn mouse_motion(&mut self, dx: i32, dy: i32) -> Result<()> {
-        self.last_abs = None;
         self.send(PortalEvent::Motion {
             dx: dx as f64,
             dy: dy as f64,
@@ -669,30 +744,10 @@ impl InputInjector for PortalInjector {
     }
 
     fn mouse_absolute(&mut self, x: f32, y: f32) -> Result<()> {
-        if let Some((last_x, last_y)) = self.last_abs {
-            // ScreenCaptureKit/Portals don't always support absolute directly,
-            // so we calculate delta if needed, but portal.notify_pointer_motion
-            // is usually relative.
-            // Wait, notify_pointer_motion is RELATIVE.
-            // If we want absolute, we need to know screen resolution or
-            // use notify_pointer_motion_absolute if available.
-            // Ashpd RemoteDesktop has notify_pointer_motion_absolute.
-
-            // For now, if we only have relative, we calculate delta.
-            // But we should ideally update the portal loop to use absolute.
-            let dx = (x - last_x) as f64;
-            let dy = (y - last_y) as f64;
-
-            // We need to scale these to something sensible for "pixels"
-            // since f32 0..1 is too small for raw relative movement.
-            // Assuming 1920x1080 for delta calculation if no other info.
-            self.send(PortalEvent::Motion {
-                dx: dx * 1920.0,
-                dy: dy * 1080.0,
-            })?;
-        }
-        self.last_abs = Some((x, y));
-        Ok(())
+        self.send(PortalEvent::MotionAbsolute {
+            x: x as f64,
+            y: y as f64,
+        })
     }
 
     fn scroll(&mut self, dx: f32, dy: f32) -> Result<()> {

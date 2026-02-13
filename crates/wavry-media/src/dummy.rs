@@ -33,6 +33,8 @@ impl DummyEncoder {
             timestamp_us,
             keyframe: self.seq.is_multiple_of(60),
             data: vec![0x99; 1000], // Dummy payload
+            capture_duration_us: 0,
+            encode_duration_us: 0,
         })
     }
 }

@@ -1,0 +1,27 @@
+name: Test Quarantine
+
+on:
+  schedule:
+    - cron: '0 2 * * *' # Every day at 2 AM
+  workflow_dispatch:
+
+jobs:
+  quarantined-tests:
+    name: Quarantined Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y pkg-config protobuf-compiler libsqlite3-dev libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev
+          
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        
+      - name: Run control-plane resilience (quarantined)
+        run: ./scripts/control-plane-resilience.sh || echo "Test failed but ignored in quarantine"
+        
+      - name: Run fuzz decode (quarantined)
+        run: cargo test -p rift-core --test fuzz_decode || echo "Test failed but ignored in quarantine"

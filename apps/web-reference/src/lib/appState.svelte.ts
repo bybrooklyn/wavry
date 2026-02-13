@@ -38,6 +38,11 @@ export class AppState {
     private pc: RTCPeerConnection | null = null;
     remoteStream = $state<MediaStream | null>(null);
 
+    // Transport and signaling
+    private ws = $state<WebSocket | null>(null);
+    private transport = $state<any>(null);
+    private controlWriter: WritableStreamDefaultWriter | null = null;
+
     constructor() {
         if (typeof window !== "undefined") {
             this.loadFromStorage();
@@ -109,7 +114,7 @@ export class AppState {
                 resolve();
             };
 
-            this.ws.onmessage = (evt) => {
+            this.ws.onmessage = (evt: MessageEvent) => {
                 try {
                     const msg = JSON.parse(evt.data);
                     this.handleSignalingMessage(msg);
@@ -123,7 +128,7 @@ export class AppState {
                 this.ws = null;
             };
 
-            this.ws.onerror = (err) => {
+            this.ws.onerror = (err: Event) => {
                 console.error("Signaling WS error:", err);
                 reject(err);
             };

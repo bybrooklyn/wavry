@@ -871,6 +871,11 @@ async fn run_client_inner(
     let mut file_transfer_limiter = FileTransferLimiter::new(FILE_TRANSFER_MIN_KBPS);
     let mut file_transfer_tick = time::interval(Duration::from_millis(FILE_TRANSFER_TICK_MS));
 
+    let use_experimental_transport = env_bool("WAVRY_TRANSPORT_EXPERIMENTAL", false);
+    if use_experimental_transport {
+        info!("EXPERIMENTAL transport variants enabled");
+    }
+
     loop {
         tokio::select! {
             _ = async {
@@ -1109,6 +1114,7 @@ async fn run_client_inner(
             _ = jitter_interval.tick() => {
                 while let Some(ready) = jitter_buffer.pop_ready(now_us()) {
                     let mut rendered = false;
+                    let render_start = Instant::now();
 
                     if let Some(ref mut rec) = recorder {
                         if let (Some(codec), Some(res)) = (stream_codec, stream_resolution) {
@@ -1131,9 +1137,29 @@ async fn run_client_inner(
                         r.render(&ready.data, ready.timestamp_us)?;
                         rendered = true;
                     }
+
                     if rendered {
+                        let render_duration_us = render_start.elapsed().as_micros() as u32;
                         if let Some(stats) = runtime_stats.as_ref() {
                             stats.frames_decoded.fetch_add(1, Ordering::Relaxed);
+                        }
+
+                        if let Some(alias) = session_alias {
+                            let latency = rift_core::LatencyStats {
+                                frame_id: ready.frame_id,
+                                capture_us: ready.capture_duration_us,
+                                encode_us: ready.encode_duration_us,
+                                network_us: (last_rtt_us / 2) as u32,
+                                decode_us: render_duration_us, // Simplified: decode+render
+                                render_us: 0,
+                                total_us: 0,
+                            };
+                            let msg = ProtoMessage {
+                                content: Some(rift_core::message::Content::Control(ProtoControl {
+                                    content: Some(rift_core::control_message::Content::Latency(latency)),
+                                })),
+                            };
+                            let _ = send_rift_msg(&socket, &mut crypto, connect_addr, msg, Some(alias), next_packet_id(), relay_info).await;
                         }
                     }
                 }

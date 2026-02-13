@@ -117,6 +117,24 @@ Recovery steps:
 Validation:
 - Register/heartbeat p95 return under SLO thresholds.
 
+### 5) Wayland Capture Failures (Linux)
+
+Symptoms:
+- Host capture fails to start.
+- Protocol Error 71 or Gdk-Message in logs.
+- Portal permission denied.
+
+Recovery steps:
+1. Ensure `xdg-desktop-portal` and a desktop-specific backend (e.g., `xdg-desktop-portal-kde`) are running.
+2. Confirm PipeWire is active: `systemctl --user status pipewire`.
+3. Check Wavry Desktop UI for specific error messages (ProtocolViolation, PortalUnavailable).
+4. Restart Wavry Desktop to reset portal session if persistent.
+5. On some compositors (e.g., KDE), manually grant "Screencast" permission in System Settings.
+
+Validation:
+- Successful host capture start.
+- No "MediaError" displayed in UI.
+
 ## Soak/Chaos Validation (Pre-Release and CI)
 
 Use the unified resilience gate:
@@ -133,12 +151,12 @@ It validates:
 - high-latency control-plane behavior
 - load/soak success-rate and latency SLOs
 
-Current default local thresholds:
-- Success rate: `>= 98%`
-- Register p95: `<= 400ms`
-- Heartbeat p95: `<= 450ms`
+## Related Documents
 
-CI uses slightly relaxed thresholds to account for shared runner variance.
+- [Release Policy](RELEASE_POLICY.md)
+- [Release Artifacts](RELEASE_ARTIFACTS.md)
+- [Gateway Operations](GATEWAY_OPERATIONS.md)
+- [Relay Operations](RELAY_OPERATIONS.md)
 
 ## Escalation and Evidence
 

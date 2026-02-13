@@ -328,6 +328,8 @@ async fn send_video_frame(
         frame.keyframe,
         &frame.data,
         MAX_DATAGRAM_SIZE,
+        frame.capture_duration_us,
+        frame.encode_duration_us,
     )
     .map_err(|e| anyhow!("chunking error: {}", e))?;
     peer_state.frame_id = peer_state.frame_id.wrapping_add(1);
