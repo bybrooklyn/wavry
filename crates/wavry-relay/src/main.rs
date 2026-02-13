@@ -66,6 +66,10 @@ struct Args {
     #[arg(long, env = "WAVRY_RELAY_MASTER_PUBLIC_KEY")]
     master_public_key: Option<String>,
 
+    /// Bearer token for authenticated relay register/heartbeat requests.
+    #[arg(long, env = "WAVRY_RELAY_MASTER_TOKEN")]
+    master_auth_token: Option<String>,
+
     /// Allow running without master signature validation (development only)
     #[arg(long, env = "WAVRY_RELAY_ALLOW_INSECURE_DEV", default_value_t = false)]
     allow_insecure_dev: bool,
@@ -121,6 +125,17 @@ fn env_bool(name: &str, default: bool) -> bool {
     }
 }
 
+fn with_master_auth(
+    request: reqwest::RequestBuilder,
+    master_auth_token: Option<&str>,
+) -> reqwest::RequestBuilder {
+    if let Some(token) = master_auth_token {
+        request.bearer_auth(token)
+    } else {
+        request
+    }
+}
+
 #[derive(Clone)]
 struct MasterRegistrationConfig {
     register_url: String,
@@ -130,6 +145,7 @@ struct MasterRegistrationConfig {
     asn: Option<u32>,
     max_sessions: usize,
     max_bitrate_kbps: u32,
+    master_auth_token: Option<String>,
 }
 
 async fn register_with_master(
@@ -148,11 +164,13 @@ async fn register_with_master(
             max_bitrate_kbps: Some(config.max_bitrate_kbps),
             features: vec!["ipv4".into()],
         };
-        match client
-            .post(&config.register_url)
-            .json(&request)
-            .send()
-            .await
+        match with_master_auth(
+            client.post(&config.register_url),
+            config.master_auth_token.as_deref(),
+        )
+        .json(&request)
+        .send()
+        .await
         {
             Ok(resp) => {
                 if resp.status().is_success() {
@@ -1327,6 +1345,7 @@ async fn main() -> Result<()> {
         asn: args.asn,
         max_sessions: args.max_sessions,
         max_bitrate_kbps: args.max_bitrate_kbps,
+        master_auth_token: args.master_auth_token.clone(),
     };
 
     info!("Registering with Master at {}...", args.master_url);
@@ -1385,7 +1404,14 @@ async fn main() -> Result<()> {
                 relay_id: registration_for_hb.relay_id.clone(),
                 load_pct: load as f32,
             };
-            match client.post(&heartbeat_url).json(&req).send().await {
+            match with_master_auth(
+                client.post(&heartbeat_url),
+                registration_for_hb.master_auth_token.as_deref(),
+            )
+            .json(&req)
+            .send()
+            .await
+            {
                 Ok(resp) if resp.status().is_success() => {
                     consecutive_failures = 0;
                     server_clone

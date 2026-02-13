@@ -12,6 +12,15 @@ This runbook covers incident response and recovery for the Wavry control plane (
 - Restart recovery for master and relay
 - Packet-loss and high-latency degradation handling
 
+## Service Identity Boundary
+
+For production deployments, require relay service identity on control-plane APIs:
+
+- Set `WAVRY_MASTER_RELAY_AUTH_TOKEN` on `wavry-master`.
+- Set the same value as `WAVRY_RELAY_MASTER_TOKEN` on each relay.
+
+When configured, relay `register` and `heartbeat` calls must include a matching bearer token, otherwise master returns `401 Unauthorized`.
+
 ## Fast Triage
 
 1. Check master health and relay registry:

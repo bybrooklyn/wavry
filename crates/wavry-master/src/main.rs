@@ -166,6 +166,7 @@ struct AppState {
     reputations: Arc<RwLock<HashMap<String, RelayReputation>>>,
     lease_rate_limiter: Mutex<HashMap<String, Vec<Instant>>>,
     banned_users: Arc<RwLock<HashSet<String>>>,
+    relay_auth_token: Option<String>,
     #[cfg(feature = "insecure-dev-auth")]
     insecure_dev: bool,
     signing_key: pasetors::keys::AsymmetricSecretKey<pasetors::version4::V4>,
@@ -224,6 +225,22 @@ fn assert_admin(headers: &HeaderMap) -> bool {
 
     if let Some(got) = got {
         return wavry_common::helpers::constant_time_eq(&got, &expected);
+    }
+    false
+}
+
+fn assert_relay_service_identity(headers: &HeaderMap, expected_token: Option<&str>) -> bool {
+    let Some(expected) = expected_token else {
+        return true;
+    };
+    let got = headers
+        .get(header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|raw| raw.strip_prefix("Bearer "))
+        .map(str::trim);
+
+    if let Some(got) = got {
+        return wavry_common::helpers::constant_time_eq(got, expected);
     }
     false
 }
@@ -364,6 +381,17 @@ async fn main() -> anyhow::Result<()> {
         .unwrap_or_else(|| derive_default_key_id(&signing_key));
     let lease_ttl_secs = env_u64("WAVRY_MASTER_LEASE_TTL_SECS", DEFAULT_LEASE_TTL_SECS);
     let lease_ttl = Duration::from_secs(lease_ttl_secs.clamp(60, 3600));
+    let relay_auth_token = std::env::var("WAVRY_MASTER_RELAY_AUTH_TOKEN")
+        .ok()
+        .map(|token| token.trim().to_string())
+        .filter(|token| !token.is_empty());
+    if relay_auth_token.is_some() {
+        info!("relay service authentication enabled for register/heartbeat endpoints");
+    } else {
+        warn!(
+            "relay service authentication disabled; set WAVRY_MASTER_RELAY_AUTH_TOKEN to require relay identity"
+        );
+    }
     info!(
         "master signing key id={} lease_ttl_secs={} provisioned_key={}",
         signing_key_id,
@@ -379,6 +407,7 @@ async fn main() -> anyhow::Result<()> {
         reputations: Arc::new(RwLock::new(HashMap::new())),
         lease_rate_limiter: Mutex::new(HashMap::new()),
         banned_users: Arc::new(RwLock::new(HashSet::new())),
+        relay_auth_token,
         #[cfg(feature = "insecure-dev-auth")]
         insecure_dev,
         signing_key,
@@ -537,8 +566,13 @@ async fn handle_well_known_id(State(state): State<Arc<AppState>>) -> impl IntoRe
 
 async fn handle_relay_register(
     State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
     Json(payload): Json<RelayRegisterRequest>,
 ) -> impl IntoResponse {
+    if !assert_relay_service_identity(&headers, state.relay_auth_token.as_deref()) {
+        warn!("relay register rejected: missing/invalid service token");
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
     if payload.relay_id.trim().is_empty() || payload.endpoints.is_empty() {
         return StatusCode::BAD_REQUEST.into_response();
     }
@@ -597,8 +631,13 @@ async fn handle_relay_register(
 
 async fn handle_relay_heartbeat(
     State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
     Json(payload): Json<RelayHeartbeatRequest>,
 ) -> impl IntoResponse {
+    if !assert_relay_service_identity(&headers, state.relay_auth_token.as_deref()) {
+        warn!("relay heartbeat rejected: missing/invalid service token");
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
     if !(0.0..=100.0).contains(&payload.load_pct) || payload.relay_id.trim().is_empty() {
         return StatusCode::BAD_REQUEST.into_response();
     }
@@ -1036,6 +1075,29 @@ mod tests {
         assert_eq!(payload.relay_id, relay_id);
         assert_eq!(payload.key_id, key_id);
         assert_eq!(payload.session_id, session_id);
+    }
+
+    #[test]
+    fn relay_service_identity_allows_when_disabled() {
+        let headers = HeaderMap::new();
+        assert!(assert_relay_service_identity(&headers, None));
+    }
+
+    #[test]
+    fn relay_service_identity_validates_bearer_token() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::AUTHORIZATION,
+            HeaderValue::from_static("Bearer relay-secret"),
+        );
+        assert!(assert_relay_service_identity(
+            &headers,
+            Some("relay-secret")
+        ));
+        assert!(!assert_relay_service_identity(
+            &headers,
+            Some("wrong-secret")
+        ));
     }
 
     #[test]

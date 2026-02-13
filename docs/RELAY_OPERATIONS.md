@@ -54,6 +54,7 @@ docker run -d \
 | `WAVRY_RELAY_LISTEN` | `0.0.0.0:4000` | UDP listen address |
 | `WAVRY_MASTER_URL` | `http://localhost:8080` | Master server URL |
 | `WAVRY_RELAY_MASTER_PUBLIC_KEY` | None | Ed25519 public key (hex) from Master |
+| `WAVRY_RELAY_MASTER_TOKEN` | None | Bearer token for authenticated relay register/heartbeat requests |
 | `WAVRY_RELAY_ALLOW_PUBLIC_BIND` | `0` | Allow binding to public IPs (required in production) |
 | `WAVRY_RELAY_ALLOW_INSECURE_DEV` | `0` | Skip signature validation (dev only, never use in prod) |
 | `WAVRY_RELAY_REGION` | None | Geographic region (e.g., `us-east-1`, `eu-west-1`) |
@@ -410,4 +411,3 @@ nc -u <relay_public_ip> 4000
 - **Issues:** https://github.com/bybrooklyn/wavry/issues
 - **Discord:** (Coming soon)
 - **Email:** support@wavry.dev
-
