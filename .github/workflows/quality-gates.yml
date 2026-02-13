@@ -114,3 +114,27 @@ jobs:
 
       - name: Decode Fuzz Smoke Test
         run: cargo test -p rift-core --test fuzz_decode -- --nocapture
+
+  supply-chain:
+    name: Supply Chain Gate
+    runs-on: ubuntu-latest
+    needs: rust-quality
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: rust-${{ runner.os }}-quality-gates
+
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --locked --version 0.22.1
+
+      - name: Cargo audit (deny warnings)
+        run: ./scripts/run-cargo-audit.sh
+
+      - name: Verify workflow action pinning
+        run: ./scripts/check-workflow-action-pinning.sh

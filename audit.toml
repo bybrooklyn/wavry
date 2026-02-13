@@ -1,0 +1,31 @@
+[advisories]
+# Temporary allowlist for known transitive advisories and unmaintained/unsound
+# dependencies while upstream ecosystem migrations are in progress.
+# New advisories outside this list still fail CI.
+ignore = [
+  "RUSTSEC-2021-0141", # dotenv (legacy dependency in wavry-gateway)
+  "RUSTSEC-2023-0071", # rsa timing issue via sqlx-mysql
+  "RUSTSEC-2024-0370", # proc-macro-error unmaintained
+  "RUSTSEC-2024-0384", # instant unmaintained
+  "RUSTSEC-2024-0388", # derivative unmaintained
+  "RUSTSEC-2024-0411", # gtk-rs GTK3 bindings unmaintained
+  "RUSTSEC-2024-0412", # gtk-rs GTK3 bindings unmaintained
+  "RUSTSEC-2024-0413", # gtk-rs GTK3 bindings unmaintained
+  "RUSTSEC-2024-0414", # gtk-rs GTK3 bindings unmaintained
+  "RUSTSEC-2024-0415", # gtk-rs GTK3 bindings unmaintained
+  "RUSTSEC-2024-0416", # gtk-rs GTK3 bindings unmaintained
+  "RUSTSEC-2024-0417", # gtk-rs GTK3 bindings unmaintained
+  "RUSTSEC-2024-0418", # gtk-rs GTK3 bindings unmaintained
+  "RUSTSEC-2024-0419", # gtk-rs GTK3 bindings unmaintained
+  "RUSTSEC-2024-0420", # gtk-rs GTK3 bindings unmaintained
+  "RUSTSEC-2024-0429", # glib VariantStrIter unsoundness
+  "RUSTSEC-2024-0436", # paste unmaintained
+  "RUSTSEC-2025-0057", # fxhash unmaintained
+  "RUSTSEC-2025-0075", # unic-char-range unmaintained
+  "RUSTSEC-2025-0080", # unic-common unmaintained
+  "RUSTSEC-2025-0081", # unic-char-property unmaintained
+  "RUSTSEC-2025-0098", # unic-ucd-version unmaintained
+  "RUSTSEC-2025-0100", # unic-ucd-ident unmaintained
+  "RUSTSEC-2025-0134", # rustls-pemfile unmaintained
+  "RUSTSEC-2025-0141", # bincode unmaintained
+]
