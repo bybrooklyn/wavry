@@ -49,11 +49,13 @@ def get_json(url: str, timeout: float) -> Any:
 
 
 def generate_endpoint(index: int) -> str:
-    # Produce deterministic unique IPv4 endpoints to avoid master sybil-IP caps.
+    # Produce deterministic unique IPv4 endpoints without prefix collisions.
+    # Master's sybil check currently compares endpoint IPs using string startswith(),
+    # so avoid values like 10.0.0.1 and 10.0.0.10 in the same run.
     a = 10
-    b = (index // (255 * 255)) % 255
-    c = (index // 255) % 255
-    d = (index % 254) + 1
+    b = (index % 200) + 1
+    c = ((index // 200) % 200) + 1
+    d = 1
     port = 20000 + (index % 20000)
     return f"{a}.{b}.{c}.{d}:{port}"
 
