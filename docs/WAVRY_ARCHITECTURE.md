@@ -226,9 +226,10 @@ cargo build --workspace
 # Run tests
 cargo test --workspace
 
-# Run gateway and relay locally
-cargo run --bin wavry-gateway
-cargo run --bin wavry-relay -- --master-url http://localhost:8080
+# Run control plane locally (Docker-only distribution)
+docker compose -f docker/control-plane.compose.yml up -d gateway
+WAVRY_RELAY_MASTER_URL=http://host.docker.internal:8080 \
+docker compose -f docker/control-plane.compose.yml --profile relay up -d relay
 
 # Desktop app (Tauri)
 cd crates/wavry-desktop && bun install && bun tauri dev

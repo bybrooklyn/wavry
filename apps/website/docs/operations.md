@@ -16,8 +16,8 @@ This page outlines practical operations guidance for teams running Wavry in prod
 
 A common deployment layout includes:
 
-- Gateway/control-plane services
-- Relay services in one or more regions
+- Gateway/auth service containers (Docker-only distribution)
+- Relay service containers in one or more regions (Docker-only distribution)
 - Host pools with capture/encode workloads
 - Client apps or integrated product frontends
 

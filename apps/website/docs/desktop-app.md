@@ -46,7 +46,8 @@ Typical outputs by platform:
 
 - Windows: executable/installer
 - Linux: distro-appropriate bundles
-- macOS: app bundle and disk image workflow
+
+macOS release distribution uses the native Swift desktop app (`wavry-desktop-native-macos-*.dmg`) rather than Tauri packaging.
 
 ## Linux Runtime Behavior (Wayland and X11)
 

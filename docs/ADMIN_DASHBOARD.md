@@ -68,7 +68,7 @@ pub struct BannedUser {
 ## Setup & Configuration
 
 ### Prerequisites
-1. Wavry Gateway running with SQLite database initialized
+1. Wavry Gateway container running with SQLite database initialized
 2. Admin panel token (32+ character random string)
 3. HTTP access to gateway (default: http://localhost:3000)
 
@@ -83,7 +83,7 @@ echo "Save this token: $ADMIN_TOKEN"
 #### Step 2: Start Gateway with Admin Token
 ```bash
 export ADMIN_PANEL_TOKEN="$ADMIN_TOKEN"
-cargo run --bin wavry-gateway
+docker compose -f docker/control-plane.compose.yml up -d gateway
 ```
 
 #### Step 3: Create Test Users (Optional)
@@ -96,10 +96,11 @@ cargo run --bin wavry-gateway
 # Required for admin panel access
 ADMIN_PANEL_TOKEN=<32+ character hex string>
 
-# Optional gateway config
-WAVRY_DB_PATH=.wavry/gateway.db    # Default database location
-WAVRY_GATEWAY_BIND=0.0.0.0:3000    # Default bind address
-WAVRY_LOG_LEVEL=info               # Default log level
+# Optional compose/runtime config
+WAVRY_GATEWAY_PORT=3000            # Published gateway port
+WAVRY_GATEWAY_LOG_LEVEL=info       # Gateway log level
+WAVRY_CONTROL_PLANE_TAG=latest     # Control plane image tag
+WAVRY_IMAGE_REPO=ghcr.io/bybrooklyn/wavry
 ```
 
 ---
@@ -292,9 +293,8 @@ http://localhost:3000/admin
 TOKEN=$(openssl rand -hex 32)
 export ADMIN_PANEL_TOKEN="$TOKEN"
 
-# Start gateway
-cargo run --bin wavry-gateway &
-GATEWAY_PID=$!
+# Start gateway container
+docker compose -f docker/control-plane.compose.yml up -d gateway
 
 sleep 2
 
@@ -302,7 +302,7 @@ sleep 2
 curl -H "x-admin-token: $TOKEN" http://localhost:3000/admin/api/overview
 
 # Cleanup
-kill $GATEWAY_PID
+docker compose -f docker/control-plane.compose.yml stop gateway
 ```
 
 #### Test 2: Session Revocation
@@ -425,4 +425,3 @@ Planned enhancements:
 - [Axum HTTP Framework](https://github.com/tokio-rs/axum)
 - [SQLx Query Builder](https://github.com/launchbadge/sqlx)
 - [OWASP Admin Interface Security](https://owasp.org/www-community/attacks/attacks_on_business_logic)
-

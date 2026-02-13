@@ -1,56 +1,49 @@
 # syntax=docker/dockerfile:1.7
 
-# 1. Planner stage: determine dependencies
-FROM lukemathwalker/cargo-chef:latest-rust-1-bookworm AS planner
+FROM lukemathwalker/cargo-chef:latest-rust-1-bookworm AS chef-base
 WORKDIR /app
+
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt,sharing=locked \
+    apt-get update && apt-get install -y --no-install-recommends \
+      pkg-config \
+      protobuf-compiler \
+      libsqlite3-dev \
+      && rm -rf /var/lib/apt/lists/*
+
+FROM chef-base AS planner
 COPY . .
-# Scope the dependency graph to the gateway binary only.
 RUN cargo chef prepare --recipe-path recipe.json --bin wavry-gateway
 
-# 2. Cacher stage: build dependencies
-FROM lukemathwalker/cargo-chef:latest-rust-1-bookworm AS cacher
-WORKDIR /app
-
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    pkg-config \
-    protobuf-compiler \
-    libsqlite3-dev \
-    && rm -rf /var/lib/apt/lists/*
-
+FROM chef-base AS builder
 COPY --from=planner /app/recipe.json recipe.json
-RUN cargo chef cook --release --recipe-path recipe.json --bin wavry-gateway
-
-# 3. Builder stage: build the actual source
-FROM rust:1-bookworm AS builder
-WORKDIR /app
-
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    pkg-config \
-    protobuf-compiler \
-    libsqlite3-dev \
-    && rm -rf /var/lib/apt/lists/*
-
+RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
+    --mount=type=cache,target=/usr/local/cargo/git,sharing=locked \
+    cargo chef cook --release --recipe-path recipe.json --bin wavry-gateway
 COPY . .
-# Copy the compiled dependencies from the cacher stage
-COPY --from=cacher /app/target target
-COPY --from=cacher /usr/local/cargo /usr/local/cargo
+RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
+    --mount=type=cache,target=/usr/local/cargo/git,sharing=locked \
+    cargo build --locked --release -p wavry-gateway
 
-RUN cargo build --locked --release -p wavry-gateway
-
-# 4. Runtime stage
 FROM debian:bookworm-slim AS runtime
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     tzdata \
     libsqlite3-0 \
-    && rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/lists/* \
+    && useradd --system --create-home --home-dir /var/lib/wavry --shell /usr/sbin/nologin wavry
 
-WORKDIR /app
+WORKDIR /var/lib/wavry
 COPY --from=builder /app/target/release/wavry-gateway /usr/local/bin/wavry-gateway
+COPY docker/gateway-entrypoint.sh /usr/local/bin/gateway-entrypoint.sh
+RUN chmod +x /usr/local/bin/gateway-entrypoint.sh
 
 ENV RUST_LOG=info
 ENV WAVRY_ALLOW_PUBLIC_BIND=1
 ENV DATABASE_URL=sqlite:gateway.db
 
+VOLUME ["/var/lib/wavry"]
+
 EXPOSE 3000
-ENTRYPOINT ["/usr/local/bin/wavry-gateway"]
+USER wavry
+ENTRYPOINT ["/usr/local/bin/gateway-entrypoint.sh"]

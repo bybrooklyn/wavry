@@ -72,9 +72,48 @@ jobs:
           file: docker/${{ matrix.component }}.Dockerfile
           platforms: ${{ github.event_name == 'pull_request' && 'linux/amd64' || 'linux/amd64,linux/arm64' }}
           push: ${{ github.event_name != 'pull_request' }}
+          load: ${{ github.event_name == 'pull_request' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           provenance: ${{ github.event_name != 'pull_request' }}
           sbom: ${{ github.event_name != 'pull_request' }}
-          cache-from: type=gha,scope=wavry-${{ matrix.component }}
-          cache-to: type=gha,mode=max,scope=wavry-${{ matrix.component }}
+          cache-from: |
+            type=gha,scope=wavry-docker-chef
+            type=gha,scope=wavry-${{ matrix.component }}
+          cache-to: |
+            type=gha,mode=max,scope=wavry-docker-chef
+            type=gha,mode=max,scope=wavry-${{ matrix.component }}
+          build-args: |
+            BUILDKIT_INLINE_CACHE=1
+
+      - name: Runtime smoke (PR)
+        if: github.event_name == 'pull_request'
+        shell: bash
+        run: |
+          set -euo pipefail
+          image_tag="$(printf '%s\n' "${{ steps.meta.outputs.tags }}" | head -n 1)"
+          if [[ -z "$image_tag" ]]; then
+            echo "No image tag generated for runtime smoke." >&2
+            exit 1
+          fi
+          case "${{ matrix.component }}" in
+            gateway)
+              docker run --rm --entrypoint /bin/sh "$image_tag" -c \
+                '/usr/local/bin/gateway-entrypoint.sh >/tmp/gateway.log 2>&1 & pid=$!; \
+                 sleep 3; \
+                 if ! kill -0 "$pid" 2>/dev/null; then cat /tmp/gateway.log; exit 1; fi; \
+                 kill "$pid"; \
+                 wait "$pid" || true'
+              ;;
+            relay)
+              docker run --rm \
+                -e WAVRY_RELAY_ALLOW_INSECURE_DEV=1 \
+                --entrypoint /usr/local/bin/relay-entrypoint.sh \
+                "$image_tag" \
+                --help >/dev/null
+              ;;
+            *)
+              echo "Unhandled component: ${{ matrix.component }}" >&2
+              exit 1
+              ;;
+          esac

@@ -1,0 +1,41 @@
+name: wavry-control-plane
+
+services:
+  gateway:
+    image: ${WAVRY_IMAGE_REPO:-ghcr.io/bybrooklyn/wavry}/gateway:${WAVRY_CONTROL_PLANE_TAG:-latest}
+    restart: unless-stopped
+    environment:
+      RUST_LOG: ${WAVRY_GATEWAY_LOG_LEVEL:-info}
+      WAVRY_ALLOW_PUBLIC_BIND: "1"
+      WAVRY_GATEWAY_BIND_ADDR: 0.0.0.0:3000
+      DATABASE_URL: sqlite:gateway.db
+      ADMIN_PANEL_TOKEN: ${ADMIN_PANEL_TOKEN:-}
+    ports:
+      - "${WAVRY_GATEWAY_PORT:-3000}:3000"
+    volumes:
+      - gateway-data:/var/lib/wavry
+
+  relay:
+    image: ${WAVRY_IMAGE_REPO:-ghcr.io/bybrooklyn/wavry}/relay:${WAVRY_CONTROL_PLANE_TAG:-latest}
+    restart: unless-stopped
+    profiles:
+      - relay
+    environment:
+      RUST_LOG: ${WAVRY_RELAY_LOG_LEVEL:-info}
+      WAVRY_RELAY_ALLOW_INSECURE_DEV: ${WAVRY_RELAY_ALLOW_INSECURE_DEV:-1}
+      WAVRY_RELAY_MASTER_PUBLIC_KEY: ${WAVRY_RELAY_MASTER_PUBLIC_KEY:-}
+    command:
+      - --listen
+      - 0.0.0.0:4000
+      - --master-url
+      - ${WAVRY_RELAY_MASTER_URL:-http://host.docker.internal:8080}
+    ports:
+      - "${WAVRY_RELAY_PORT:-4000}:4000/udp"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - relay-data:/var/lib/wavry-relay
+
+volumes:
+  gateway-data:
+  relay-data:

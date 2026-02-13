@@ -217,12 +217,12 @@ jobs:
         with:
           shared-key: rust-${{ runner.os }}-workspace
       - name: Build
-        run: cargo build --release --locked -p wavry-master -p wavry-gateway -p wavry-relay -p wavry-server
+        run: cargo build --release --locked -p wavry-master -p wavry-server
       - name: Stage
         shell: bash
         run: |
           mkdir -p ci-artifacts/backend
-          bins=(wavry-master wavry-gateway wavry-relay wavry-server)
+          bins=(wavry-master wavry-server)
           for b in "${bins[@]}"; do
             src="target/release/${b}${{ matrix.exe }}"
             dst="ci-artifacts/backend/${b}-${{ matrix.suffix }}-${{ matrix.arch }}${{ matrix.exe }}"
@@ -249,10 +249,6 @@ jobs:
           - os: ubuntu-latest
             suffix: linux
             arch: x64
-            exe: ""
-          - os: macos-14
-            suffix: macos
-            arch: arm64
             exe: ""
           - os: windows-latest
             suffix: windows
@@ -289,10 +285,6 @@ jobs:
       - name: Install frontend dependencies
         working-directory: crates/wavry-desktop
         run: bun install --frozen-lockfile
-      - name: Build (macOS DMG bundle)
-        if: runner.os == 'macOS'
-        working-directory: crates/wavry-desktop
-        run: bun run tauri build --bundles dmg --no-sign --ci
       - name: Build (Linux bundles)
         if: runner.os == 'Linux'
         working-directory: crates/wavry-desktop
@@ -301,50 +293,6 @@ jobs:
         if: runner.os == 'Windows'
         working-directory: crates/wavry-desktop
         run: bun run tauri build --no-bundle --ci
-      - name: Stage macOS desktop DMG
-        if: runner.os == 'macOS'
-        shell: bash
-        run: |
-          mkdir -p ci-artifacts/desktop
-          dmg_path=""
-          app_path=""
-          for root in "target/release" "crates/wavry-desktop/src-tauri/target/release"; do
-            if [[ -d "$root/bundle/dmg" ]]; then
-              dmg_path="$(find "$root/bundle/dmg" -maxdepth 1 -type f -name "*.dmg" 2>/dev/null | head -n 1 || true)"
-              if [[ -n "$dmg_path" ]]; then
-                break
-              fi
-            fi
-            if [[ -z "$app_path" && -d "$root/bundle/macos" ]]; then
-              app_path="$(find "$root/bundle/macos" -maxdepth 1 -type d -name "*.app" 2>/dev/null | head -n 1 || true)"
-            fi
-          done
-
-          out_dmg="ci-artifacts/desktop/wavry-desktop-tauri-${{ matrix.suffix }}-${{ matrix.arch }}.dmg"
-          if [[ -n "$dmg_path" ]]; then
-            cp "$dmg_path" "$out_dmg"
-            exit 0
-          fi
-
-          if [[ -n "$app_path" ]]; then
-            echo "No bundled DMG found; creating DMG from app bundle: $app_path"
-            hdiutil create \
-              -volname "Wavry Desktop" \
-              -srcfolder "$app_path" \
-              -ov \
-              -format UDZO \
-              "$out_dmg"
-            exit 0
-          fi
-
-          echo "No desktop DMG or .app bundle found in expected output paths" >&2
-          for root in "target/release" "crates/wavry-desktop/src-tauri/target/release"; do
-            if [[ -d "$root/bundle" ]]; then
-              echo "Bundle contents under $root/bundle:" >&2
-              find "$root/bundle" -maxdepth 2 -print >&2 || true
-            fi
-          done
-          exit 1
       - name: Stage Linux desktop bundles
         if: runner.os == 'Linux'
         shell: bash
@@ -559,7 +507,7 @@ jobs:
           for file in artifacts/backend-*/*; do
             base="$(basename "$file")"
             case "$base" in
-              wavry-master-*|wavry-gateway-*|wavry-relay-*|wavry-server-*)
+              wavry-master-*|wavry-server-*)
                 cp "$file" "release-assets/$base"
                 ;;
             esac
@@ -597,14 +545,11 @@ jobs:
 
           required=(
             "release-assets/wavry-master-*"
-            "release-assets/wavry-gateway-*"
-            "release-assets/wavry-relay-*"
             "release-assets/wavry-server-*"
             "release-assets/wavry-desktop-tauri-linux-*.AppImage"
             "release-assets/wavry-desktop-tauri-linux-*.deb"
             "release-assets/wavry-desktop-tauri-linux-*.rpm"
             "release-assets/wavry-desktop-tauri-windows-*.exe"
-            "release-assets/wavry-desktop-tauri-macos-*.dmg"
             "release-assets/wavry-desktop-native-macos-*.dmg"
             "release-assets/wavry-mobile-android-arm64-release.apk"
             "release-assets/wavry-quest-android-arm64-release.apk"
@@ -612,6 +557,18 @@ jobs:
           for pattern in "${required[@]}"; do
             if ! compgen -G "$pattern" > /dev/null; then
               echo "Missing required release asset matching: $pattern" >&2
+              exit 1
+            fi
+          done
+
+          forbidden=(
+            "release-assets/wavry-gateway-*"
+            "release-assets/wavry-relay-*"
+            "release-assets/wavry-desktop-tauri-macos-*"
+          )
+          for pattern in "${forbidden[@]}"; do
+            if compgen -G "$pattern" > /dev/null; then
+              echo "Forbidden release asset present (policy violation): $pattern" >&2
               exit 1
             fi
           done
@@ -646,22 +603,6 @@ jobs:
                   arch="${file##*-}"
                   arch="${arch%.exe}"
                   purpose="Master coordination service binary"
-                  ;;
-                wavry-gateway-*)
-                  category="Backend Service"
-                  platform="${file#wavry-gateway-}"
-                  platform="${platform%-*}"
-                  arch="${file##*-}"
-                  arch="${arch%.exe}"
-                  purpose="Gateway control-plane API service binary"
-                  ;;
-                wavry-relay-*)
-                  category="Backend Service"
-                  platform="${file#wavry-relay-}"
-                  platform="${platform%-*}"
-                  arch="${file##*-}"
-                  arch="${arch%.exe}"
-                  purpose="Relay forwarding service binary"
                   ;;
                 wavry-server-*)
                   category="Backend Service"
@@ -699,13 +640,6 @@ jobs:
                   arch="${arch%.exe}"
                   purpose="Tauri desktop executable"
                   ;;
-                wavry-desktop-tauri-macos-*.dmg)
-                  category="Desktop App"
-                  platform="macOS"
-                  arch="${file#wavry-desktop-tauri-macos-}"
-                  arch="${arch%.dmg}"
-                  purpose="Tauri desktop disk image (DMG)"
-                  ;;
                 wavry-desktop-native-macos-*.dmg)
                   category="Desktop App"
                   platform="macOS"
@@ -729,6 +663,24 @@ jobs:
               echo "| \`$file\` | $category | $platform | $arch | $purpose |"
             done < <(find release-assets -maxdepth 1 -type f -printf '%f\n' | sort)
           } > RELEASE_ASSETS.md
+      - name: Generate docker image manifest
+        shell: bash
+        run: |
+          {
+            echo "# Wavry Docker Images"
+            echo
+            echo "Control-plane services are Docker-only."
+            echo
+            echo "## Images"
+            echo
+            echo "- \`ghcr.io/${{ github.repository }}/gateway\`"
+            echo "- \`ghcr.io/${{ github.repository }}/relay\`"
+            echo
+            echo "## Recommended Tags"
+            echo
+            echo "- Release-pinned: \`v${{ needs.pre-build.outputs.wavry_version }}\`"
+            echo "- Mainline environments: \`main\` or \`latest\`"
+          } > DOCKER_IMAGES.md
       - name: Delete existing release assets
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -756,15 +708,19 @@ jobs:
             All assets use explicit names:
             `<component>-<variant>-<platform>-<arch>[.<ext>]`
 
+            ## Control Plane Containers (Docker-Only)
+            - **Gateway auth/control plane:** `ghcr.io/${{ github.repository }}/gateway`
+            - **Relay service:** `ghcr.io/${{ github.repository }}/relay`
+            - For tagged releases, use image tag `v${{ needs.pre-build.outputs.wavry_version }}`.
+
             ## Download Guide
             - **Linux desktop:** download one of
               - `wavry-desktop-tauri-linux-x64.AppImage` (portable)
               - `wavry-desktop-tauri-linux-x64.deb` (Debian/Ubuntu)
               - `wavry-desktop-tauri-linux-x64.rpm` (Fedora/RHEL)
             - **Windows desktop:** `wavry-desktop-tauri-windows-x64.exe`
-            - **macOS desktop (Tauri):** `wavry-desktop-tauri-macos-arm64.dmg`
             - **macOS desktop (Native Swift):** `wavry-desktop-native-macos-arm64.dmg`
-            - **Backend services:** `wavry-master-*`, `wavry-gateway-*`, `wavry-relay-*`, `wavry-server-*`
+            - **Backend binaries:** `wavry-master-*`, `wavry-server-*`
             - **Android:** `wavry-mobile-android-arm64-release.apk`, `wavry-quest-android-arm64-release.apk`
 
             ## Integrity and Catalog
@@ -774,3 +730,4 @@ jobs:
             release-assets/*
             SHA256SUMS.txt
             RELEASE_ASSETS.md
+            DOCKER_IMAGES.md

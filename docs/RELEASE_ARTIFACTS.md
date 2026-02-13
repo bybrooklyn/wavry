@@ -10,9 +10,8 @@ Artifact filenames are intentionally explicit:
 
 Examples:
 
-- `wavry-gateway-linux-x64`
 - `wavry-server-windows-x64.exe`
-- `wavry-desktop-tauri-macos-arm64.dmg`
+- `wavry-desktop-tauri-linux-x64.deb`
 - `wavry-mobile-android-arm64-release.apk`
 
 ## Included Components
@@ -20,16 +19,20 @@ Examples:
 Backend service binaries (all supported desktop/server platforms):
 
 - `wavry-master-*`
-- `wavry-gateway-*`
-- `wavry-relay-*`
 - `wavry-server-*`
+
+Control-plane services are distributed as Docker images:
+
+- `ghcr.io/<owner>/<repo>/gateway:<tag>`
+- `ghcr.io/<owner>/<repo>/relay:<tag>`
 
 Desktop applications:
 
 - Tauri desktop build:
-  - `wavry-desktop-tauri-linux-x64`
+  - `wavry-desktop-tauri-linux-x64.AppImage`
+  - `wavry-desktop-tauri-linux-x64.deb`
+  - `wavry-desktop-tauri-linux-x64.rpm`
   - `wavry-desktop-tauri-windows-x64.exe`
-  - `wavry-desktop-tauri-macos-arm64.dmg`
 - Native macOS desktop build:
   - `wavry-desktop-native-macos-arm64.dmg`
 
@@ -57,8 +60,6 @@ The release workflow intentionally excludes:
 The release workflow fails if required backend binaries are missing:
 
 - `wavry-master-*`
-- `wavry-gateway-*`
-- `wavry-relay-*`
 - `wavry-server-*`
 
 It also generates checksums and an asset manifest for every published release.

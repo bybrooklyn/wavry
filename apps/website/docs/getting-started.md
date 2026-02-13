@@ -7,12 +7,12 @@ This guide gets you from clone to first working session and explains what each p
 
 ## What You Will Run
 
-A minimal local Wavry stack uses four runtime processes:
+A minimal local Wavry stack uses:
 
-1. `wavry-gateway`: signaling/control plane entrypoint
-2. `wavry-relay`: encrypted UDP fallback forwarder
-3. `wavry-server`: host runtime (capture + encode + stream)
-4. `wavry-client`: client runtime (receive + decode + render + input)
+1. `gateway` Docker container (auth/control plane)
+2. optional `relay` Docker container (encrypted UDP fallback)
+3. `wavry-server` process (host runtime: capture + encode + stream)
+4. `wavry-client` process (client runtime: receive + decode + render + input)
 
 You can also run the desktop app for UI-driven host/client workflows.
 
@@ -39,25 +39,26 @@ cd wavry
 cargo build --workspace
 ```
 
-## 2. Start Control-Plane Services
+## 2. Start Control-Plane Services (Docker-Only)
 
-Open two terminals from repo root.
-
-Terminal 1:
+From repo root, start gateway:
 
 ```bash
-cargo run --bin wavry-gateway
+docker compose -f docker/control-plane.compose.yml up -d gateway
 ```
 
-Terminal 2:
+If you want to validate relay fallback locally, start relay too:
 
 ```bash
-cargo run --bin wavry-relay -- --master-url http://localhost:8080
+WAVRY_RELAY_MASTER_URL=http://host.docker.internal:8080 \
+docker compose -f docker/control-plane.compose.yml --profile relay up -d relay
 ```
+
+Relay requires a reachable master endpoint for registration and heartbeat. For production, set `WAVRY_RELAY_MASTER_PUBLIC_KEY` and disable insecure dev mode.
 
 ## 3. Start Host and Client Runtimes
 
-Open two additional terminals.
+Open two terminals.
 
 Terminal 3 (host):
 
@@ -96,7 +97,8 @@ When testing locally, confirm:
 
 ### Client cannot connect
 
-- Verify gateway and relay are running
+- Verify gateway container is running
+- Verify relay container is running if you are validating relay fallback
 - Confirm host process is active
 - Confirm address/port if using direct connect
 
@@ -122,7 +124,8 @@ When testing locally, confirm:
 ## Next Steps
 
 1. Read [Deployment Modes](/deployment-modes) to pick OSS/commercial/hosted usage.
-2. Read [Architecture](/architecture) to understand boundaries and extension points.
-3. Read [Session Lifecycle](/lifecycle) and [Networking and Relay](/networking-and-relay) to understand behavior under real network conditions.
-4. Read [Security](/security) before internet-facing deployment.
-5. Use [Operations](/operations) and [Troubleshooting](/troubleshooting) to define your production runbook.
+2. Read [Docker Control Plane](/docker-control-plane) for gateway/relay container operation.
+3. Read [Architecture](/architecture) to understand boundaries and extension points.
+4. Read [Session Lifecycle](/lifecycle) and [Networking and Relay](/networking-and-relay) to understand behavior under real network conditions.
+5. Read [Security](/security) before internet-facing deployment.
+6. Use [Operations](/operations) and [Troubleshooting](/troubleshooting) to define your production runbook.

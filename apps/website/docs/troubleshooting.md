@@ -15,7 +15,7 @@ Use this page as a first-pass runbook when sessions fail or degrade.
 
 ### Checks
 
-1. Confirm `wavry-gateway` and `wavry-relay` are running when required.
+1. Confirm gateway/relay containers are running when required (`docker compose -f docker/control-plane.compose.yml ps`).
 2. Confirm host process is active and reachable.
 3. Confirm target address/port is correct for direct connect.
 4. Confirm firewall/security group policy allows required UDP path.

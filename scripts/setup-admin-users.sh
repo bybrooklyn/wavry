@@ -4,7 +4,7 @@
 
 set -euo pipefail
 
-# Default paths
+# Default paths (this helper writes directly to a local SQLite DB file)
 DB_PATH="${WAVRY_DB_PATH:-.wavry/gateway.db}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}"))" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
@@ -16,7 +16,10 @@ echo ""
 # Check if database exists
 if [ ! -f "$DB_PATH" ]; then
     echo "❌ Database not found at: $DB_PATH"
-    echo "   Run wavry-gateway first to initialize the database."
+    echo "   Start gateway first to initialize the database file."
+    echo "   Example:"
+    echo "   ADMIN_PANEL_TOKEN='$(openssl rand -hex 32)' docker compose -f docker/control-plane.compose.yml up -d gateway"
+    echo "   If you use Docker named volumes, set WAVRY_DB_PATH to an exported/copy of the DB file."
     exit 1
 fi
 
@@ -124,8 +127,8 @@ echo "   1. Header: x-admin-token: <ADMIN_PANEL_TOKEN>"
 echo "   2. Header: Authorization: Bearer <ADMIN_PANEL_TOKEN>"
 echo ""
 echo "🚀 To test the admin panel:"
-echo "   1. Start the gateway with admin token:"
-echo "      ADMIN_PANEL_TOKEN='$(openssl rand -hex 32)' cargo run --bin wavry-gateway"
+echo "   1. Start the gateway container with admin token:"
+echo "      ADMIN_PANEL_TOKEN='$(openssl rand -hex 32)' docker compose -f docker/control-plane.compose.yml up -d gateway"
 echo ""
 echo "   2. Visit http://localhost:3000/admin"
 echo ""

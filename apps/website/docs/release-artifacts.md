@@ -15,10 +15,9 @@ If you are looking at a GitHub release and unsure what to download, start here.
 | Linux desktop (Debian/Ubuntu) | `wavry-desktop-tauri-linux-x64.deb` | Native package install via APT/dpkg |
 | Linux desktop (Fedora/RHEL) | `wavry-desktop-tauri-linux-x64.rpm` | Native package install via DNF/RPM |
 | Windows desktop | `wavry-desktop-tauri-windows-x64.exe` | Desktop app executable |
-| macOS desktop (Tauri) | `wavry-desktop-tauri-macos-arm64.dmg` | Tauri app DMG package |
 | macOS desktop (Native Swift) | `wavry-desktop-native-macos-arm64.dmg` | Native Swift app DMG package |
-| Gateway API service | `wavry-gateway-<platform>-<arch>[.exe]` | Control plane service |
-| Relay service | `wavry-relay-<platform>-<arch>[.exe]` | UDP relay service |
+| Gateway auth/control plane (Docker) | `ghcr.io/<owner>/<repo>/gateway:<tag>` | Control plane service container |
+| Relay service (Docker) | `ghcr.io/<owner>/<repo>/relay:<tag>` | UDP relay service container |
 | Host runtime service | `wavry-server-<platform>-<arch>[.exe]` | Host runtime for capture/stream |
 | Android mobile app | `wavry-mobile-android-arm64-release.apk` | Mobile Android client |
 | Android Quest app | `wavry-quest-android-arm64-release.apk` | Quest client |
@@ -31,7 +30,6 @@ Every release file uses:
 
 Examples:
 
-- `wavry-gateway-linux-x64`
 - `wavry-server-windows-x64.exe`
 - `wavry-desktop-tauri-linux-x64.deb`
 - `wavry-desktop-native-macos-arm64.dmg`
@@ -41,19 +39,28 @@ Examples:
 | File Pattern | Category | Platform | Architecture | Purpose |
 |---|---|---|---|---|
 | `wavry-master-<platform>-<arch>[.exe]` | Backend Service | Linux/macOS/Windows | x64/arm64 | Master coordination service binary |
-| `wavry-gateway-<platform>-<arch>[.exe]` | Backend Service | Linux/macOS/Windows | x64/arm64 | Gateway control-plane API service |
-| `wavry-relay-<platform>-<arch>[.exe]` | Backend Service | Linux/macOS/Windows | x64/arm64 | Relay forwarding service |
 | `wavry-server-<platform>-<arch>[.exe]` | Backend Service | Linux/macOS/Windows | x64/arm64 | Host runtime service |
 | `wavry-desktop-tauri-linux-x64.AppImage` | Desktop App | Linux | x64 | Portable Linux desktop package |
 | `wavry-desktop-tauri-linux-x64.deb` | Desktop App | Linux | x64 | Debian/Ubuntu package |
 | `wavry-desktop-tauri-linux-x64.rpm` | Desktop App | Linux | x64 | Fedora/RHEL package |
 | `wavry-desktop-tauri-windows-x64.exe` | Desktop App | Windows | x64 | Windows desktop executable |
-| `wavry-desktop-tauri-macos-arm64.dmg` | Desktop App | macOS | arm64 | Tauri desktop DMG |
 | `wavry-desktop-native-macos-arm64.dmg` | Desktop App | macOS | arm64 | Native Swift desktop DMG |
 | `wavry-mobile-android-arm64-release.apk` | Android App | Android | arm64 | Mobile client APK |
 | `wavry-quest-android-arm64-release.apk` | Android App | Android (Quest) | arm64 | Quest client APK |
 | `SHA256SUMS.txt` | Integrity | All | n/a | SHA-256 checksums for all shipped files |
 | `RELEASE_ASSETS.md` | Metadata | All | n/a | Machine-generated labeled release manifest |
+
+## Docker-Only Control Plane Components
+
+Wavry distributes gateway and relay as container images, not release binaries:
+
+- `ghcr.io/<owner>/<repo>/gateway:<tag>`
+- `ghcr.io/<owner>/<repo>/relay:<tag>`
+
+Tag guidance:
+
+- Use `vX.Y.Z` (or `vX.Y.Z-canary...`) for release-pinned deployments
+- Use `main`/`latest` only for fast-moving development environments
 
 ## Linux Package Install Notes
 
@@ -97,5 +104,6 @@ If any file does not verify, discard the artifact and redownload.
 
 - [Getting Started](/getting-started)
 - [Desktop App](/desktop-app)
+- [Docker Control Plane](/docker-control-plane)
 - [Linux and Wayland Support](/linux-wayland-support)
 - [Operations](/operations)

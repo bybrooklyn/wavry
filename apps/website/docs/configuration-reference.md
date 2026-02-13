@@ -80,6 +80,8 @@ Linux desktop builds also expose runtime diagnostics commands:
 
 ## Gateway and Relay
 
+Gateway and relay are distributed as Docker containers. Use [Docker Control Plane](/docker-control-plane) for deployment commands and image/tag policy.
+
 Deployment configuration should define:
 
 - Binding/listen addresses

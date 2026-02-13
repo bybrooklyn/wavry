@@ -136,21 +136,16 @@ cargo build --release --workspace
 ```
 
 ### Running Infrastructure (Local)
-1.  **Gateway**
+1.  **Gateway (Docker-only)**
     ```bash
-    # Generate development certificates for WebTransport
-    ./scripts/gen-wt-cert.sh
-    
-    # Run with WebTransport runtime enabled
-    WAVRY_ENABLE_INSECURE_WEBTRANSPORT_RUNTIME=1 \
-    WAVRY_WT_CERT=certs/wt-cert.pem \
-    WAVRY_WT_KEY=certs/wt-key.pem \
-    cargo run --bin wavry-gateway --features webtransport-runtime
+    docker compose -f docker/control-plane.compose.yml up -d gateway
     ```
-2.  **Relay**
+2.  **Relay (Docker-only, optional for local fallback testing)**
     ```bash
-    cargo run --bin wavry-relay -- --master-url http://localhost:8080
+    WAVRY_RELAY_MASTER_URL=http://host.docker.internal:8080 \
+    docker compose -f docker/control-plane.compose.yml --profile relay up -d relay
     ```
+    Production relay deployments must set `WAVRY_RELAY_MASTER_PUBLIC_KEY` and disable insecure dev mode.
 3.  **Server (Host)**
     ```bash
     # Run with WebRTC support for browser clients
@@ -199,9 +194,9 @@ Set up the admin panel for user and session management:
 ADMIN_TOKEN=$(openssl rand -hex 32)
 echo "Admin Token: $ADMIN_TOKEN"
 
-# Start gateway with admin panel enabled
+# Start gateway container with admin panel enabled
 ADMIN_PANEL_TOKEN=$ADMIN_TOKEN \
-cargo run --bin wavry-gateway --release
+docker compose -f docker/control-plane.compose.yml up -d gateway
 ```
 
 Then access:

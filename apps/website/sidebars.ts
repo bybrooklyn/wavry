@@ -22,6 +22,7 @@ const sidebars: SidebarsConfig = {
       label: 'Deploy and Operate',
       items: [
         'deployment-modes',
+        'docker-control-plane',
         'pricing',
         'security',
         'operations',
