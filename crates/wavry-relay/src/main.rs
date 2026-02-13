@@ -121,6 +121,11 @@ fn env_bool(name: &str, default: bool) -> bool {
     }
 }
 
+/// Per-source-IP packet rate limiter to prevent abuse.
+///
+/// Uses a simple fixed-window algorithm with a 1-second window.
+/// IP addresses that exceed the configured packets-per-second limit
+/// are throttled until the window resets.
 struct IpRateLimiter {
     counts: HashMap<std::net::IpAddr, (u64, std::time::Instant)>,
     max_pps: u64,
@@ -254,6 +259,24 @@ impl RelayMetrics {
     }
 }
 
+/// The core relay server responsible for forwarding encrypted UDP packets between peers.
+///
+/// # Overview
+/// The relay server acts as a transparent packet forwarder that:
+/// - Validates PASETO v4 session leases from the Master server
+/// - Maintains per-session state with replay protection
+/// - Enforces bandwidth limits and rate limiting
+/// - Provides load shedding when capacity is exceeded
+/// - Exports metrics for monitoring
+///
+/// # Security
+/// All forwarded data is end-to-end encrypted. The relay never decrypts packet contents.
+/// Authentication is based on cryptographically signed leases (PASETO tokens) issued
+/// by the Master server.
+///
+/// # Load Management
+/// When active sessions exceed the configured threshold (default 95%), new session
+/// requests are rejected to maintain service quality for existing sessions.
 struct RelayServer {
     relay_id: String,
     socket: UdpSocket,

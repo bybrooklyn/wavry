@@ -1,3 +1,19 @@
+//! Security utilities for the Wavry Gateway.
+//!
+//! Provides rate limiting, CORS validation, token hashing, and TOTP secret encryption.
+//!
+//! # Rate Limiting
+//! Multiple rate limiters protect different endpoint categories:
+//! - `AUTH_LIMITER`: Login/registration attempts
+//! - `POST_AUTH_LIMITER`: Authenticated operations (2FA, logout)
+//! - `WEBRTC_LIMITER`: WebRTC signaling operations
+//! - `WS_BIND_LIMITER`: WebSocket connection establishment
+//! - `GLOBAL_API_LIMITER`: Catch-all for other API endpoints
+//!
+//! # TOTP Encryption
+//! TOTP secrets are encrypted at rest using XChaCha20-Poly1305 AEAD.
+//! Secrets are prefixed with `enc:v1:` for versioning and forward compatibility.
+
 use std::{
     collections::{HashMap, HashSet},
     net::{IpAddr, SocketAddr},
@@ -26,6 +42,19 @@ const DEFAULT_ALLOWED_ORIGINS: [&str; 5] = [
 
 const TOTP_ENCRYPTED_PREFIX: &str = "enc:v1:";
 
+/// Fixed-window rate limiter with automatic cleanup.
+///
+/// Tracks request counts per key (typically client IP + endpoint) within a sliding
+/// time window. When the number of tracked keys exceeds `max_keys`, stale entries
+/// are automatically pruned.
+///
+/// # Example
+/// ```ignore
+/// let limiter = FixedWindowRateLimiter::new(100, Duration::from_secs(60), 10000);
+/// if !limiter.allow("192.168.1.1:login") {
+///     return StatusCode::TOO_MANY_REQUESTS;
+/// }
+/// ```
 #[derive(Clone, Copy)]
 struct RateEntry {
     count: u32,
