@@ -433,7 +433,7 @@ mod host {
 
     #[cfg(target_os = "linux")]
     fn next_audio_packet(capturer: &mut AudioCapturer) -> Result<EncodedFrame> {
-        capturer.next_packet()
+        Ok(capturer.next_packet()?)
     }
 
     #[cfg(target_os = "macos")]

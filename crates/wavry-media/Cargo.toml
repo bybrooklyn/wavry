@@ -21,7 +21,7 @@ mp4 = "0.14"
 opus = { version = "0.3", optional = true }
 
 [dev-dependencies]
-criterion = "0.5"
+criterion = { version = "0.5", features = ["async_tokio"] }
 
 [[bench]]
 name = "capture_bench"

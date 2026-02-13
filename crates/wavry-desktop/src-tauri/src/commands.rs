@@ -1071,6 +1071,8 @@ pub async fn start_host(
                                     timestamp_us: frame.timestamp_us,
                                     keyframe: frame.keyframe,
                                     payload: chunk_data,
+                                    capture_us: 0,
+                                    encode_us: 0,
                                 };
 
                                 let msg = rift_core::Message {
