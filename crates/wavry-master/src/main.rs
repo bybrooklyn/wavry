@@ -23,6 +23,7 @@ use uuid::Uuid;
 
 use futures_util::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
+use std::io::ErrorKind;
 use std::sync::Mutex;
 use std::time::Duration;
 use std::time::{Instant, SystemTime};
@@ -428,8 +429,20 @@ async fn main() -> anyhow::Result<()> {
         .layer(build_cors())
         .with_state(state);
 
-    info!("wavry-master starting on {}", listen_addr);
-    let listener = tokio::net::TcpListener::bind(listen_addr).await?;
+    let listener = match tokio::net::TcpListener::bind(listen_addr).await {
+        Ok(listener) => listener,
+        Err(err) if err.kind() == ErrorKind::AddrInUse => {
+            let fallback_addr = std::net::SocketAddr::new(listen_addr.ip(), 0);
+            warn!(
+                "master bind {} is already in use, falling back to {}",
+                listen_addr, fallback_addr
+            );
+            tokio::net::TcpListener::bind(fallback_addr).await?
+        }
+        Err(err) => return Err(err.into()),
+    };
+    let bound_addr = listener.local_addr()?;
+    info!("wavry-master listening on {}", bound_addr);
     axum::serve(
         listener,
         app.into_make_service_with_connect_info::<std::net::SocketAddr>(),

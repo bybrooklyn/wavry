@@ -148,9 +148,11 @@ cargo build --release --workspace
     Production relay deployments must set `WAVRY_RELAY_MASTER_PUBLIC_KEY` and disable insecure dev mode.
 3.  **Server (Host)**
     ```bash
+    GATEWAY_PORT="$(docker compose -f docker/control-plane.compose.yml port gateway 3000 | awk -F: '{print $NF}')"
+
     # Run with WebRTC support for browser clients
     WAVRY_ENABLE_WEBRTC=true \
-    WAVRY_GATEWAY_URL=ws://127.0.0.1:3000/ws \
+    WAVRY_GATEWAY_URL="ws://127.0.0.1:${GATEWAY_PORT}/ws" \
     cargo run --bin wavry-server
     ```
 
@@ -200,7 +202,7 @@ docker compose -f docker/control-plane.compose.yml up -d gateway
 ```
 
 Then access:
-- **UI**: `http://localhost:3000/admin` (enter token in form)
+- **UI**: `http://127.0.0.1:<gateway-port>/admin` (enter token in form)
 - **API Endpoints**:
   - `GET /admin/api/overview` - User/session/ban statistics
   - `POST /admin/api/sessions/revoke` - Revoke user session

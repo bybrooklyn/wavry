@@ -8,6 +8,7 @@ use axum::{
 };
 use serde::Serialize;
 use sqlx::sqlite::SqlitePoolOptions;
+use std::io::ErrorKind;
 use std::net::SocketAddr;
 use std::time::{Duration, Instant};
 use tokio::net::TcpListener;
@@ -121,6 +122,15 @@ fn check_public_bind_allowed(addr: SocketAddr) -> anyhow::Result<()> {
     Err(anyhow::anyhow!(
         "refusing non-loopback bind without WAVRY_ALLOW_PUBLIC_BIND=1"
     ))
+}
+
+fn ws_signaling_url_for_bound_addr(bound_addr: SocketAddr) -> String {
+    let host = if bound_addr.ip().is_unspecified() {
+        "127.0.0.1".to_string()
+    } else {
+        bound_addr.ip().to_string()
+    };
+    format!("ws://{}:{}/ws", host, bound_addr.port())
 }
 
 fn build_cors_layer() -> CorsLayer {
@@ -303,13 +313,30 @@ async fn main() -> anyhow::Result<()> {
         .with_state(app_state);
 
     let bind_addr =
-        std::env::var("WAVRY_GATEWAY_BIND_ADDR").unwrap_or_else(|_| "0.0.0.0:3000".to_string());
+        std::env::var("WAVRY_GATEWAY_BIND_ADDR").unwrap_or_else(|_| "127.0.0.1:3000".to_string());
     let addr: SocketAddr = bind_addr.parse()?;
     check_public_bind_allowed(addr)?;
 
-    let listener = TcpListener::bind(addr).await?;
+    let listener = match TcpListener::bind(addr).await {
+        Ok(listener) => listener,
+        Err(err) if err.kind() == ErrorKind::AddrInUse => {
+            let fallback_addr = SocketAddr::new(addr.ip(), 0);
+            tracing::warn!(
+                "gateway bind {} is already in use, falling back to {}",
+                addr,
+                fallback_addr
+            );
+            TcpListener::bind(fallback_addr).await?
+        }
+        Err(err) => return Err(err.into()),
+    };
     let bound_addr = listener.local_addr()?;
+    let ws_signaling_url = std::env::var("WS_SIGNALING_URL")
+        .unwrap_or_else(|_| ws_signaling_url_for_bound_addr(bound_addr));
+    std::env::set_var("WAVRY_GATEWAY_BOUND_ADDR", bound_addr.to_string());
+    std::env::set_var("WS_SIGNALING_URL", ws_signaling_url.clone());
     tracing::info!("gateway listening on {}", bound_addr);
+    tracing::info!("gateway signaling url {}", ws_signaling_url);
 
     axum::serve(
         listener,

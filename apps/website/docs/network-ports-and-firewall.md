@@ -9,8 +9,8 @@ This page defines the common network surfaces used by Wavry.
 
 | Component | Protocol | Default | Purpose |
 |---|---|---|---|
-| gateway | TCP | `3000` | auth/signaling/control APIs |
-| relay | UDP | `4000` | encrypted relay forwarding path |
+| gateway | TCP | auto-allocated host port (`3000` in-container) | auth/signaling/control APIs |
+| relay | UDP | auto-allocated host port (`4000` in-container) | encrypted relay forwarding path |
 | host runtime (`wavry-server`) | UDP | dynamic/configured | encrypted media + input transport |
 
 ## Recommended Firewall Baseline
@@ -34,10 +34,10 @@ High relay usage usually indicates:
 
 ## Validation Commands
 
-Gateway health:
+Gateway health (discover mapped port first):
 
 ```bash
-curl -fsS http://127.0.0.1:3000/health
+docker compose -f docker/control-plane.compose.yml port gateway 3000
 ```
 
 Control-plane state:
@@ -49,7 +49,7 @@ docker compose -f docker/control-plane.compose.yml ps
 Basic UDP listener check (relay host):
 
 ```bash
-ss -lunp | rg 4000 || true
+docker compose -f docker/control-plane.compose.yml port relay 4000/udp
 ```
 
 ## Production Recommendations

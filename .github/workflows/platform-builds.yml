@@ -29,6 +29,7 @@ jobs:
       rift_version: ${{ steps.version.outputs.rift_version }}
       delta_version: ${{ steps.version.outputs.delta_version }}
       is_prerelease: ${{ steps.version_policy.outputs.is_prerelease }}
+      release_allowed: ${{ steps.version_policy.outputs.release_allowed }}
       already_released: ${{ steps.check_release.outputs.already_released }}
     steps:
       - name: Checkout
@@ -51,14 +52,21 @@ jobs:
         run: |
           set -euo pipefail
           WAVRY_V="${{ steps.version.outputs.wavry_version }}"
+          REF_TYPE="${GITHUB_REF_TYPE:-branch}"
 
           if [[ "$WAVRY_V" =~ - ]]; then
             if [[ "$WAVRY_V" =~ ^[0-9]+\.[0-9]+\.[0-9]+-canary([.][0-9A-Za-z-]+)*$ ]]; then
               echo "is_prerelease=true" >> "$GITHUB_OUTPUT"
+              echo "release_allowed=true" >> "$GITHUB_OUTPUT"
             else
-              echo "Unsupported prerelease version: $WAVRY_V" >&2
-              echo "Only -canary prerelease tags are allowed." >&2
-              exit 1
+              if [[ "$REF_TYPE" == "tag" ]]; then
+                echo "Unsupported prerelease version on tag push: $WAVRY_V" >&2
+                echo "Only -canary prerelease tags are allowed." >&2
+                exit 1
+              fi
+              echo "::warning::Unsupported prerelease version '$WAVRY_V'. Release creation will be skipped."
+              echo "is_prerelease=true" >> "$GITHUB_OUTPUT"
+              echo "release_allowed=false" >> "$GITHUB_OUTPUT"
             fi
           else
             if [[ ! "$WAVRY_V" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
@@ -66,6 +74,7 @@ jobs:
               exit 1
             fi
             echo "is_prerelease=false" >> "$GITHUB_OUTPUT"
+            echo "release_allowed=true" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Install protoc
@@ -78,6 +87,12 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          if [[ "${{ steps.version_policy.outputs.release_allowed }}" != "true" ]]; then
+            echo "Release is disabled by version policy for v${{ env.WAVRY_V }}."
+            echo "already_released=true" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
           VERSION="v${{ env.WAVRY_V }}"
           if gh release view "$VERSION" >/dev/null 2>&1; then
             echo "Version $VERSION already exists in releases."
@@ -480,6 +495,8 @@ jobs:
     needs: [pre-build, rust-tests, smoke-tests, linux-wayland-runtime, rust-backend, desktop-tauri, android, macos-swift]
     if: |
       always() &&
+      needs.pre-build.result == 'success' &&
+      needs.pre-build.outputs.release_allowed == 'true' &&
       (needs.rust-tests.result == 'success' || needs.rust-tests.result == 'skipped') &&
       (needs.smoke-tests.result == 'success' || needs.smoke-tests.result == 'skipped') &&
       (needs.linux-wayland-runtime.result == 'success' || needs.linux-wayland-runtime.result == 'skipped') &&

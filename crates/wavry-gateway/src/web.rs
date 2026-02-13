@@ -93,8 +93,21 @@ fn validate_common(session_token: &str, target_username: &str) -> Result<(), &'s
 }
 
 pub async fn webrtc_config() -> impl IntoResponse {
-    let ws_signaling_url =
-        std::env::var("WS_SIGNALING_URL").unwrap_or_else(|_| "ws://localhost:3000/ws".to_string());
+    let ws_signaling_url = std::env::var("WS_SIGNALING_URL")
+        .or_else(|_| {
+            std::env::var("WAVRY_GATEWAY_BOUND_ADDR").map(|addr| {
+                let socket = addr
+                    .parse::<SocketAddr>()
+                    .unwrap_or_else(|_| SocketAddr::from(([127, 0, 0, 1], 3000)));
+                let host = if socket.ip().is_unspecified() {
+                    "127.0.0.1".to_string()
+                } else {
+                    socket.ip().to_string()
+                };
+                format!("ws://{}:{}/ws", host, socket.port())
+            })
+        })
+        .unwrap_or_else(|_| "ws://127.0.0.1:3000/ws".to_string());
     Json(WebRtcConfigResponse {
         ws_signaling_url,
         offer_endpoint: "/webrtc/offer".to_string(),

@@ -3,6 +3,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+source "${SCRIPT_DIR}/lib/port-utils.sh"
 
 require_cmd() {
   if ! command -v "$1" >/dev/null 2>&1; then
@@ -14,7 +15,7 @@ require_cmd() {
 require_cmd cargo
 require_cmd curl
 
-MASTER_PORT="${WAVRY_MASTER_SMOKE_PORT:-38080}"
+MASTER_PORT="${WAVRY_MASTER_SMOKE_PORT:-$(find_free_tcp_port)}"
 MASTER_URL="http://127.0.0.1:${MASTER_PORT}"
 TMP_DIR="$(mktemp -d)"
 MASTER_LOG="${TMP_DIR}/master.log"

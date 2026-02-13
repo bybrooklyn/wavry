@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::io::ErrorKind;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -152,8 +153,23 @@ pub async fn run_relay_server(port: u16, state: RelayMap) -> Result<()> {
             ));
         }
     }
-    let socket = UdpSocket::bind(&addr).await?;
-    info!("relay server listening on udp://{}", addr);
+    let socket = match UdpSocket::bind(&addr).await {
+        Ok(socket) => socket,
+        Err(err) if err.kind() == ErrorKind::AddrInUse => {
+            let requested = addr
+                .parse::<SocketAddr>()
+                .unwrap_or_else(|_| SocketAddr::from(([127, 0, 0, 1], port)));
+            let fallback_addr = SocketAddr::new(requested.ip(), 0);
+            warn!(
+                "gateway relay bind {} is already in use, falling back to {}",
+                requested, fallback_addr
+            );
+            UdpSocket::bind(fallback_addr).await?
+        }
+        Err(err) => return Err(err.into()),
+    };
+    let bound_addr = socket.local_addr()?;
+    info!("relay server listening on udp://{}", bound_addr);
 
     let mut buf = [0u8; RELAY_MAX_PACKET_SIZE];
     let mut routes: HashMap<SocketAddr, RouteEntry> = HashMap::new();

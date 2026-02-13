@@ -53,13 +53,15 @@ Key values in `docker/control-plane.compose.yml`:
 |---|---|---|
 | `WAVRY_CONTROL_PLANE_TAG` | image tag | `latest` |
 | `WAVRY_IMAGE_REPO` | image repo base | `ghcr.io/bybrooklyn/wavry` |
-| `WAVRY_GATEWAY_PORT` | published gateway port | `3000` |
+| `WAVRY_GATEWAY_PORT` | published gateway port | `0` (auto-allocate) |
 | `ADMIN_PANEL_TOKEN` | admin API access token | empty |
-| `WAVRY_RELAY_PORT` | published relay UDP port | `4000` |
-| `WAVRY_RELAY_HEALTH_PORT` | published relay health HTTP port | `9091` |
+| `WAVRY_RELAY_PORT` | published relay UDP port | `0` (auto-allocate) |
+| `WAVRY_RELAY_HEALTH_PORT` | published relay health HTTP port | `0` (auto-allocate) |
 | `WAVRY_RELAY_MASTER_URL` | relay upstream registration target | `http://host.docker.internal:8080` |
 | `WAVRY_RELAY_MASTER_PUBLIC_KEY` | relay signature verification key | empty |
 | `WAVRY_RELAY_ALLOW_INSECURE_DEV` | insecure relay mode (dev only) | `1` |
+
+Auto-allocation avoids local port collisions with other services. To pin ports, set explicit values.
 
 ## Production Baseline
 
@@ -101,11 +103,11 @@ docker compose -f docker/control-plane.compose.yml pull
 docker compose -f docker/control-plane.compose.yml up -d
 ```
 
-4. Validate:
+4. Resolve published ports and validate:
 
 ```bash
-curl -fsS http://127.0.0.1:3000/health
-curl -fsS http://127.0.0.1:9091/ready
+docker compose -f docker/control-plane.compose.yml port gateway 3000
+docker compose -f docker/control-plane.compose.yml port relay 9091
 ```
 
 ### Rollback

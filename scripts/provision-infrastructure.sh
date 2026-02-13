@@ -7,6 +7,14 @@ set -e
 
 OUT_DIR=${1:-"./secrets"}
 mkdir -p "$OUT_DIR"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "${SCRIPT_DIR}/lib/port-utils.sh"
+
+GATEWAY_PORT="${WAVRY_GATEWAY_PORT:-$(find_free_tcp_port)}"
+GATEWAY_RELAY_PORT="${WAVRY_GATEWAY_RELAY_PORT:-$(find_free_udp_port)}"
+MASTER_PORT="${WAVRY_MASTER_PORT:-$(find_free_tcp_port)}"
+RELAY_PORT="${WAVRY_RELAY_PORT:-$(find_free_udp_port)}"
+RELAY_HEALTH_PORT="${WAVRY_RELAY_HEALTH_PORT:-$(find_free_tcp_port)}"
 
 echo "--- Wavry Provisioning Pipeline ---"
 echo "Target directory: $OUT_DIR"
@@ -57,9 +65,24 @@ WAVRY_MASTER_KEY_FILE=$OUT_DIR/master.key
 WAVRY_WT_CERT=$OUT_DIR/gateway-cert.pem
 WAVRY_WT_KEY=$OUT_DIR/gateway-key.pem
 WAVRY_GATEWAY_CERT_HASH=$FINGERPRINT
+WAVRY_MASTER_LISTEN=127.0.0.1:${MASTER_PORT}
+WAVRY_MASTER_URL=http://127.0.0.1:${MASTER_PORT}
+WAVRY_GATEWAY_BIND_ADDR=127.0.0.1:${GATEWAY_PORT}
+WAVRY_GATEWAY_URL=ws://127.0.0.1:${GATEWAY_PORT}/ws
+WAVRY_GATEWAY_RELAY_PORT=${GATEWAY_RELAY_PORT}
+WAVRY_RELAY_LISTEN=127.0.0.1:${RELAY_PORT}
+WAVRY_RELAY_HEALTH_LISTEN=127.0.0.1:${RELAY_HEALTH_PORT}
+WAVRY_RELAY_MASTER_URL=http://127.0.0.1:${MASTER_PORT}
 EOF
 
 echo "-----------------------------------"
+echo "Dynamic port allocation:"
+echo "  Master:        ${MASTER_PORT}"
+echo "  Gateway HTTP:  ${GATEWAY_PORT}"
+echo "  Gateway relay: ${GATEWAY_RELAY_PORT}"
+echo "  Relay UDP:     ${RELAY_PORT}"
+echo "  Relay health:  ${RELAY_HEALTH_PORT}"
+echo ""
 echo "Provisioning complete. Audit log:"
 date +"%Y-%m-%d %H:%M:%S - Issued Master Key and Gateway TLS to $OUT_DIR" >> "$OUT_DIR/audit.log"
 echo "See $OUT_DIR/audit.log for details."

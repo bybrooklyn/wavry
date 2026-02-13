@@ -3,6 +3,7 @@
 mod session;
 
 use std::collections::HashMap;
+use std::io::ErrorKind;
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
@@ -1080,8 +1081,20 @@ async fn serve_health_http(server: Arc<RelayServer>, listen: SocketAddr) -> Resu
         .route("/ready", get(relay_ready))
         .route("/metrics", get(relay_metrics))
         .with_state(app_state);
-    let listener = TcpListener::bind(listen).await?;
-    info!("relay health endpoint listening on http://{}", listen);
+    let listener = match TcpListener::bind(listen).await {
+        Ok(listener) => listener,
+        Err(err) if err.kind() == ErrorKind::AddrInUse => {
+            let fallback_addr = SocketAddr::new(listen.ip(), 0);
+            warn!(
+                "relay health bind {} is already in use, falling back to {}",
+                listen, fallback_addr
+            );
+            TcpListener::bind(fallback_addr).await?
+        }
+        Err(err) => return Err(err.into()),
+    };
+    let bound_addr = listener.local_addr()?;
+    info!("relay health endpoint listening on http://{}", bound_addr);
     axum::serve(listener, app).await?;
     Ok(())
 }
@@ -1103,7 +1116,18 @@ async fn main() -> Result<()> {
     tracing_subscriber::fmt().with_env_filter(filter).init();
     info!("Starting wavry-relay v{}", env!("CARGO_PKG_VERSION"));
 
-    let socket = UdpSocket::bind(args.listen).await?;
+    let socket = match UdpSocket::bind(args.listen).await {
+        Ok(socket) => socket,
+        Err(err) if err.kind() == ErrorKind::AddrInUse => {
+            let fallback_addr = SocketAddr::new(args.listen.ip(), 0);
+            warn!(
+                "relay bind {} is already in use, falling back to {}",
+                args.listen, fallback_addr
+            );
+            UdpSocket::bind(fallback_addr).await?
+        }
+        Err(err) => return Err(err.into()),
+    };
     let bound_addr = socket.local_addr()?;
     info!("Relay listening on {}", bound_addr);
 

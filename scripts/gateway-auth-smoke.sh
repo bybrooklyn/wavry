@@ -3,6 +3,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+source "${SCRIPT_DIR}/lib/port-utils.sh"
 
 require_cmd() {
   if ! command -v "$1" >/dev/null 2>&1; then
@@ -14,8 +15,8 @@ require_cmd() {
 require_cmd cargo
 require_cmd curl
 
-PORT="${WAVRY_GATEWAY_SMOKE_PORT:-31180}"
-RELAY_PORT="${WAVRY_GATEWAY_SMOKE_RELAY_PORT:-34780}"
+PORT="${WAVRY_GATEWAY_SMOKE_PORT:-$(find_free_tcp_port)}"
+RELAY_PORT="${WAVRY_GATEWAY_SMOKE_RELAY_PORT:-$(find_free_udp_port)}"
 BASE_URL="http://127.0.0.1:${PORT}"
 TMP_DIR="$(mktemp -d)"
 LOG_FILE="${TMP_DIR}/gateway.log"
