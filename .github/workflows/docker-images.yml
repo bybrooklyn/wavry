@@ -15,6 +15,7 @@ on:
   workflow_dispatch:
 
 permissions:
+  actions: read
   contents: read
   packages: write
 
@@ -208,3 +209,153 @@ jobs:
       - name: Skip unchanged component (PR)
         if: github.event_name == 'pull_request' && ((matrix.component == 'gateway' && steps.changes.outputs.gateway != 'true') || (matrix.component == 'relay' && steps.changes.outputs.relay != 'true'))
         run: echo "No relevant changes for ${{ matrix.component }} image on this pull request."
+
+  telemetry:
+    name: Docker build telemetry + budget gate
+    if: always()
+    needs: build
+    runs-on: ubuntu-latest
+    env:
+      PR_BUILD_BUDGET_SECONDS: "2700"
+      PUSH_BUILD_BUDGET_SECONDS: "4200"
+      PR_CACHE_HIT_RATE_MIN: "0.05"
+      PUSH_CACHE_HIT_RATE_MIN: "0.15"
+    steps:
+      - name: Evaluate build durations and cache hit rates
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ github.run_id }}
+          EVENT_NAME: ${{ github.event_name }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [[ "$EVENT_NAME" == "pull_request" ]]; then
+            duration_budget="$PR_BUILD_BUDGET_SECONDS"
+            cache_budget="$PR_CACHE_HIT_RATE_MIN"
+          else
+            duration_budget="$PUSH_BUILD_BUDGET_SECONDS"
+            cache_budget="$PUSH_CACHE_HIT_RATE_MIN"
+          fi
+
+          jobs_json="$(gh run view "$RUN_ID" --json jobs)"
+          job_rows="$(
+            printf '%s' "$jobs_json" | jq -r '.jobs[] | select(.name | test("^Build and push docker image")) | @base64'
+          )"
+
+          if [[ -z "$job_rows" ]]; then
+            echo "No docker image build jobs found for telemetry." >&2
+            exit 1
+          fi
+
+          echo "### Docker Build Telemetry" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Component | Build duration | Duration budget | Cache hits/steps | Cache hit rate | Cache budget | Result |" >> "$GITHUB_STEP_SUMMARY"
+          echo "|---|---:|---:|---:|---:|---:|---|" >> "$GITHUB_STEP_SUMMARY"
+
+          failed=0
+
+          while IFS= read -r row; do
+            job_json="$(printf '%s' "$row" | base64 --decode)"
+            job_name="$(printf '%s' "$job_json" | jq -r '.name')"
+            component="$(printf '%s' "$job_name" | sed -n 's/.*(\(.*\)).*/\1/p')"
+            job_id="$(printf '%s' "$job_json" | jq -r '.databaseId')"
+
+            build_step_b64="$(
+              printf '%s' "$job_json" | jq -r '.steps[] | select(.name == "Build and optionally push") | @base64' | head -n 1
+            )"
+
+            if [[ -z "$build_step_b64" ]]; then
+              echo "Missing build step metadata for ${job_name}." >&2
+              printf '| %s | n/a | %ss | n/a | n/a | %s | fail (missing step metadata) |\n' \
+                "$component" "$duration_budget" "$cache_budget" >> "$GITHUB_STEP_SUMMARY"
+              failed=1
+              continue
+            fi
+
+            build_step_json="$(printf '%s' "$build_step_b64" | base64 --decode)"
+            step_conclusion="$(printf '%s' "$build_step_json" | jq -r '.conclusion // ""')"
+
+            if [[ "$step_conclusion" == "skipped" ]]; then
+              printf '| %s | skipped | %ss | skipped | skipped | skipped | skipped (no relevant changes) |\n' \
+                "$component" "$duration_budget" >> "$GITHUB_STEP_SUMMARY"
+              continue
+            fi
+
+            started_at="$(printf '%s' "$build_step_json" | jq -r '.startedAt // ""')"
+            completed_at="$(printf '%s' "$build_step_json" | jq -r '.completedAt // ""')"
+
+            if [[ -z "$started_at" || -z "$completed_at" || "$started_at" == "null" || "$completed_at" == "null" ]]; then
+              echo "Incomplete timestamps for ${job_name} build step." >&2
+              printf '| %s | n/a | %ss | n/a | n/a | %s | fail (missing timestamps) |\n' \
+                "$component" "$duration_budget" "$cache_budget" >> "$GITHUB_STEP_SUMMARY"
+              failed=1
+              continue
+            fi
+
+            start_epoch="$(date -u -d "$started_at" +%s)"
+            end_epoch="$(date -u -d "$completed_at" +%s)"
+            duration_seconds=$((end_epoch - start_epoch))
+            if (( duration_seconds < 0 )); then
+              duration_seconds=0
+            fi
+
+            job_log_file="$(mktemp)"
+            gh run view "$RUN_ID" --job "$job_id" --log > "$job_log_file"
+
+            total_steps="$(
+              rg -o -P '#\d+(?= \[)' "$job_log_file" | tr -d '#' | sort -n | uniq | wc -l | tr -d ' '
+            )"
+            cached_steps="$(
+              rg -o -P '#\d+(?= CACHED)' "$job_log_file" | tr -d '#' | sort -n | uniq | wc -l | tr -d ' '
+            )"
+            imported_cache_manifests="$(rg -c 'importing cache manifest from gha' "$job_log_file" || true)"
+            rm -f "$job_log_file"
+
+            total_steps="${total_steps:-0}"
+            cached_steps="${cached_steps:-0}"
+            imported_cache_manifests="${imported_cache_manifests:-0}"
+
+            cache_rate="0.000"
+            if (( total_steps > 0 )); then
+              cache_rate="$(awk -v c="$cached_steps" -v t="$total_steps" 'BEGIN { printf "%.3f", c / t }')"
+            fi
+
+            result="pass"
+            cache_budget_display="$cache_budget"
+
+            if (( duration_seconds > duration_budget )); then
+              echo "Build duration budget exceeded for ${job_name}: ${duration_seconds}s > ${duration_budget}s." >&2
+              result="fail (duration)"
+              failed=1
+            fi
+
+            if (( imported_cache_manifests > 0 )); then
+              if [[ "$(awk -v r="$cache_rate" -v m="$cache_budget" 'BEGIN { print (r + 0 < m + 0) ? "1" : "0" }')" == "1" ]]; then
+                echo "Cache-hit budget missed for ${job_name}: ${cache_rate} < ${cache_budget}." >&2
+                if [[ "$result" == "pass" ]]; then
+                  result="fail (cache)"
+                else
+                  result="${result}, cache"
+                fi
+                failed=1
+              fi
+            else
+              cache_budget_display="n/a (cold cache)"
+            fi
+
+            printf '| %s | %ss | %ss | %s/%s | %s | %s | %s |\n' \
+              "$component" \
+              "$duration_seconds" \
+              "$duration_budget" \
+              "$cached_steps" \
+              "$total_steps" \
+              "$cache_rate" \
+              "$cache_budget_display" \
+              "$result" >> "$GITHUB_STEP_SUMMARY"
+          done <<< "$job_rows"
+
+          if (( failed != 0 )); then
+            echo "Docker performance budgets failed." >&2
+            exit 1
+          fi

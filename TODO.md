@@ -32,11 +32,11 @@ Last updated: 2026-02-13
 
 ## Priority 0: Docker Build/CI Speed + Reliability
 
-- [ ] Improve Docker build times with BuildKit cache mounts and remote cache reuse across CI runs.
-- [ ] Split Dockerfiles into stable dependency layers and frequently changing app layers.
-- [ ] Pin base images by digest and enable periodic update workflow with review.
-- [ ] Parallelize control-plane image builds where safe and reduce redundant rebuilds.
-- [ ] Add CI telemetry for build durations and cache hit rates, then enforce performance budgets.
+- [x] Improve Docker build times with BuildKit cache mounts and remote cache reuse across CI runs.
+- [x] Split Dockerfiles into stable dependency layers and frequently changing app layers.
+- [x] Pin base images by digest and enable periodic update workflow with review.
+- [x] Parallelize control-plane image builds where safe and reduce redundant rebuilds.
+- [x] Add CI telemetry for build durations and cache hit rates, then enforce performance budgets.
 - [x] Add smoke tests for produced Docker images before publish.
 
 ## Priority 1: Linux-First Product Quality
