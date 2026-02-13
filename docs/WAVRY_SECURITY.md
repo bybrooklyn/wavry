@@ -1,10 +1,12 @@
 # Wavry Security & Operations — Design Specification v1.0
 
 **Status:** Current  
-**Last Updated:** 2026-02-09  
+**Last Updated:** 2026-02-13  
 **Implementation Note:** This document describes the **target security architecture**. Current implementation status:
 - ✅ End-to-end encryption via Noise XX (fully implemented)
 - ✅ Basic relay forwarding with session validation
+- ✅ Gateway authentication with Argon2id + 2FA (fully implemented)
+- ✅ Structured security audit logging (fully implemented)
 - 🚧 Advanced lease system with PASETO (partial - simpler token model in use)
 - 🚧 Kill switches and automated responses (admin manual only)
 - 🚧 Advanced Sybil detection (not yet implemented)
@@ -16,7 +18,14 @@ This document defines the threat model, security mitigations, operational proced
 ## Table of Contents
 
 1. [Threat Model](#1-threat-model)
-2. [Threat Mitigations](#2-threat-mitigations)
+   - [1.1 Threat Actors](#11-threat-actors)
+   - [1.2 Threat Matrix](#12-threat-matrix)
+   - [1.3 Gateway/Control Plane Attack Surface](#13-gatewaycontrol-plane-attack-surface)
+2. [Control Plane Security Model](#1a-control-plane-security-model)
+   - [1A.1 Gateway Authentication Architecture](#1a1-gateway-authentication-architecture)
+   - [1A.2 Authentication Threat Mitigations](#1a2-authentication-threat-mitigations)
+   - [1A.3 Security Audit Logging](#1a3-security-audit-logging)
+3. [Threat Mitigations](#2-threat-mitigations)
 3. [End-to-End Encryption](#3-end-to-end-encryption)
 4. [Lease Security](#4-lease-security)
 5. [Rate Limiting](#5-rate-limiting)
@@ -58,6 +67,110 @@ This document defines the threat model, security mitigations, operational proced
 | T10 | Master server compromise | APT | Full service compromise | Low | Critical |
 | T11 | IP/timing correlation | Network attacker | Session deanonymization | High | Medium |
 | T12 | Metadata logging by relay | Malicious operator | Privacy violation | High | Medium |
+| T13 | Gateway authentication bypass | Network attacker | Unauthorized account access | Low | Critical |
+| T14 | Credential stuffing attack | Abusive user | Account takeover via leaked passwords | Medium | High |
+| T15 | Brute force authentication | Script kiddie | Account compromise, service disruption | High | Medium |
+| T16 | Session token theft | Network attacker | Account impersonation | Medium | High |
+| T17 | Admin dashboard compromise | APT | Control plane access, service disruption | Very Low | Critical |
+
+### 1.3 Gateway/Control Plane Attack Surface
+
+The **Gateway** provides authentication, signaling, and session coordination services. Unlike relay forwarding, the Gateway handles sensitive credential data and session management.
+
+**Attack Surfaces:**
+- HTTP/WebSocket endpoints for authentication
+- Database containing user credentials and sessions
+- Admin dashboard for operational management
+- Session token issuance and validation
+- Rate limiting and abuse prevention systems
+
+---
+
+## 1A. Control Plane Security Model
+
+### 1A.1 Gateway Authentication Architecture
+
+The Gateway uses a multi-layer authentication system:
+
+```
+┌────────────────────────────────────────────────────────────┐
+│ Layer 1: Password Authentication                           │
+│ - Argon2id password hashing                                │
+│ - Minimum 8 character password requirement                 │
+│ - Rate limiting: 10 attempts/min per IP                    │
+└────────────────────────────────────────────────────────────┘
+                            │
+                            ▼
+┌────────────────────────────────────────────────────────────┐
+│ Layer 2: Two-Factor Authentication (Optional)              │
+│ - TOTP-based 2FA (RFC 6238)                                │
+│ - Secret encrypted at rest with AES-256                    │
+│ - Rolling window validation for clock skew                 │
+└────────────────────────────────────────────────────────────┘
+                            │
+                            ▼
+┌────────────────────────────────────────────────────────────┐
+│ Layer 3: Session Token Management                          │
+│ - Cryptographically random session tokens                  │
+│ - SHA-256 hashed before database storage                   │
+│ - Configurable expiration (default: 30 days)               │
+│ - Revocable via logout or admin action                     │
+└────────────────────────────────────────────────────────────┘
+```
+
+### 1A.2 Authentication Threat Mitigations
+
+| Threat | Mitigation | Implementation Status |
+|:-------|:-----------|:---------------------|
+| T13: Auth bypass | Input validation + parameterized queries | ✅ Implemented |
+| T14: Credential stuffing | Rate limiting + account lockout | ✅ Implemented |
+| T15: Brute force | Exponential backoff + IP bans | ✅ Implemented |
+| T16: Token theft | HTTPS-only + SHA-256 hashing | ✅ Implemented |
+| T17: Admin compromise | Separate admin auth + audit logs | 🚧 Partial |
+
+### 1A.3 Security Audit Logging
+
+**Structured audit events** are logged for all authentication operations:
+
+```rust
+pub enum SecurityEventType {
+    LoginSuccess,      // Successful authentication
+    LoginFailure,      // Failed authentication attempt
+    Registration,      // New account creation
+    TotpEnabled,       // 2FA activated
+    Logout,            // Session termination
+    RateLimitExceeded, // Abuse prevention triggered
+    AccountSuspended,  // Ban enforcement
+}
+
+pub enum FailureReason {
+    UserNotFound,      // Account doesn't exist
+    InvalidPassword,   // Wrong password
+    TotpRequired,      // 2FA code missing
+    InvalidTotp,       // Wrong 2FA code
+    AccountBanned,     // Account suspended
+    RateLimited,       // Too many attempts
+}
+```
+
+**Logged fields:**
+- Event type (LOGIN_SUCCESS, LOGIN_FAILURE, etc.)
+- Client IP address (for correlation and rate limiting)
+- User ID (when available)
+- Email (for failed login tracking)
+- Failure reason (specific cause of auth failure)
+- Timestamp (for audit trail and incident response)
+
+**Log retention:**
+- Authentication events: 30 days
+- Admin actions: 1 year
+- Security incidents: 1 year
+
+**Privacy considerations:**
+- Passwords are NEVER logged (not even hashes)
+- 2FA secrets are NEVER logged
+- Session tokens are logged as SHA-256 hashes only
+- IP addresses are retained per compliance requirements
 
 ---
 
