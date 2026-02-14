@@ -841,7 +841,7 @@ pub async fn start_host(
         }
 
         'outer: loop {
-            let mut video_encoder = match PipewireEncoder::new(config.clone()).await {
+            let mut video_encoder = match PipewireEncoder::new(config).await {
                 Ok(e) => {
                     retry_count = 0;
                     e
@@ -1137,12 +1137,12 @@ pub async fn start_host(
                         log::error!("Video capture error: {}", e);
 
                         // If it's a protocol error or compositor disconnect, we might want to retry
-                        let can_retry = match e {
+                        let can_retry = matches!(
+                            e,
                             MediaError::ProtocolViolation(_)
-                            | MediaError::CompositorDisconnect(_)
-                            | MediaError::StreamNodeLoss(_) => true,
-                            _ => false,
-                        };
+                                | MediaError::CompositorDisconnect(_)
+                                | MediaError::StreamNodeLoss(_)
+                        );
 
                         #[derive(Clone, serde::Serialize)]
                         struct HostErrorEvent {

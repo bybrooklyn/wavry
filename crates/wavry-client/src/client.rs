@@ -17,9 +17,9 @@ use tracing::{debug, info, warn};
 use rift_core::{
     decode_msg, encode_msg,
     relay::{LeasePresentPayload, PeerRole, RelayHeader, RelayPacketType, RELAY_HEADER_SIZE},
-    Codec as RiftCodec, ControlMessage as ProtoControl, Handshake, Hello as ProtoHello,
+    Codec as RiftCodec, ControlMessage as ProtoControl, Hello as ProtoHello,
     Message as ProtoMessage, PhysicalPacket, Ping as ProtoPing, Resolution as ProtoResolution,
-    Role, StatsReport as ProtoStatsReport, RIFT_VERSION,
+    StatsReport as ProtoStatsReport, RIFT_VERSION,
 };
 use socket2::SockRef;
 
@@ -768,8 +768,7 @@ async fn run_client_inner(
         crypto = CryptoState::Established(client);
     }
 
-    // Now perform RIFT handshake
-    let _ = Handshake::new(Role::Client);
+    // Send application-level Hello to announce capabilities
     let supported_codecs = probe_supported_codecs();
 
     let supported_codecs: Vec<i32> = supported_codecs
