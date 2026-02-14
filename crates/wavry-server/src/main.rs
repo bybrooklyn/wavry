@@ -1650,7 +1650,8 @@ mod host {
                         }
                     }
                     rift_core::control_message::Content::Nack(nack) => {
-                        for packet_id in nack.packet_ids {
+                        // Cap retransmit count per NACK to prevent bandwidth amplification.
+                        for packet_id in nack.packet_ids.into_iter().take(16) {
                             if let Some(payload) = peer_state.send_history.get(packet_id) {
                                 let _ = socket.send_to(&payload, peer).await;
                             }
