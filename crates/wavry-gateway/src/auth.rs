@@ -42,6 +42,9 @@ pub struct EnableTotpRequest {
     pub password: String,
     pub secret: String,
     pub code: String,
+    /// Existing TOTP code, required when the user already has TOTP enabled.
+    /// Without this, an attacker with only the password could replace 2FA.
+    pub existing_totp_code: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -601,6 +604,49 @@ pub async fn setup_totp(
         return error_response(StatusCode::UNAUTHORIZED, "Auth failed");
     }
 
+    // If the user already has TOTP configured, require the current TOTP code.
+    // Without this check, an attacker with only the password could replace 2FA.
+    if let Some(stored_secret) = &user.totp_secret {
+        let existing_code = match payload.totp_code.as_deref() {
+            Some(c) if !c.is_empty() => c,
+            _ => {
+                AUTH_METRICS.auth_failures.fetch_add(1, Ordering::Relaxed);
+                return error_response(
+                    StatusCode::UNAUTHORIZED,
+                    "Current 2FA code required to change 2FA settings",
+                );
+            }
+        };
+        if !security::is_valid_totp_code(existing_code) {
+            AUTH_METRICS
+                .validation_errors
+                .fetch_add(1, Ordering::Relaxed);
+            return error_response(StatusCode::BAD_REQUEST, "Invalid 2FA code format");
+        }
+        let existing_secret = match security::decrypt_totp_secret(stored_secret) {
+            Ok(s) => s,
+            Err(_) => {
+                return error_response(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "2FA verification unavailable",
+                )
+            }
+        };
+        let existing_totp = match totp_from_secret(&existing_secret) {
+            Ok(t) => t,
+            Err(_) => {
+                return error_response(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "2FA verification unavailable",
+                )
+            }
+        };
+        if !existing_totp.check_current(existing_code).unwrap_or(false) {
+            AUTH_METRICS.auth_failures.fetch_add(1, Ordering::Relaxed);
+            return error_response(StatusCode::UNAUTHORIZED, "Invalid current 2FA code");
+        }
+    }
+
     let mut secret_bytes = [0u8; 20];
     thread_rng().fill(&mut secret_bytes);
     let secret_vec = secret_bytes.to_vec();
@@ -695,6 +741,49 @@ pub async fn enable_totp(
     {
         AUTH_METRICS.auth_failures.fetch_add(1, Ordering::Relaxed);
         return error_response(StatusCode::UNAUTHORIZED, "Auth failed");
+    }
+
+    // If the user already has TOTP configured, require the existing TOTP code.
+    // Without this, an attacker with only the password could replace the 2FA secret.
+    if let Some(stored_secret) = &user.totp_secret {
+        let existing_code = match payload.existing_totp_code.as_deref() {
+            Some(c) if !c.is_empty() => c,
+            _ => {
+                AUTH_METRICS.auth_failures.fetch_add(1, Ordering::Relaxed);
+                return error_response(
+                    StatusCode::UNAUTHORIZED,
+                    "Current 2FA code required to replace 2FA settings",
+                );
+            }
+        };
+        if !security::is_valid_totp_code(existing_code) {
+            AUTH_METRICS
+                .validation_errors
+                .fetch_add(1, Ordering::Relaxed);
+            return error_response(StatusCode::BAD_REQUEST, "Invalid existing 2FA code format");
+        }
+        let existing_secret = match security::decrypt_totp_secret(stored_secret) {
+            Ok(s) => s,
+            Err(_) => {
+                return error_response(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "2FA verification unavailable",
+                )
+            }
+        };
+        let existing_totp = match totp_from_secret(&existing_secret) {
+            Ok(t) => t,
+            Err(_) => {
+                return error_response(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "2FA verification unavailable",
+                )
+            }
+        };
+        if !existing_totp.check_current(existing_code).unwrap_or(false) {
+            AUTH_METRICS.auth_failures.fetch_add(1, Ordering::Relaxed);
+            return error_response(StatusCode::UNAUTHORIZED, "Invalid existing 2FA code");
+        }
     }
 
     let totp = match totp_from_secret(&secret) {
