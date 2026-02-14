@@ -1,7 +1,7 @@
 {
 	"name": "web-reference",
 	"private": true,
-	"version": "0.0.5-unstable",
+	"version": "0.0.5-unstable2",
 	"type": "module",
 	"scripts": {
 		"dev": "vite dev",

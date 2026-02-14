@@ -1,6 +1,6 @@
 # Adaptive Streaming Roadmap
 
-**Version:** 0.0.5-unstable  
+**Version:** 0.0.5-unstable2  
 **Last Updated:** 2026-02-13
 
 This roadmap defines concrete milestones for adaptive resolution and bandwidth control.

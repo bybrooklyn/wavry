@@ -1,6 +1,6 @@
 # Relay Server Operations Guide
 
-**Version:** 0.0.5-unstable  
+**Version:** 0.0.5-unstable2  
 **Last Updated:** 2026-02-13
 
 This document provides operational guidance for deploying and managing Wavry relay servers.

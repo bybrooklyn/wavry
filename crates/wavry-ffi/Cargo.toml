@@ -1,6 +1,6 @@
 [package]
 name = "wavry-ffi"
-version = "0.0.5-unstable"
+version = "0.0.5-unstable2"
 edition = "2021"
 build = "build.rs"
 

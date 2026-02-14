@@ -5971,7 +5971,7 @@ dependencies = [
 
 [[package]]
 name = "rift-core"
-version = "0.0.5-unstable"
+version = "0.0.5-unstable2"
 dependencies = [
  "anyhow",
  "bitflags 2.10.0",
@@ -5988,7 +5988,7 @@ dependencies = [
 
 [[package]]
 name = "rift-crypto"
-version = "0.0.5-unstable"
+version = "0.0.5-unstable2"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -8660,7 +8660,7 @@ dependencies = [
 
 [[package]]
 name = "wavry-cli"
-version = "0.0.5-unstable"
+version = "0.0.5-unstable2"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -8680,7 +8680,7 @@ dependencies = [
 
 [[package]]
 name = "wavry-client"
-version = "0.0.5-unstable"
+version = "0.0.5-unstable2"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -8714,7 +8714,7 @@ dependencies = [
 
 [[package]]
 name = "wavry-common"
-version = "0.0.5-unstable"
+version = "0.0.5-unstable2"
 dependencies = [
  "anyhow",
  "hex",
@@ -8729,7 +8729,7 @@ dependencies = [
 
 [[package]]
 name = "wavry-desktop"
-version = "0.0.5-unstable"
+version = "0.0.5-unstable2"
 dependencies = [
  "anyhow",
  "bytes",
@@ -8754,7 +8754,7 @@ dependencies = [
 
 [[package]]
 name = "wavry-ffi"
-version = "0.0.5-unstable"
+version = "0.0.5-unstable2"
 dependencies = [
  "anyhow",
  "bytes",
@@ -8778,7 +8778,7 @@ dependencies = [
 
 [[package]]
 name = "wavry-gateway"
-version = "0.0.5-unstable"
+version = "0.0.5-unstable2"
 dependencies = [
  "anyhow",
  "argon2",
@@ -8812,7 +8812,7 @@ dependencies = [
 
 [[package]]
 name = "wavry-master"
-version = "0.0.5-unstable"
+version = "0.0.5-unstable2"
 dependencies = [
  "anyhow",
  "axum",
@@ -8835,7 +8835,7 @@ dependencies = [
 
 [[package]]
 name = "wavry-media"
-version = "0.0.5-unstable"
+version = "0.0.5-unstable2"
 dependencies = [
  "anyhow",
  "ashpd",
@@ -8875,7 +8875,7 @@ dependencies = [
 
 [[package]]
 name = "wavry-platform"
-version = "0.0.5-unstable"
+version = "0.0.5-unstable2"
 dependencies = [
  "anyhow",
  "arboard",
@@ -8893,7 +8893,7 @@ dependencies = [
 
 [[package]]
 name = "wavry-relay"
-version = "0.0.5-unstable"
+version = "0.0.5-unstable2"
 dependencies = [
  "anyhow",
  "axum",
@@ -8918,7 +8918,7 @@ dependencies = [
 
 [[package]]
 name = "wavry-server"
-version = "0.0.5-unstable"
+version = "0.0.5-unstable2"
 dependencies = [
  "anyhow",
  "bytes",
@@ -8946,7 +8946,7 @@ dependencies = [
 
 [[package]]
 name = "wavry-vr"
-version = "0.0.5-unstable"
+version = "0.0.5-unstable2"
 dependencies = [
  "bytes",
  "thiserror 1.0.69",
@@ -8954,7 +8954,7 @@ dependencies = [
 
 [[package]]
 name = "wavry-vr-alvr"
-version = "0.0.5-unstable"
+version = "0.0.5-unstable2"
 dependencies = [
  "ash",
  "glam",
@@ -8975,7 +8975,7 @@ dependencies = [
 
 [[package]]
 name = "wavry-vr-openxr"
-version = "0.0.5-unstable"
+version = "0.0.5-unstable2"
 dependencies = [
  "ash",
  "bytes",
@@ -8997,7 +8997,7 @@ dependencies = [
 
 [[package]]
 name = "wavry-web"
-version = "0.0.5-unstable"
+version = "0.0.5-unstable2"
 dependencies = [
  "anyhow",
  "bytes",

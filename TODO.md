@@ -1,6 +1,6 @@
 # Wavry TODO (Full Execution Ledger)
 
-Current target version: `v0.0.5-unstable`  
+Current target version: `v0.0.5-unstable2`  
 Last updated: 2026-02-13
 
 ## How To Use This File
