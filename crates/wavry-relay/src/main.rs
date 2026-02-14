@@ -27,6 +27,11 @@ use uuid::Uuid;
 use wavry_common::protocol::{RelayHeartbeatRequest, RelayRegisterRequest, RelayRegisterResponse};
 
 const DEFAULT_MAX_SESSIONS: usize = 100;
+/// Maximum number of distinct IPs tracked in the rate-limiter table.
+/// Prevents memory exhaustion from flood attacks with spoofed source IPs.
+const MAX_IP_RATE_TABLE_ENTRIES: usize = 1_000_000;
+/// Maximum number of distinct identities tracked in the identity rate-limiter.
+const MAX_IDENTITY_RATE_TABLE_ENTRIES: usize = 100_000;
 const DEFAULT_IDLE_TIMEOUT_SECS: u64 = 60;
 const DEFAULT_LEASE_DURATION_SECS: u64 = 300;
 const DEFAULT_CLEANUP_INTERVAL_SECS: u64 = 10;
@@ -239,6 +244,10 @@ impl IpRateLimiter {
 
     fn check(&mut self, ip: std::net::IpAddr) -> bool {
         let now = std::time::Instant::now();
+        // Bound the table to prevent memory exhaustion from spoofed-source floods.
+        if !self.counts.contains_key(&ip) && self.counts.len() >= MAX_IP_RATE_TABLE_ENTRIES {
+            return false;
+        }
         let entry = self.counts.entry(ip).or_insert((0, now));
         if now.duration_since(entry.1) > self.window {
             *entry = (0, now);
@@ -274,6 +283,12 @@ impl IdentityRateLimiter {
 
     fn check(&mut self, identity: &str) -> bool {
         let now = std::time::Instant::now();
+        // Bound the table to prevent memory exhaustion from identity churn.
+        if !self.counts.contains_key(identity)
+            && self.counts.len() >= MAX_IDENTITY_RATE_TABLE_ENTRIES
+        {
+            return false;
+        }
         let entry = self.counts.entry(identity.to_string()).or_insert((0, now));
         if now.duration_since(entry.1) > self.window {
             *entry = (0, now);

@@ -277,6 +277,9 @@ message FecPacket {
     uint32 shard_count = 3;
     uint32 parity_index = 4;
     bytes payload = 5;
+    // Actual byte length of each data shard, in order. Used by the receiver to
+    // trim trailing XOR padding from a recovered shard so the AEAD tag matches.
+    repeated uint32 shard_lengths = 6;
 }
 
 message FileChunk {

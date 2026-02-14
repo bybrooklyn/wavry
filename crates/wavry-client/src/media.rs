@@ -119,6 +119,7 @@ impl FecCache {
 
     pub fn try_recover(&self, fec: &FecPacket) -> Option<Vec<u8>> {
         let mut missing_id = None;
+        let mut missing_index: Option<usize> = None;
         let mut recovered_payload = fec.payload.clone();
         let mut present_count = 0;
 
@@ -138,13 +139,22 @@ impl FecCache {
                     return None;
                 }
                 missing_id = Some(pid);
+                missing_index = Some(offset as usize);
             }
         }
 
         if present_count == (fec.shard_count - 2) {
-            // Exactly one missing, we've XORed everything else into the parity
+            // Exactly one missing, we've XORed everything else into the parity.
             if let Some(id) = missing_id {
                 debug!("FEC: Recovered packet {}", id);
+            }
+            // Trim trailing XOR padding: the parity was computed over max_payload_len
+            // bytes, so shorter shards get zero-padded. Without trimming, the extra
+            // zeros corrupt the AEAD authentication tag and decryption fails.
+            if let Some(idx) = missing_index {
+                if let Some(&actual_len) = fec.shard_lengths.get(idx) {
+                    recovered_payload.truncate(actual_len as usize);
+                }
             }
             Some(recovered_payload)
         } else {

@@ -241,6 +241,7 @@ pub struct FecBuilder {
     group_id: u64,
     first_packet_id: Option<u64>,
     payloads: Vec<Vec<u8>>,
+    shard_lengths: Vec<u32>,
     max_payload_len: usize,
 }
 
@@ -254,6 +255,7 @@ impl FecBuilder {
             group_id: 0,
             first_packet_id: None,
             payloads: Vec::with_capacity(shard_count as usize),
+            shard_lengths: Vec::with_capacity(shard_count as usize),
             max_payload_len: 0,
         })
     }
@@ -264,6 +266,7 @@ impl FecBuilder {
         }
 
         self.max_payload_len = self.max_payload_len.max(payload.len());
+        self.shard_lengths.push(payload.len() as u32);
         self.payloads.push(payload.to_vec());
 
         if self.payloads.len() == (self.shard_count - 1) as usize {
@@ -274,6 +277,7 @@ impl FecBuilder {
                 shard_count: self.shard_count,
                 parity_index: self.shard_count - 1,
                 payload: parity_payload,
+                shard_lengths: self.shard_lengths.clone(),
             };
             self.group_id = self.group_id.wrapping_add(1);
             self.reset();
@@ -285,6 +289,7 @@ impl FecBuilder {
 
     fn reset(&mut self) {
         self.payloads.clear();
+        self.shard_lengths.clear();
         self.max_payload_len = 0;
         self.first_packet_id = None;
     }

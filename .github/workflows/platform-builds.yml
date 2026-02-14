@@ -194,7 +194,17 @@ jobs:
             gstreamer1.0-pipewire \
             gstreamer1.0-plugins-base \
             gstreamer1.0-plugins-good \
-            gstreamer1.0-plugins-bad
+            gstreamer1.0-plugins-bad \
+            pkg-config \
+            protobuf-compiler \
+            libglib2.0-dev \
+            libgstreamer1.0-dev \
+            libgstreamer-plugins-base1.0-dev \
+            libasound2-dev \
+            libx11-dev \
+            libxrandr-dev \
+            libevdev-dev \
+            libudev-dev
           for optional_pkg in pipewire-bin pipewire-pulse pulseaudio; do
             if apt-cache show "$optional_pkg" >/dev/null 2>&1; then
               sudo apt-get install -y "$optional_pkg"
