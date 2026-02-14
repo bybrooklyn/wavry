@@ -1823,9 +1823,20 @@ Sink #4
             enable_hdr: false,
         };
 
-        let mut encoder = super::PipewireEncoder::new(config)
-            .await
-            .expect("Failed to create encoder");
+        let mut encoder = match super::PipewireEncoder::new(config).await {
+            Ok(encoder) => encoder,
+            Err(crate::MediaError::PortalUnavailable(message))
+                if message.contains("org.freedesktop.portal.ScreenCast")
+                    && message.contains("was not found") =>
+            {
+                eprintln!(
+                    "Skipping Wayland capture smoke: ScreenCast portal backend unavailable: {}",
+                    message
+                );
+                return;
+            }
+            Err(err) => panic!("Failed to create encoder: {err:?}"),
+        };
         // Pull a few frames to ensure it's actually working
         for _ in 0..5 {
             let _frame = encoder.next_frame().expect("Failed to get frame");
