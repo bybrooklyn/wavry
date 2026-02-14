@@ -5,7 +5,7 @@ Tag-triggered publishing is blocked while any unchecked box remains.
 
 ## Release Metadata
 
-- [ ] `VERSION` is set to the intended release (stable or `-canary` only).
+- [ ] `VERSION` is set to the intended release (stable, `-canary`, or `-unstable`).
 - [ ] `CHANGELOG.md` includes release notes for this version.
 - [ ] Release channel matches policy in `docs/RELEASE_POLICY.md`.
 

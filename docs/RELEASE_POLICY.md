@@ -14,14 +14,14 @@ This policy defines version channels and allowed release tags.
   - Tag format: `vX.Y.Z-canary` or `vX.Y.Z-canary.N`
   - Intended for prerelease validation and early adopters.
 
-- `unstable` (internal only)
-  - Allowed in branch/mainline development metadata only.
-  - Not allowed for release tags.
-  - Not allowed for published prerelease channels.
+- `unstable`
+  - Version format: `X.Y.Z-unstable` or `X.Y.Z-unstableN`
+  - Tag format: `vX.Y.Z-unstable` or `vX.Y.Z-unstableN`
+  - Intended for fast-moving prerelease snapshots and internal/external validation.
 
 ## Enforcement
 
-- `scripts/set-version.sh` only accepts stable or `-canary` versions.
+- `scripts/set-version.sh` accepts stable, `-canary`, and `-unstable` versions.
 - `.github/workflows/platform-builds.yml` rejects unsupported prerelease tags.
 - `.github/workflows/docker-images.yml` rejects unsupported prerelease tags.
 - Release publishing from tags is gated by `scripts/verify-release-checklist.sh`.
@@ -29,5 +29,4 @@ This policy defines version channels and allowed release tags.
 ## Publishing Rules
 
 - Use stable tags for production releases.
-- Use canary tags for prereleases.
-- Never create `-unstable` tags.
+- Use canary or unstable tags for prereleases.

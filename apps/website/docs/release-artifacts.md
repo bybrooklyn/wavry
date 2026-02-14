@@ -61,7 +61,7 @@ Wavry distributes gateway and relay as container images, not release binaries:
 
 Tag guidance:
 
-- Use `vX.Y.Z` (or `vX.Y.Z-canary...`) for release-pinned deployments
+- Use `vX.Y.Z` (or `vX.Y.Z-canary...` / `vX.Y.Z-unstable...`) for release-pinned deployments
 - Use `main`/`latest` only for fast-moving development environments
 
 ## Linux Package Install Notes

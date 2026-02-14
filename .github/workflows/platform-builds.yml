@@ -47,7 +47,7 @@ jobs:
           echo "WAVRY_V=$WAVRY_V" >> $GITHUB_ENV
           echo "Extracted Wavry Version: $WAVRY_V"
 
-      - name: Enforce prerelease policy (canary-only)
+      - name: Enforce prerelease policy (canary + unstable)
         id: version_policy
         run: |
           set -euo pipefail
@@ -55,13 +55,13 @@ jobs:
           REF_TYPE="${GITHUB_REF_TYPE:-branch}"
 
           if [[ "$WAVRY_V" =~ - ]]; then
-            if [[ "$WAVRY_V" =~ ^[0-9]+\.[0-9]+\.[0-9]+-canary([.][0-9A-Za-z-]+)*$ ]]; then
+            if [[ "$WAVRY_V" =~ ^[0-9]+\.[0-9]+\.[0-9]+-(canary|unstable)([.0-9A-Za-z-]*)$ ]]; then
               echo "is_prerelease=true" >> "$GITHUB_OUTPUT"
               echo "release_allowed=true" >> "$GITHUB_OUTPUT"
             else
               if [[ "$REF_TYPE" == "tag" ]]; then
                 echo "Unsupported prerelease version on tag push: $WAVRY_V" >&2
-                echo "Only -canary prerelease tags are allowed." >&2
+                echo "Only -canary and -unstable prerelease tags are allowed." >&2
                 exit 1
               fi
               echo "::warning::Unsupported prerelease version '$WAVRY_V'. Release creation will be skipped."

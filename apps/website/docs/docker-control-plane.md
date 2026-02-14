@@ -42,7 +42,7 @@ Images:
 
 Tag policy:
 
-- production: pin explicit release tag (`vX.Y.Z` or `vX.Y.Z-canary...`)
+- production: pin explicit release tag (`vX.Y.Z`, `vX.Y.Z-canary...`, or `vX.Y.Z-unstable...`)
 - development: `main` or `latest`
 
 ## Environment Variables

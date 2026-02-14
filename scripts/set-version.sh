@@ -1,13 +1,13 @@
 #!/bin/bash
 # scripts/set-version.sh
 # Usage: ./scripts/set-version.sh <wavry_version> <rift_version> <delta_version>
-# Example: ./scripts/set-version.sh 0.0.3-canary 1.2 1.1.0
+# Example: ./scripts/set-version.sh 0.0.3-unstable2 1.2 1.1.0
 
 set -euo pipefail
 
 if [ "$#" -ne 3 ]; then
     echo "Usage: $0 <wavry_version> <rift_version> <delta_version>"
-    echo "Example: $0 0.0.3-canary 1.2 1.1.0"
+    echo "Example: $0 0.0.3-unstable2 1.2 1.1.0"
     exit 1
 fi
 
@@ -22,12 +22,12 @@ DELTA_RAW=$(echo "$DELTA_VER" | sed 's/^v//')
 
 # Enforce release policy:
 # - stable versions are allowed (e.g. 0.1.0)
-# - prereleases are allowed only as -canary (optionally with dot suffixes)
-#   examples: 0.1.0-canary, 0.1.0-canary.1
-if ! [[ "$WAVRY_RAW" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-canary([.][0-9A-Za-z-]+)*)?$ ]]; then
+# - prereleases are allowed as -canary or -unstable
+#   examples: 0.1.0-canary.1, 0.1.0-unstable2
+if ! [[ "$WAVRY_RAW" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-(canary|unstable)([.0-9A-Za-z-]*)?)?$ ]]; then
     echo "Error: invalid Wavry version '$WAVRY_VER'"
-    echo "Only stable versions or -canary prereleases are allowed."
-    echo "Examples: 0.1.0, 0.1.0-canary, 0.1.0-canary.1"
+    echo "Only stable versions or -canary/-unstable prereleases are allowed."
+    echo "Examples: 0.1.0, 0.1.0-canary.1, 0.1.0-unstable2"
     exit 1
 fi
 

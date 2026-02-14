@@ -13,26 +13,18 @@ Wavry uses three practical channels:
 |---|---|---|
 | Stable | `v0.1.0` | public releases and production pinning |
 | Canary | `v0.1.1-canary.1` | public prerelease validation with explicit opt-in |
-| Internal unstable | `v0.1.2-unstable` | internal development snapshots only |
+| Unstable | `v0.1.2-unstable2` | fast-moving prerelease snapshots for internal/external validation |
 
-## Hard Rule: Public Prerelease Tags Are Canary-Only
+## Allowed Public Prerelease Tags
 
 For public release tags:
 
-- Allowed prerelease suffix: `-canary` (optionally with `.N` or additional dot suffix segments)
-- Disallowed for release tags: `-unstable`, `-alpha`, `-beta`, and other custom prerelease suffixes
+- Allowed prerelease suffixes:
+  - `-canary` (optionally with `.N` or additional dot suffix segments)
+  - `-unstable` (for example `-unstable`, `-unstable2`, `-unstable.2`)
+- Disallowed for release tags: `-alpha`, `-beta`, and other custom prerelease suffixes
 
 This is enforced in version tooling and CI policy gates.
-
-## Internal `-unstable` Versions
-
-`-unstable` may exist in development branches/workspaces for internal iteration.
-
-Policy for `-unstable`:
-
-- do not publish as release tags
-- do not treat as public compatibility commitments
-- use for short-lived dev/test coordination only
 
 ## Release Artifact Policy
 
@@ -49,19 +41,19 @@ Control-plane services are distributed as Docker images (gateway/relay), not raw
 
 `scripts/set-version.sh` enforces:
 
-- stable versions (`X.Y.Z`) or canary prereleases (`X.Y.Z-canary...`)
+- stable versions (`X.Y.Z`) or allowed prereleases (`X.Y.Z-canary...`, `X.Y.Z-unstable...`)
 - rejection of unsupported prerelease formats for release-oriented version updates
 
 CI release policy enforces:
 
 - release generation is skipped or blocked when version policy is not satisfied
-- canary prereleases are marked as prerelease artifacts
+- canary and unstable prereleases are marked as prerelease artifacts
 
 ## Operational Guidance
 
 1. Use stable tags for production rollout pinning.
-2. Use canary tags for controlled rollout cohorts.
-3. Keep internal unstable versions off public release channels.
+2. Use canary or unstable tags for controlled rollout cohorts.
+3. Use unstable tags for high-velocity snapshot releases where policy flexibility is required.
 4. Document compatibility implications when bumping major/minor protocol behavior.
 
 ## Related Docs
@@ -70,4 +62,3 @@ CI release policy enforces:
 - [Upgrade and Rollback](/upgrade-and-rollback)
 - [Docker Control Plane](/docker-control-plane)
 - [Operations](/operations)
-

@@ -41,7 +41,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Enforce tag prerelease policy (canary-only)
+      - name: Enforce tag prerelease policy (canary + unstable)
         if: startsWith(github.ref, 'refs/tags/')
         shell: bash
         run: |
@@ -49,11 +49,11 @@ jobs:
 
           TAG="${GITHUB_REF_NAME#v}"
           if [[ "$TAG" =~ - ]]; then
-            if [[ "$TAG" =~ ^[0-9]+\.[0-9]+\.[0-9]+-canary([.][0-9A-Za-z-]+)*$ ]]; then
-              echo "Accepted canary prerelease tag: v$TAG"
+            if [[ "$TAG" =~ ^[0-9]+\.[0-9]+\.[0-9]+-(canary|unstable)([.0-9A-Za-z-]*)$ ]]; then
+              echo "Accepted prerelease tag: v$TAG"
             else
               echo "Unsupported prerelease tag: v$TAG" >&2
-              echo "Only stable tags or -canary prerelease tags are allowed." >&2
+              echo "Only stable tags or -canary/-unstable prerelease tags are allowed." >&2
               exit 1
             fi
           else

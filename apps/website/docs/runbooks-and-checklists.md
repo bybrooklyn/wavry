@@ -79,8 +79,8 @@ Recover a quarantined relay:
 
 ## Release Channel Checklist
 
-1. confirm target version follows policy (`stable` or `-canary` prerelease for public tags)
-2. ensure `-unstable` builds are not pushed as public release tags
+1. confirm target version follows policy (`stable`, `-canary`, or `-unstable` for public tags)
+2. confirm prerelease tags use only allowed suffixes (`-canary` or `-unstable`)
 3. validate release artifact names are platform/arch labeled
 4. verify `SHA256SUMS.txt` and release manifest are present
 
