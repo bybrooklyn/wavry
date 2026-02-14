@@ -923,7 +923,7 @@ pub async fn start_host(
 
             // Audio loop in a separate task
             let (audio_stop_tx, audio_stop_rx) = oneshot::channel::<()>();
-            let audio_task_stop_rx = audio_stop_rx;
+            let mut audio_task_stop_rx = audio_stop_rx;
             let audio_handle = tokio::spawn(async move {
                 let mut packet_id_counter: u64 = 1;
                 let mut audio_capturer = audio_capturer;
