@@ -694,7 +694,6 @@ pub async fn start_host(
     use std::net::UdpSocket;
     use std::sync::atomic::AtomicU32;
     use std::sync::{Arc, Mutex};
-    use std::thread;
     use wavry_client::signaling::{SignalMessage, SignalingClient};
     use wavry_media::{Codec, EncodeConfig, MediaError};
 
@@ -769,7 +768,6 @@ pub async fn start_host(
         let app_handle = app_handle_clone;
         let mut retry_count = 0;
         const MAX_RETRIES: u32 = 10;
-        let mut last_error_time = std::time::Instant::now();
 
         log::info!(
             "Host task started (requested port {}, bound port {})",
@@ -778,7 +776,6 @@ pub async fn start_host(
         );
 
         let shared_client_addr = Arc::new(std::sync::Mutex::new(None));
-        let (audio_stop_tx, mut audio_stop_rx) = oneshot::channel::<()>();
 
         if let Some(token) = signaling_token {
             let signaling_url = signaling_url.clone();
@@ -893,7 +890,7 @@ pub async fn start_host(
                 }
             };
 
-            let mut audio_capturer = match PipewireAudioCapturer::new().await {
+            let audio_capturer = match PipewireAudioCapturer::new().await {
                 Ok(a) => a,
                 Err(e) => {
                     log::error!("Failed to initialize audio capturer: {}", e);
@@ -925,7 +922,8 @@ pub async fn start_host(
             let shared_client_addr_audio = shared_client_addr.clone();
 
             // Audio loop in a separate task
-            let mut audio_task_stop_rx = audio_stop_rx;
+            let (audio_stop_tx, audio_stop_rx) = oneshot::channel::<()>();
+            let audio_task_stop_rx = audio_stop_rx;
             let audio_handle = tokio::spawn(async move {
                 let mut packet_id_counter: u64 = 1;
                 let mut audio_capturer = audio_capturer;
@@ -997,6 +995,7 @@ pub async fn start_host(
             loop {
                 if stop_rx.try_recv().is_ok() {
                     let _ = audio_stop_tx.send(());
+                    audio_handle.abort();
                     break 'outer;
                 }
 
@@ -1175,9 +1174,11 @@ pub async fn start_host(
                             // Cool down before retry
                             let delay = std::time::Duration::from_millis(2000);
                             log::info!("Retrying capture in {:?}", delay);
+                            audio_handle.abort();
                             tokio::time::sleep(delay).await;
                             continue 'outer;
                         } else {
+                            audio_handle.abort();
                             break 'outer;
                         }
                     }
