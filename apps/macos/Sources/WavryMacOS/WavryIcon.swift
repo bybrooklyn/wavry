@@ -4,7 +4,7 @@ import SwiftUI
 /// This enum is the single source of truth for icon choice.
 enum WavryIconName: String, CaseIterable {
     case tabSessions = "desktopcomputer"
-    case tabSettings = "gearshape.fill"
+    case tabSettings = "gearshape"
     case copy = "doc.on.doc"
     case identity = "person.circle.fill"
     case success = "checkmark.circle.fill"

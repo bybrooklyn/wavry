@@ -62,7 +62,7 @@
   :global(body) {
     margin: 0;
     padding: 0;
-    background-color: var(--colors-bg-base);
+    background: transparent;
     color: var(--colors-text-primary);
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji";
     -webkit-font-smoothing: antialiased;
@@ -70,5 +70,9 @@
     height: 100vh;
     width: 100vw;
     color-scheme: dark;
+  }
+
+  :global(html) {
+    background: transparent;
   }
 </style>

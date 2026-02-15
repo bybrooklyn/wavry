@@ -1,5 +1,7 @@
 <svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-  <!-- PLACEHOLDER: Replace with SF Symbol "server.rack" -->
-  <rect x="6" y="6" width="12" height="12" stroke="currentColor" stroke-width="2" fill="none" stroke-dasharray="2,2"/>
-  <text x="12" y="13" font-family="monospace" font-size="8" fill="currentColor" text-anchor="middle">?</text>
+  <rect x="4" y="4" width="16" height="16" rx="2" stroke="currentColor" stroke-width="1.8"/>
+  <path d="M8 9H16" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+  <path d="M8 13H16" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+  <path d="M8 17H12" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+  <circle cx="15.8" cy="17" r="1" fill="currentColor"/>
 </svg>

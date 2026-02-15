@@ -1,24 +1,12 @@
 <script lang="ts">
-  import { onMount } from "svelte";
+  import Icon from "./Icon.svelte";
 
   let { appState } = $props();
-
-  onMount(() => {
-    if (!appState.monitors?.length) {
-      appState.loadMonitors();
-    }
-  });
-
-  function throughputLabel() {
-    const mbps = appState.ccBitrate / 1000;
-    if (!Number.isFinite(mbps)) return "0.0 Mbps";
-    return `${mbps.toFixed(1)} Mbps`;
-  }
 
   function modeLabel() {
     switch (appState.connectivityMode) {
       case "wavry":
-        return "Cloud";
+        return "Wavry Service";
       case "direct":
         return "LAN";
       default:
@@ -30,323 +18,191 @@
 <div class="host-card">
   <div class="preview" class:live={appState.isHosting}>
     {#if appState.isHosting}
-      <div class="status-overlay">
+      <div class="hosting-badge">
         <span class="dot"></span>
-        <span class="label">HOSTING</span>
+        <span>HOSTING</span>
       </div>
     {/if}
-    <span class="host-icon">{appState.isHosting ? "🟢" : "🖥️"}</span>
+
+    <div class="host-icon">
+      <Icon name="hostDefault" size={60} />
+    </div>
   </div>
 
-  <div class="info">
-    <div class="meta">
-      <div class="meta-head">
-        <h3>{appState.displayName || "Local Host"}</h3>
-        <span class="mode-badge">{modeLabel()}</span>
-      </div>
-      <p class="subtle">Port {appState.hostPort === 0 ? "Random" : appState.hostPort} • {appState.isHosting ? "Ready for incoming peers" : "Idle"}</p>
-
-      {#if appState.isHosting}
-        <div class="stats-row">
-          <span>Throughput: {throughputLabel()}</span>
-          <span>State: {appState.ccState}</span>
-        </div>
-      {:else if appState.monitors.length > 0}
-        <div class="monitor-row">
-          <select
-            bind:value={appState.selectedMonitorId}
-            class="monitor-select"
-            disabled={appState.isLoadingMonitors || appState.isHostTransitioning}
-          >
-            {#each appState.monitors as monitor}
-              <option value={monitor.id}>
-                {monitor.name} ({monitor.resolution.width}x{monitor.resolution.height})
-              </option>
-            {/each}
-          </select>
-          <button
-            class="refresh-btn"
-            onclick={() => appState.loadMonitors()}
-            title="Refresh monitor list"
-            disabled={appState.isLoadingMonitors || appState.isHostTransitioning}
-          >
-            {appState.isLoadingMonitors ? "Loading..." : "Refresh"}
-          </button>
-        </div>
-      {/if}
-
-      {#if appState.linuxRuntimeDiagnostics}
-        <p class="linux-runtime-text">
-          Linux runtime: {appState.linuxRuntimeDiagnostics.session_type.toUpperCase()} •
-          {appState.linuxRuntimeDiagnostics.required_video_source}
-        </p>
-        {#if appState.linuxRuntimeDiagnostics.recommendations.length > 0}
-          <p class="linux-runtime-warning">
-            {appState.linuxRuntimeDiagnostics.recommendations[0]}
-          </p>
-        {/if}
-      {/if}
-
-      {#if appState.hostStatusMessage}
-        <p class="status-text">{appState.hostStatusMessage}</p>
-      {/if}
-      {#if appState.hostErrorMessage}
-        <p class="error-text">{appState.hostErrorMessage}</p>
-      {/if}
+  <div class="info-row">
+    <div class="identity">
+      <h3>{appState.effectiveDisplayName}</h3>
+      <p>{modeLabel()}</p>
     </div>
 
-    <button
-      class="action-btn"
-      class:stop={appState.isHosting}
-      disabled={appState.isHostTransitioning}
-      onclick={async () => {
-        try {
-          if (appState.isHosting) {
-            await appState.stopHosting();
-          } else {
-            await appState.startHosting();
+    {#if appState.isConnected && !appState.isHosting}
+      <span class="client-state">Connected as Client</span>
+    {:else}
+      <button
+        class="host-btn"
+        class:stop={appState.isHosting}
+        disabled={appState.isHostTransitioning || isNaN(appState.hostPort)}
+        onclick={async () => {
+          try {
+            if (appState.isHosting) {
+              await appState.stopHosting();
+            } else {
+              await appState.startHosting();
+            }
+          } catch {
+            // User-facing errors are stored in appState.
           }
-        } catch {
-          // App state already stores a user-facing message.
-        }
-      }}
-    >
-      {#if appState.isHostTransitioning}
-        {appState.isHosting ? "Stopping..." : "Starting..."}
-      {:else}
-        {appState.isHosting ? "Stop Hosting" : "Start Hosting"}
-      {/if}
-    </button>
+        }}
+      >
+        {#if appState.isHostTransitioning}
+          {appState.isHosting ? "Stopping..." : "Starting..."}
+        {:else}
+          {appState.isHosting ? "Stop Hosting" : "Start Hosting"}
+        {/if}
+      </button>
+    {/if}
   </div>
 </div>
 
 <style>
   .host-card {
-    display: flex;
-    flex-direction: column;
     border-radius: var(--radius-md);
     overflow: hidden;
-    background-color: var(--colors-bg-elevation1);
-    border: 1px solid rgba(255, 255, 255, 0.06);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    background: rgba(255, 255, 255, 0.03);
+    backdrop-filter: blur(12px);
   }
 
   .preview {
-    height: 184px;
-    background: linear-gradient(135deg, rgba(25, 33, 45, 0.9), rgba(7, 11, 18, 0.95));
+    position: relative;
+    height: 180px;
     display: flex;
     align-items: center;
     justify-content: center;
-    position: relative;
+    background: rgba(0, 0, 0, 0.2);
+    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+    color: rgba(255, 255, 255, 0.34);
   }
 
   .preview.live {
-    background: linear-gradient(135deg, rgba(11, 43, 36, 0.9), rgba(7, 21, 18, 0.95));
+    background: rgba(0, 0, 0, 0.26);
   }
 
   .host-icon {
-    font-size: 52px;
-    opacity: 0.85;
+    filter: drop-shadow(0 8px 18px rgba(0, 0, 0, 0.35));
   }
 
-  .status-overlay {
+  .hosting-badge {
     position: absolute;
-    top: 10px;
-    left: 10px;
-    display: flex;
+    left: 12px;
+    bottom: 12px;
+    display: inline-flex;
     align-items: center;
     gap: 6px;
-    padding: 6px 10px;
-    border-radius: 999px;
-    background: rgba(0, 0, 0, 0.35);
+    padding: 8px;
+    border-radius: 6px;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    background: rgba(0, 0, 0, 0.32);
+    color: var(--colors-accent-success);
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    line-height: 1;
   }
 
   .dot {
-    width: 7px;
-    height: 7px;
-    border-radius: 50%;
-    background-color: var(--colors-accent-success);
-    box-shadow: 0 0 0 rgba(16, 185, 129, 0.35);
+    width: 6px;
+    height: 6px;
+    border-radius: 999px;
+    background: var(--colors-accent-success);
+    box-shadow: 0 0 0 0 rgba(52, 199, 89, 0.42);
     animation: host-pulse 1.8s ease-out infinite;
   }
 
-  .label {
-    font-size: 10px;
-    letter-spacing: 0.06em;
-    font-weight: var(--font-weight-bold);
-    color: var(--colors-accent-success);
-  }
-
-  .info {
+  .info-row {
     display: flex;
-    gap: 14px;
-    align-items: flex-start;
+    align-items: center;
     justify-content: space-between;
-    padding: 14px 16px 16px;
-  }
-
-  .meta {
-    min-width: 0;
-    flex: 1;
-  }
-
-  .meta-head {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    flex-wrap: wrap;
-    margin-bottom: 2px;
-  }
-
-  .meta-head h3 {
-    font-size: var(--font-size-body);
-    font-weight: var(--font-weight-bold);
-    color: var(--colors-text-primary);
-    margin: 0;
-  }
-
-  .mode-badge {
-    font-size: 10px;
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
-    padding: 2px 8px;
-    border-radius: 999px;
-    border: 1px solid var(--colors-border-subtle);
-    color: var(--colors-text-secondary);
-  }
-
-  .subtle {
-    margin: 0;
-    font-size: 12px;
-    color: var(--colors-text-secondary);
-  }
-
-  .stats-row {
-    margin-top: 8px;
-    display: flex;
     gap: 12px;
-    flex-wrap: wrap;
-    font-size: 11px;
-    color: var(--colors-text-secondary);
+    padding: 16px;
   }
 
-  .monitor-row {
-    margin-top: 9px;
-    display: flex;
-    gap: 8px;
-    align-items: center;
+  .identity {
+    min-width: 0;
   }
 
-  .monitor-select {
-    min-width: 240px;
-    max-width: 100%;
-    padding: 6px;
-    background: var(--colors-bg-base);
-    color: var(--colors-text-primary);
-    border: 1px solid var(--colors-border-input);
-    border-radius: var(--radius-sm);
-    font-size: 11px;
-  }
-
-  .refresh-btn {
-    padding: 6px 10px;
-    border-radius: var(--radius-sm);
-    border: 1px solid var(--colors-border-subtle);
-    background: var(--colors-bg-elevation2);
-    color: var(--colors-text-secondary);
-    font-size: 11px;
-    cursor: pointer;
-  }
-
-  .refresh-btn:hover {
+  .identity h3 {
+    margin: 0;
+    font-size: 20px;
+    font-weight: 600;
+    line-height: 1.1;
     color: var(--colors-text-primary);
   }
 
-  .refresh-btn:disabled,
-  .monitor-select:disabled {
-    opacity: 0.6;
-    cursor: not-allowed;
-  }
-
-  .status-text {
-    margin-top: 8px;
-    font-size: 11px;
-    color: var(--colors-accent-success);
-  }
-
-  .linux-runtime-text {
-    margin-top: 8px;
-    font-size: 11px;
+  .identity p {
+    margin: 6px 0 0;
+    font-size: 12px;
+    line-height: 1.2;
     color: var(--colors-text-secondary);
   }
 
-  .linux-runtime-warning {
-    margin-top: 6px;
-    font-size: 11px;
-    color: #f59e0b;
+  .client-state {
+    flex-shrink: 0;
+    padding: 6px 12px;
+    border-radius: 6px;
+    background: rgba(255, 255, 255, 0.06);
+    color: var(--colors-text-secondary);
+    font-size: 12px;
+    line-height: 1;
   }
 
-  .error-text {
-    margin-top: 8px;
-    font-size: 11px;
-    color: var(--colors-accent-danger);
-  }
-
-  .action-btn {
-    min-width: 128px;
-    padding: 9px 14px;
-    font-weight: var(--font-weight-bold);
-    color: white;
-    background-color: var(--colors-accent-primary);
+  .host-btn {
+    flex-shrink: 0;
+    padding: 10px 20px;
     border-radius: var(--radius-sm);
-    transition: filter 0.2s;
-    cursor: pointer;
+    border: 1px solid rgba(255, 255, 255, 0.14);
+    background: var(--colors-accent-primary);
+    color: #fff;
+    font-size: 13px;
+    font-weight: 700;
+    line-height: 1;
   }
 
-  .action-btn.stop {
-    background-color: var(--colors-accent-danger);
+  .host-btn.stop {
+    background: var(--colors-accent-danger);
   }
 
-  .action-btn:hover:enabled {
-    filter: brightness(1.08);
+  .host-btn:hover:enabled {
+    filter: brightness(1.05);
   }
 
-  .action-btn:focus-visible,
-  .refresh-btn:focus-visible,
-  .monitor-select:focus-visible {
-    outline: 2px solid rgba(58, 130, 246, 0.75);
-    outline-offset: 1px;
-  }
-
-  .action-btn:disabled {
+  .host-btn:disabled {
     opacity: 0.6;
     cursor: not-allowed;
   }
 
   @keyframes host-pulse {
     0% {
-      box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.45);
+      box-shadow: 0 0 0 0 rgba(52, 199, 89, 0.45);
     }
     70% {
-      box-shadow: 0 0 0 10px rgba(16, 185, 129, 0);
+      box-shadow: 0 0 0 10px rgba(52, 199, 89, 0);
     }
     100% {
-      box-shadow: 0 0 0 0 rgba(16, 185, 129, 0);
+      box-shadow: 0 0 0 0 rgba(52, 199, 89, 0);
     }
   }
 
   @media (max-width: 860px) {
-    .info {
+    .info-row {
       flex-direction: column;
       align-items: stretch;
     }
 
-    .action-btn {
+    .host-btn,
+    .client-state {
       width: 100%;
-    }
-
-    .monitor-select {
-      min-width: 0;
-      width: 100%;
+      text-align: center;
     }
   }
 </style>

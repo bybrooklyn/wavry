@@ -34,6 +34,5 @@ struct WavryApp: App {
             }
         }
         .windowStyle(.hiddenTitleBar)
-        .windowToolbarStyle(.unified)
     }
 }

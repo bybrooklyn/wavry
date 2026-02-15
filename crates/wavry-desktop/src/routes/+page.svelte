@@ -1,28 +1,32 @@
 <script lang="ts">
-  import SidebarIcon from "$lib/components/SidebarIcon.svelte";
-  import HostCard from "$lib/components/HostCard.svelte";
-  import SetupWizard from "$lib/components/SetupWizard.svelte";
-  import LoginModal from "$lib/components/LoginModal.svelte";
-  import DeltaTuning from "$lib/components/DeltaTuning.svelte";
-  import { appState } from "$lib/appState.svelte";
   import { invoke } from "@tauri-apps/api/core";
   import { onMount } from "svelte";
 
-  let activeTab = $state("sessions");
-  let connectIp = $state("");
+  import { appState } from "$lib/appState.svelte";
+  import HostCard from "$lib/components/HostCard.svelte";
+  import LoginModal from "$lib/components/LoginModal.svelte";
+  import SetupWizard from "$lib/components/SetupWizard.svelte";
+  import SidebarIcon from "$lib/components/SidebarIcon.svelte";
+
+  let activeTab = $state<"sessions" | "settings">("sessions");
+  let activeSettingsTab = $state<
+    "client" | "host" | "network" | "hotkeys" | "account"
+  >("client");
+
+  let connectIp = $state("127.0.0.1");
   let remoteUsername = $state("");
   let isConnecting = $state(false);
   let connectError = $state("");
+  let isMacOS = $state(false);
+
   let setupStep = $state(0);
   let saveFeedback = $state("");
   let saveFeedbackType = $state<"success" | "error">("success");
   let baselineSettingsFingerprint = $state("");
-  let fileTransferIdInput = $state("");
-  let isFileTransferCommandPending = $state(false);
-  let fileTransferCommandFeedback = $state("");
-  let fileTransferCommandFeedbackType = $state<"success" | "error">("success");
+  let overlayEnabled = $state(true);
+  let windowMode = $state("Fullscreen");
+  let fpsLimit = $state("60 FPS");
 
-  let showAdvancedSettings = $state(false);
   const USERNAME_PATTERN = /^[a-zA-Z0-9_.-]{3,32}$/;
 
   function normalizeError(err: unknown): string {
@@ -34,6 +38,7 @@
   function normalizeConnectError(err: unknown): string {
     const raw = normalizeError(err);
     const lowered = raw.toLowerCase();
+
     if (lowered.includes("timed out")) {
       return "Connection timed out. Check that the remote host is online and reachable.";
     }
@@ -46,6 +51,7 @@
     if (lowered.includes("client session already active")) {
       return "A client session is already running. Disconnect first, then retry.";
     }
+
     return raw;
   }
 
@@ -79,6 +85,7 @@
   }
 
   onMount(async () => {
+    isMacOS = /mac/i.test(navigator.userAgent);
     await appState.initialize();
     appState.refreshPcvrStatus();
     appState.loadMonitors();
@@ -90,6 +97,7 @@
     connectError = "";
     appState.hostErrorMessage = "";
     appState.hostStatusMessage = "Starting direct session...";
+
     const addressError = appState.validateConnectTarget(connectIp);
     if (addressError) {
       connectError = addressError;
@@ -152,22 +160,9 @@
   }
 
   function modeLabel(mode: "wavry" | "direct" | "custom") {
-    if (mode === "wavry") return "Cloud";
-    if (mode === "direct") return "LAN";
-    return "Custom";
-  }
-
-  function sessionStatusLabel() {
-    if (appState.isHostTransitioning) return "Transitioning";
-    if (appState.isHosting) return "Hosting";
-    if (appState.isConnected) return "Connected";
-    return "Idle";
-  }
-
-  function networkModeHint(mode: "wavry" | "direct" | "custom") {
-    if (mode === "wavry") return "Cloud signaling with username lookup.";
-    if (mode === "direct") return "LAN-only direct host discovery/connect.";
-    return "Custom gateway for self-hosted routing.";
+    if (mode === "wavry") return "Wavry Cloud";
+    if (mode === "direct") return "LAN Only";
+    return "Custom Server";
   }
 
   function handleSetupComplete(
@@ -189,65 +184,30 @@
       saveFeedback = validationError;
       return;
     }
+
     appState.saveToStorage();
     captureSettingsBaseline();
     saveFeedbackType = "success";
     saveFeedback = "Settings saved";
+
     setTimeout(() => {
       if (saveFeedback === "Settings saved") saveFeedback = "";
     }, 1600);
-  }
-
-  function resetSettings() {
-    appState.resetSettingsToDefaults();
-    saveFeedbackType = "success";
-    saveFeedback = "Defaults restored";
-  }
-
-  function parsePositiveFileId(value: string): number | null {
-    const trimmed = value.trim();
-    if (!/^\d+$/.test(trimmed)) return null;
-    const parsed = Number(trimmed);
-    if (!Number.isSafeInteger(parsed) || parsed <= 0) return null;
-    return parsed;
-  }
-
-  let selectedTransferFileId = $derived(parsePositiveFileId(fileTransferIdInput));
-
-  async function sendTransferCommand(action: "pause" | "resume" | "cancel" | "retry") {
-    const fileId = selectedTransferFileId;
-    if (fileId == null) {
-      fileTransferCommandFeedbackType = "error";
-      fileTransferCommandFeedback = "Enter a valid positive file ID first.";
-      return;
-    }
-
-    isFileTransferCommandPending = true;
-    try {
-      const message = await appState.sendFileTransferCommand(fileId, action);
-      fileTransferCommandFeedbackType = "success";
-      fileTransferCommandFeedback = message;
-    } catch (e) {
-      fileTransferCommandFeedbackType = "error";
-      fileTransferCommandFeedback = normalizeError(e);
-    } finally {
-      isFileTransferCommandPending = false;
-    }
   }
 </script>
 
 {#if !appState.isSetupCompleted}
   <SetupWizard step={setupStep} onComplete={handleSetupComplete} onOpenAuth={openAuth} />
 {:else}
-  <div class="content-view">
+  <div class="content-view" class:macos={isMacOS}>
+    <div class="window-drag-strip" data-tauri-drag-region></div>
+
     <aside class="sidebar">
-      <div class="top-icons">
-        <SidebarIcon
-          icon="tabSessions"
-          active={activeTab === "sessions"}
-          onclick={() => (activeTab = "sessions")}
-        />
-      </div>
+      <SidebarIcon
+        icon="tabSessions"
+        active={activeTab === "sessions"}
+        onclick={() => (activeTab = "sessions")}
+      />
 
       <div class="spacer"></div>
 
@@ -260,31 +220,6 @@
 
     <main class="main-content">
       <header class="top-bar">
-        <div class="status-indicators">
-          {#if appState.isHosting || appState.isConnected}
-            <div
-              class="performance-badge"
-              class:warning={appState.ccState === "Congested"}
-              class:rising={appState.ccState === "Rising"}
-            >
-              <span class="label">{appState.ccState.toUpperCase()}</span>
-              <span class="value"
-                >{(appState.ccBitrate / 1000).toFixed(1)} Mbps</span
-              >
-            </div>
-          {/if}
-
-          <span class="mode-pill">{modeLabel(appState.connectivityMode)}</span>
-          <span
-            class="session-pill"
-            class:hosting={appState.isHosting}
-            class:connected={!appState.isHosting && appState.isConnected}
-            class:idle={!appState.isHosting && !appState.isConnected}
-          >
-            {sessionStatusLabel()}
-          </span>
-        </div>
-
         <div
           class="user-badge"
           onclick={() => !appState.isAuthenticated && openAuth("login")}
@@ -298,94 +233,82 @@
             ? `Signed in as ${appState.username}`
             : "Sign in"}
         >
-          <span class="status-dot" class:online={appState.isAuthenticated}
-          ></span>
+          <span class="status-dot" class:online={appState.isAuthenticated}></span>
           <span class="username">{appState.effectiveDisplayName}</span>
-          {#if appState.isAuthenticated}
-            <button
-              class="logout-btn"
-              onclick={(e) => {
-                e.stopPropagation();
-                appState.logout();
-              }}>Logout</button
-            >
-          {/if}
         </div>
       </header>
 
-      <div class="tab-content">
-        {#if activeTab === "sessions"}
-          <section class="sessions-view">
-            <div class="header">
-              <h1>Sessions</h1>
-              <p>Host your desktop or connect to another machine.</p>
+      {#if activeTab === "sessions"}
+        <section class="sessions-view">
+          <div class="view-header">
+            <h1>Sessions</h1>
+            <p>Manage your local host and active connections.</p>
+          </div>
+
+          {#if connectError || appState.hostErrorMessage || appState.hostStatusMessage}
+            <div class="message-box">
+              {#if connectError}
+                <div class="error-message">{connectError}</div>
+              {/if}
+              {#if appState.hostErrorMessage}
+                <div class="error-message">{appState.hostErrorMessage}</div>
+              {/if}
+              {#if appState.hostStatusMessage}
+                <div class="success-message">{appState.hostStatusMessage}</div>
+              {/if}
+            </div>
+          {/if}
+
+          <div class="scroll-panel">
+            <div class="session-section">
+              <h2>LOCAL HOST</h2>
+              <HostCard {appState} />
             </div>
 
-            <div class="scroll-area session-grid">
-              <section class="surface-card">
-                <div class="section-head">
-                  <span class="section-label">Local Host</span>
-                </div>
-                <HostCard {appState} />
-              </section>
+            <div class="session-section">
+              <h2>REMOTE CONNECTION</h2>
 
-              <section class="surface-card">
-                <div class="section-head">
-                  <span class="section-label">Connect to Host</span>
-                </div>
-
-                <div class="connect-panel">
-                  {#if appState.connectivityMode === "wavry"}
-                    {#if !appState.isAuthenticated}
-                      <div class="auth-gate">
-                        <strong>Cloud connect requires an account.</strong>
-                        <p>Sign in or create one now to connect to hosts by username from any device.</p>
-                        <div class="auth-actions">
-                          <button class="primary-btn" onclick={() => openAuth("login")}>
-                            Sign In
-                          </button>
-                          <button class="ghost-btn auth-cta" onclick={() => openAuth("register")}>
-                            Create Account
-                          </button>
-                        </div>
-                      </div>
-                    {:else}
-                      <p class="field-help">Send a secure cloud connect request to a host username.</p>
-                      <label class="field-label" for="remote-username">Username</label>
-                      <div class="field-row">
-                        <input
-                          id="remote-username"
-                          type="text"
-                          placeholder="e.g. brooklyn"
-                          bind:value={remoteUsername}
-                          onkeydown={(e) =>
-                            e.key === "Enter" &&
-                            !isConnecting &&
-                            remoteUsername.trim() &&
-                            !appState.isHosting &&
-                            !appState.isHostTransitioning &&
-                            connectViaId()}
-                        />
-                        <button
-                          class="primary-btn"
-                          onclick={connectViaId}
-                          disabled={isConnecting || !remoteUsername.trim() || appState.isHosting || appState.isHostTransitioning}
-                        >
-                          {#if isConnecting}Connecting...{:else}Connect by ID{/if}
-                        </button>
-                      </div>
-                    {/if}
-
-                    <div class="divider"><span>or</span></div>
+              <div class="remote-content">
+                {#if appState.isConnected && !appState.isHosting}
+                  <div class="video-placeholder">Remote session connected</div>
+                  <button class="danger-btn" onclick={disconnectSession}>Disconnect</button>
+                {:else}
+                  {#if appState.isHosting}
+                    <p class="helper-text">
+                      Hosting is active. Stop hosting before starting a client connection.
+                    </p>
                   {/if}
 
-                  <label class="field-label" for="direct-host">Direct Host (IP or IP:PORT)</label>
-                  <p class="field-help">Use direct connect for LAN or self-hosted routing.</p>
-                  <div class="field-row">
+                  {#if appState.connectivityMode !== "direct"}
+                    <div class="connect-row">
+                      <input
+                        type="text"
+                        placeholder="Username or ID"
+                        bind:value={remoteUsername}
+                        onkeydown={(e) =>
+                          e.key === "Enter" &&
+                          !isConnecting &&
+                          remoteUsername.trim() &&
+                          !appState.isHosting &&
+                          !appState.isHostTransitioning &&
+                          connectViaId()}
+                      />
+                      <button
+                        class="primary-btn"
+                        onclick={connectViaId}
+                        disabled={isConnecting || !remoteUsername.trim() || appState.isHosting || appState.isHostTransitioning}
+                      >
+                        {#if isConnecting}Connecting...{:else}Connect{/if}
+                      </button>
+                    </div>
+
+                    <div class="or-text">OR</div>
+                  {/if}
+
+                  <div class="connect-row">
                     <input
-                      id="direct-host"
                       type="text"
-                      placeholder="192.168.1.20:8000"
+                      placeholder="Host IP"
                       bind:value={connectIp}
                       onkeydown={(e) =>
                         e.key === "Enter" &&
@@ -400,272 +323,235 @@
                       onclick={startSession}
                       disabled={isConnecting || !connectIp.trim() || appState.isHosting || appState.isHostTransitioning}
                     >
-                      {#if isConnecting}Connecting...{:else}Connect{/if}
+                      {#if isConnecting}Connecting...{:else}Connect Directly{/if}
                     </button>
                   </div>
-
-                  {#if connectError}
-                    <div class="error">{connectError}</div>
-                  {/if}
-                  {#if appState.hostStatusMessage}
-                    <div class="success">{appState.hostStatusMessage}</div>
-                  {/if}
-                  {#if appState.hostErrorMessage}
-                    <div class="error">{appState.hostErrorMessage}</div>
-                  {/if}
-                </div>
-              </section>
-
-              <section class="surface-card">
-                <div class="section-head">
-                  <span class="section-label">Active Session</span>
-                </div>
-
-                {#if appState.isConnected}
-                  <div class="active-session">
-                    <div class="session-line">
-                      <span>Status</span>
-                      <strong>{appState.isHosting ? "Hosting" : "Connected"}</strong>
-                    </div>
-                    <div class="session-line">
-                      <span>Link State</span>
-                      <strong>{appState.ccState}</strong>
-                    </div>
-                    <div class="session-line">
-                      <span>Estimated Throughput</span>
-                      <strong>{(appState.ccBitrate / 1000).toFixed(1)} Mbps</strong>
-                    </div>
-                    {#if !appState.isHosting}
-                      <div class="transfer-controls">
-                        <span class="transfer-label">File Transfer Control</span>
-                        <p class="field-help">
-                          Enter a file ID, then send pause/resume/cancel/retry to the host transfer loop.
-                        </p>
-                        <div class="field-row">
-                          <input
-                            id="file-transfer-id"
-                            type="text"
-                            inputmode="numeric"
-                            placeholder="File ID (e.g. 42)"
-                            bind:value={fileTransferIdInput}
-                            oninput={() => {
-                              fileTransferCommandFeedback = "";
-                            }}
-                          />
-                        </div>
-                        <div class="transfer-actions">
-                          <button
-                            class="ghost-btn transfer-btn"
-                            onclick={() => sendTransferCommand("pause")}
-                            disabled={isFileTransferCommandPending || selectedTransferFileId === null}
-                          >
-                            Pause
-                          </button>
-                          <button
-                            class="ghost-btn transfer-btn"
-                            onclick={() => sendTransferCommand("resume")}
-                            disabled={isFileTransferCommandPending || selectedTransferFileId === null}
-                          >
-                            Resume
-                          </button>
-                          <button
-                            class="ghost-btn transfer-btn"
-                            onclick={() => sendTransferCommand("retry")}
-                            disabled={isFileTransferCommandPending || selectedTransferFileId === null}
-                          >
-                            Retry
-                          </button>
-                          <button
-                            class="danger-btn transfer-btn transfer-cancel"
-                            onclick={() => sendTransferCommand("cancel")}
-                            disabled={isFileTransferCommandPending || selectedTransferFileId === null}
-                          >
-                            Cancel
-                          </button>
-                        </div>
-                        {#if fileTransferCommandFeedback}
-                          <div class={fileTransferCommandFeedbackType === "error" ? "error" : "success"}>
-                            {fileTransferCommandFeedback}
-                          </div>
-                        {/if}
-                      </div>
-                    {/if}
-                    <button class="danger-btn" onclick={disconnectSession}>Disconnect</button>
-                  </div>
-                {:else}
-                  <div class="placeholder-box">
-                    <span class="p-icon">⏳</span>
-                    <span class="p-text">No active session</span>
-                  </div>
                 {/if}
-              </section>
-            </div>
-          </section>
-        {:else}
-          <section class="settings-view">
-            <div class="header settings-header">
-              <div>
-                <h1>Settings</h1>
-                <p>Tune networking, display behavior, and input handling.</p>
-              </div>
-
-              <div class="settings-actions">
-                <button class="ghost-btn" onclick={resetSettings}>Reset</button>
-                <button class="save-settings-btn" onclick={saveSettings} disabled={!hasUnsavedSettings}>Save</button>
               </div>
             </div>
+          </div>
+        </section>
+      {:else}
+        <section class="settings-view">
+          <div class="view-header settings-header">
+            <h1>Settings</h1>
+            <p>Customize your Wavry experience.</p>
+          </div>
 
-            <div class="settings-feedback-row">
-              <div class="pcvr-banner">{appState.pcvrStatus}</div>
-              {#if hasUnsavedSettings}
-                <div class="unsaved-pill">Unsaved changes</div>
-              {/if}
-              {#if saveFeedback}
-                <div class="saved-pill" class:error={saveFeedbackType === "error"}>{saveFeedback}</div>
-              {/if}
+          <div class="settings-tabs" role="tablist" aria-label="Settings tabs">
+            <button class="settings-tab" class:active={activeSettingsTab === "client"} onclick={() => (activeSettingsTab = "client")}>Client</button>
+            <button class="settings-tab" class:active={activeSettingsTab === "host"} onclick={() => (activeSettingsTab = "host")}>Host</button>
+            <button class="settings-tab" class:active={activeSettingsTab === "network"} onclick={() => (activeSettingsTab = "network")}>Network</button>
+            <button class="settings-tab" class:active={activeSettingsTab === "hotkeys"} onclick={() => (activeSettingsTab = "hotkeys")}>Hotkeys</button>
+            <button class="settings-tab" class:active={activeSettingsTab === "account"} onclick={() => (activeSettingsTab = "account")}>Account</button>
+            <span class="settings-version">Version 0.1.0-native</span>
+          </div>
+
+          <div class="settings-divider"></div>
+
+          {#if saveFeedback}
+            <div class="settings-message">
+              <div class={saveFeedbackType === "error" ? "error-message" : "success-message"}>
+                {saveFeedback}
+              </div>
             </div>
+          {/if}
 
-            <div class="scroll-area settings-grid">
+          <div class="settings-scroll">
+            {#if activeSettingsTab === "client"}
               <div class="settings-group">
-                <span class="group-label">Identity</span>
+                <h3>DISPLAY</h3>
                 <div class="setting-row">
-                  <label for="setting-host-name">Host Name</label>
-                  <input
-                    id="setting-host-name"
-                    type="text"
-                    bind:value={appState.displayName}
-                    placeholder="My Desktop"
-                  />
+                  <div class="setting-copy">
+                    <div class="setting-label">Overlay</div>
+                    <div class="setting-sub">Show Wavry overlay during session.</div>
+                  </div>
+                  <input type="checkbox" bind:checked={overlayEnabled} />
                 </div>
-              </div>
-
-              <div class="settings-group">
-                <span class="group-label">Network</span>
                 <div class="setting-row">
-                  <label for="setting-mode">Connectivity Mode</label>
-                  <select id="setting-mode" bind:value={appState.connectivityMode}>
-                    <option value="wavry">Wavry Cloud</option>
-                    <option value="direct">LAN Only</option>
-                    <option value="custom">Custom Server</option>
+                  <div class="setting-copy">
+                    <div class="setting-label">Window Mode</div>
+                    <div class="setting-sub">Start Wavry in fullscreen or windowed mode.</div>
+                  </div>
+                  <select bind:value={windowMode}>
+                    <option value="Fullscreen">Fullscreen</option>
+                    <option value="Windowed">Windowed</option>
                   </select>
                 </div>
-                <p class="setting-hint">{networkModeHint(appState.connectivityMode)}</p>
+              </div>
 
+              <div class="settings-group">
+                <h3>PERFORMANCE</h3>
                 <div class="setting-row">
-                  <label for="setting-port">Host Port</label>
-                  <input id="setting-port" type="number" min="0" max="65535" bind:value={appState.hostPort} />
+                  <div class="setting-copy">
+                    <div class="setting-label">FPS Limit</div>
+                    <div class="setting-sub">Limit the client frame rate.</div>
+                  </div>
+                  <select bind:value={fpsLimit}>
+                    <option value="30 FPS">30 FPS</option>
+                    <option value="60 FPS">60 FPS</option>
+                    <option value="120 FPS">120 FPS</option>
+                  </select>
                 </div>
-                <p class="setting-hint">Use <code>0</code> to pick a random host port on each start.</p>
-
-                <div class="setting-row checkbox">
-                  <label for="setting-upnp">Enable UPnP</label>
-                  <input id="setting-upnp" type="checkbox" bind:checked={appState.upnpEnabled} />
+                <div class="setting-row">
+                  <div class="setting-copy">
+                    <div class="setting-label">Decoder</div>
+                    <div class="setting-sub">Preferred video decoding method.</div>
+                  </div>
+                  <span class="setting-value">Hardware (VideoToolbox)</span>
                 </div>
               </div>
 
               <div class="settings-group">
-                <span class="group-label">Display</span>
+                <h3>VR / PCVR</h3>
                 <div class="setting-row">
-                  <label for="setting-resolution-mode">Client Resolution</label>
-                  <select id="setting-resolution-mode" bind:value={appState.resolutionMode}>
-                    <option value="native">Use Host Native</option>
-                    <option value="client">Match This Client</option>
-                    <option value="custom">Custom Fixed</option>
-                  </select>
+                  <div class="setting-copy">
+                    <div class="setting-label">PCVR Adapter</div>
+                    <div class="setting-sub">
+                      Linux/Windows clients use OpenXR via ALVR adapter. Wayland via Vulkan; X11 via OpenGL.
+                    </div>
+                  </div>
+                  <span class="setting-value">Info</span>
                 </div>
-
-                {#if appState.resolutionMode === "custom"}
-                  <div class="setting-row">
-                    <label for="setting-width">Width</label>
-                    <input id="setting-width" type="number" min="640" bind:value={appState.customResolution.width} />
-                  </div>
-                  <div class="setting-row">
-                    <label for="setting-height">Height</label>
-                    <input id="setting-height" type="number" min="480" bind:value={appState.customResolution.height} />
-                  </div>
-                {/if}
-
                 <div class="setting-row">
-                  <label for="setting-monitor">Host Monitor</label>
+                  <div class="setting-copy">
+                    <div class="setting-label">PCVR Status</div>
+                    <div class="setting-sub">Runtime path on this machine.</div>
+                  </div>
+                  <span class="setting-value">{appState.pcvrStatus}</span>
+                </div>
+              </div>
+            {:else if activeSettingsTab === "host"}
+              <div class="settings-group">
+                <h3>HOSTING</h3>
+                <div class="setting-row">
+                  <div class="setting-copy">
+                    <div class="setting-label">Host Name</div>
+                    <div class="setting-sub">Identifies your computer to others.</div>
+                  </div>
+                  <input type="text" bind:value={appState.displayName} placeholder="My Desktop" />
+                </div>
+                <div class="setting-row">
+                  <div class="setting-copy">
+                    <div class="setting-label">Host Start Port</div>
+                    <div class="setting-sub">Starting port for host listeners.</div>
+                  </div>
+                  <input type="number" min="0" max="65535" bind:value={appState.hostPort} />
+                </div>
+              </div>
+
+              <div class="settings-group">
+                <h3>HARDWARE</h3>
+                <div class="setting-row">
+                  <div class="setting-copy">
+                    <div class="setting-label">Display</div>
+                    <div class="setting-sub">Select which monitor to capture.</div>
+                  </div>
                   <div class="monitor-picker-wrap">
-                    <select id="setting-monitor" bind:value={appState.selectedMonitorId}>
+                    <select bind:value={appState.selectedMonitorId}>
                       {#if appState.monitors.length === 0}
                         <option value={null}>No displays detected</option>
                       {:else}
                         {#each appState.monitors as monitor}
-                          <option value={monitor.id}>{monitor.name} ({monitor.resolution.width}x{monitor.resolution.height})</option>
+                          <option value={monitor.id}>
+                            {monitor.name} ({monitor.resolution.width}x{monitor.resolution.height})
+                          </option>
                         {/each}
                       {/if}
                     </select>
-                    <button
-                      class="mini-btn"
-                      onclick={() => appState.loadMonitors()}
-                      disabled={appState.isLoadingMonitors}
-                    >
+                    <button class="ghost-btn" onclick={() => appState.loadMonitors()} disabled={appState.isLoadingMonitors}>
                       {appState.isLoadingMonitors ? "Loading..." : "Refresh"}
                     </button>
                   </div>
                 </div>
               </div>
-
+            {:else if activeSettingsTab === "network"}
               <div class="settings-group">
-                <span class="group-label">Input</span>
-                <div class="setting-row checkbox">
-                  <label for="setting-gamepad">Gamepad Passthrough</label>
-                  <input id="setting-gamepad" type="checkbox" bind:checked={appState.gamepadEnabled} />
+                <h3>CONNECTIVITY MODE</h3>
+                <div class="setting-row">
+                  <div class="setting-copy">
+                    <div class="setting-label">Mode</div>
+                    <div class="setting-sub">LAN Only disables cloud features (no login, no relay).</div>
+                  </div>
+                  <select bind:value={appState.connectivityMode}>
+                    <option value="wavry">Wavry Cloud</option>
+                    <option value="direct">LAN Only</option>
+                    <option value="custom">Custom Server</option>
+                  </select>
                 </div>
+                <p class="setting-help">{modeLabel(appState.connectivityMode)}</p>
 
-                {#if appState.gamepadEnabled}
+                {#if appState.connectivityMode === "custom"}
                   <div class="setting-row">
-                    <label for="setting-deadzone">Deadzone</label>
-                    <div class="deadzone-wrap">
-                      <input
-                        id="setting-deadzone"
-                        type="range"
-                        min="0"
-                        max="0.5"
-                        step="0.05"
-                        bind:value={appState.gamepadDeadzone}
-                      />
-                      <span>{appState.gamepadDeadzone.toFixed(2)}</span>
+                    <div class="setting-copy">
+                      <div class="setting-label">Gateway URL</div>
+                      <div class="setting-sub">Custom signaling server address.</div>
                     </div>
+                    <input type="url" bind:value={appState.authServer} placeholder="https://auth.wavry.dev" />
                   </div>
                 {/if}
-              </div>
 
-              <div class="settings-group">
-                <span class="group-label">VR / PCVR</span>
                 <div class="setting-row">
-                  <div class="setting-info full">
-                    Linux/Windows OpenXR client. Wayland supported via Vulkan, X11 via OpenGL.
-                    Transport stays in Wavry/RIFT (no ALVR networking).
+                  <div class="setting-copy">
+                    <div class="setting-label">UPnP</div>
+                    <div class="setting-sub">Enable automatic port forwarding.</div>
+                  </div>
+                  <input type="checkbox" bind:checked={appState.upnpEnabled} />
+                </div>
+              </div>
+            {:else if activeSettingsTab === "hotkeys"}
+              <div class="settings-group">
+                <h3>HOTKEYS</h3>
+                <div class="setting-row">
+                  <div class="setting-copy">
+                    <div class="setting-sub">No hotkeys configured yet.</div>
                   </div>
                 </div>
               </div>
-
-              <details class="advanced-group" bind:open={showAdvancedSettings}>
-                <summary>Advanced</summary>
-                <div class="settings-group advanced-inner">
-                  <div class="setting-row">
-                    <label for="setting-gateway">Gateway URL</label>
-                    <input
-                      id="setting-gateway"
-                      type="url"
-                      bind:value={appState.authServer}
-                      placeholder="https://auth.wavry.dev"
-                    />
+            {:else}
+              <div class="settings-group">
+                <h3>IDENTITY</h3>
+                <div class="setting-row">
+                  <div class="setting-copy">
+                    <div class="setting-label">Account</div>
+                    <div class="setting-sub">Current signed-in identity.</div>
                   </div>
+                  <span class="setting-value">{appState.isAuthenticated ? appState.username : "Not signed in"}</span>
                 </div>
-              </details>
+              </div>
 
               <div class="settings-group">
-                <span class="group-label">Tuning</span>
-                <DeltaTuning />
+                <h3>INFRASTRUCTURE</h3>
+                <div class="setting-row">
+                  <div class="setting-copy">
+                    <div class="setting-label">Auth Server</div>
+                    <div class="setting-sub">Wavry signaling server for cloud connect.</div>
+                  </div>
+                  <input type="url" bind:value={appState.authServer} placeholder="https://auth.wavry.dev" />
+                </div>
+                <div class="setting-row">
+                  <div class="setting-copy">
+                    <div class="setting-label">Session</div>
+                    <div class="setting-sub">Manage authentication state.</div>
+                  </div>
+                  {#if appState.isAuthenticated}
+                    <button class="ghost-btn" onclick={() => appState.logout()}>Sign Out</button>
+                  {:else}
+                    <button class="primary-btn" onclick={() => openAuth("login")}>Sign In</button>
+                  {/if}
+                </div>
               </div>
-            </div>
-          </section>
-        {/if}
-      </div>
+            {/if}
+          </div>
+
+          <footer class="settings-footer">
+            <button class="ghost-btn" onclick={() => appState.loadMonitors()} disabled={appState.isLoadingMonitors}>
+              {appState.isLoadingMonitors ? "Refreshing..." : "Refresh Displays"}
+            </button>
+            <button class="primary-btn" onclick={saveSettings} disabled={!hasUnsavedSettings}>Apply Changes</button>
+          </footer>
+        </section>
+      {/if}
     </main>
   </div>
 {/if}
@@ -677,22 +563,45 @@
 <style>
   .content-view {
     display: flex;
-    height: 100vh;
     width: 100vw;
-    background: radial-gradient(circle at 20% -10%, rgba(58, 84, 118, 0.3), transparent 40%),
-      radial-gradient(circle at 90% 10%, rgba(21, 57, 50, 0.25), transparent 38%),
-      var(--colors-bg-base);
+    height: 100vh;
+    position: relative;
+    background:
+      radial-gradient(circle at 18% -24%, rgba(71, 103, 185, 0.24), transparent 46%),
+      radial-gradient(circle at 90% 5%, rgba(39, 145, 121, 0.2), transparent 42%),
+      linear-gradient(145deg, rgba(33, 35, 43, 0.82), rgba(27, 29, 36, 0.76));
+    backdrop-filter: blur(18px) saturate(1.08);
+    -webkit-backdrop-filter: blur(18px) saturate(1.08);
+  }
+
+  .window-drag-strip {
+    position: absolute;
+    inset: 0 0 auto 0;
+    height: 38px;
+    z-index: 0;
+  }
+
+  .content-view.macos .window-drag-strip {
+    height: 56px;
   }
 
   .sidebar {
     width: 60px;
-    background-color: var(--colors-bg-sidebar);
+    padding: 20px 0;
+    background: rgba(10, 12, 15, 0.72);
+    border-right: 1px solid rgba(255, 255, 255, 0.08);
     display: flex;
     flex-direction: column;
     align-items: center;
-    padding: var(--spacing-xl) 0;
-    gap: var(--spacing-xl);
-    border-right: 1px solid rgba(255, 255, 255, 0.05);
+    gap: 20px;
+    backdrop-filter: blur(16px) saturate(1.08);
+    -webkit-backdrop-filter: blur(16px) saturate(1.08);
+    position: relative;
+    z-index: 1;
+  }
+
+  .content-view.macos .sidebar {
+    padding-top: 58px;
   }
 
   .spacer {
@@ -701,587 +610,291 @@
 
   .main-content {
     flex: 1;
+    min-width: 0;
     display: flex;
     flex-direction: column;
     overflow: hidden;
-  }
-
-  button,
-  input,
-  select,
-  summary {
-    transition: border-color 0.2s, box-shadow 0.2s, background-color 0.2s, transform 0.15s;
-  }
-
-  button:focus-visible,
-  input:focus-visible,
-  select:focus-visible,
-  summary:focus-visible {
-    outline: 2px solid rgba(58, 130, 246, 0.75);
-    outline-offset: 1px;
+    position: relative;
+    z-index: 1;
   }
 
   .top-bar {
     display: flex;
-    justify-content: space-between;
+    justify-content: flex-end;
     align-items: center;
-    padding: var(--spacing-xl) var(--spacing-xxl) 0;
-    gap: var(--spacing-md);
-  }
-
-  .status-indicators {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-  }
-
-  .performance-badge {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    background: rgba(0, 0, 0, 0.35);
-    padding: 6px 12px;
-    border-radius: 999px;
-    border: 1px solid rgba(255, 255, 255, 0.06);
-    font-size: 11px;
-    font-family: monospace;
-    backdrop-filter: blur(10px);
-  }
-
-  .performance-badge .label {
-    color: #10b981;
-    font-weight: bold;
-  }
-
-  .performance-badge.rising .label {
-    color: #f59e0b;
-  }
-
-  .performance-badge.warning .label {
-    color: #ef4444;
-  }
-
-  .performance-badge .value {
-    color: rgba(255, 255, 255, 0.7);
-  }
-
-  .mode-pill {
-    font-size: 10px;
-    letter-spacing: 0.08em;
-    text-transform: uppercase;
-    color: var(--colors-text-secondary);
-    border: 1px solid rgba(255, 255, 255, 0.12);
-    border-radius: 999px;
-    padding: 5px 10px;
-  }
-
-  .session-pill {
-    font-size: 10px;
-    letter-spacing: 0.08em;
-    text-transform: uppercase;
-    border-radius: 999px;
-    padding: 5px 10px;
-    border: 1px solid rgba(255, 255, 255, 0.12);
-  }
-
-  .session-pill.hosting {
-    color: #10b981;
-    border-color: rgba(16, 185, 129, 0.55);
-    background: rgba(16, 185, 129, 0.12);
-  }
-
-  .session-pill.connected {
-    color: #3b82f6;
-    border-color: rgba(59, 130, 246, 0.55);
-    background: rgba(59, 130, 246, 0.12);
-  }
-
-  .session-pill.idle {
-    color: var(--colors-text-secondary);
-    background: rgba(255, 255, 255, 0.03);
+    padding: 20px 32px 0;
   }
 
   .user-badge {
-    display: flex;
+    display: inline-flex;
     align-items: center;
     gap: 8px;
     padding: 8px;
-    background-color: var(--colors-bg-elevation3);
+    background: var(--colors-bg-elevation3);
     border-radius: var(--radius-md);
+    border: 1px solid rgba(255, 255, 255, 0.08);
     cursor: pointer;
-    border: 1px solid rgba(255, 255, 255, 0.06);
   }
 
   .status-dot {
-    width: 10px;
-    height: 10px;
-    border-radius: 50%;
-    background-color: var(--colors-bg-elevation3);
-    border: 2px solid var(--colors-border-subtle);
-    transition: background-color 0.3s;
+    width: 8px;
+    height: 8px;
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.2);
   }
 
   .status-dot.online {
-    background-color: var(--colors-accent-success);
-    box-shadow: 0 0 10px var(--colors-accent-success);
+    background: var(--colors-accent-success);
+    box-shadow: 0 0 10px rgba(52, 199, 89, 0.6);
   }
 
   .username {
-    font-size: var(--font-size-caption);
-    font-weight: var(--font-weight-bold);
-    color: var(--colors-text-primary);
-  }
-
-  .logout-btn {
-    padding: 4px 8px;
-    background: var(--colors-bg-elevation1);
-    border: 1px solid var(--colors-border-subtle);
-    border-radius: var(--radius-sm);
-    color: var(--colors-text-secondary);
-    font-size: 10px;
-    cursor: pointer;
-    margin-left: 8px;
-  }
-
-  .logout-btn:hover {
-    color: var(--colors-text-primary);
-    background: var(--colors-bg-elevation2);
-  }
-
-  .tab-content {
-    flex: 1;
-    overflow-y: auto;
-    padding-bottom: var(--spacing-xxl);
-  }
-
-  .sessions-view .header,
-  .settings-view .header {
-    padding: var(--spacing-xl) var(--spacing-xxl) var(--spacing-xxl);
-  }
-
-  .sessions-view h1,
-  .settings-view h1 {
-    font-size: var(--font-size-titleMd);
-    font-weight: var(--font-weight-light);
-    color: var(--colors-text-primary);
-    margin: 0 0 5px;
-  }
-
-  .sessions-view p,
-  .settings-view p {
-    font-size: var(--font-size-body);
-    color: var(--colors-text-secondary);
-    margin: 0;
-  }
-
-  .scroll-area {
-    display: flex;
-    flex-direction: column;
-    gap: var(--spacing-xl);
-  }
-
-  .session-grid,
-  .settings-grid {
-    padding: 0 var(--spacing-xxl);
-  }
-
-  .surface-card {
-    background: linear-gradient(180deg, rgba(23, 31, 44, 0.8), rgba(15, 21, 32, 0.8));
-    border: 1px solid rgba(255, 255, 255, 0.06);
-    border-radius: var(--radius-md);
-    padding: var(--spacing-lg);
-    box-shadow: 0 16px 28px rgba(0, 0, 0, 0.15);
-    backdrop-filter: blur(6px);
-  }
-
-  .surface-card:hover {
-    border-color: rgba(255, 255, 255, 0.14);
-    transform: translateY(-1px);
-  }
-
-  .section-head {
-    margin-bottom: var(--spacing-md);
-  }
-
-  .section-label {
-    display: block;
-    font-size: 11px;
-    letter-spacing: 0.07em;
-    text-transform: uppercase;
-    font-weight: var(--font-weight-bold);
-    color: var(--colors-text-secondary);
-  }
-
-  .connect-panel {
-    display: flex;
-    flex-direction: column;
-    gap: var(--spacing-sm);
-  }
-
-  .field-label {
     font-size: 12px;
-    color: var(--colors-text-secondary);
-    margin-top: 2px;
-  }
-
-  .field-help {
-    margin: 0;
-    font-size: 11px;
-    color: var(--colors-text-secondary);
-    line-height: 1.4;
-  }
-
-  .field-row {
-    display: flex;
-    gap: 8px;
-    align-items: center;
-  }
-
-  .field-row input {
-    flex: 1;
-    padding: 10px;
-    border-radius: 6px;
-    border: 1px solid var(--colors-border-input);
-    background: var(--colors-bg-base);
+    line-height: 1;
+    font-weight: 700;
     color: var(--colors-text-primary);
-    min-width: 0;
   }
 
-  .primary-btn,
-  .danger-btn,
-  .ghost-btn,
-  .save-settings-btn,
-  .mini-btn {
-    border: none;
-    border-radius: 6px;
-    cursor: pointer;
-  }
-
-  .primary-btn {
-    padding: 10px 12px;
-    background: var(--colors-accent-primary);
-    color: white;
-    font-weight: 600;
-    white-space: nowrap;
-  }
-
-  .primary-btn:hover:enabled {
-    transform: translateY(-1px);
-    filter: brightness(1.05);
-  }
-
-  .primary-btn:disabled {
-    opacity: 0.55;
-    cursor: not-allowed;
-  }
-
-  .divider {
-    position: relative;
-    text-align: center;
-    margin: 4px 0;
-  }
-
-  .divider::before {
-    content: "";
-    position: absolute;
-    left: 0;
-    right: 0;
-    top: 50%;
-    border-top: 1px solid rgba(255, 255, 255, 0.09);
-  }
-
-  .divider span {
-    position: relative;
-    background: rgba(16, 22, 33, 0.95);
-    padding: 0 8px;
-    color: var(--colors-text-secondary);
-    font-size: 11px;
-    text-transform: uppercase;
-  }
-
-  .auth-gate {
-    border: 1px dashed rgba(255, 255, 255, 0.18);
-    border-radius: 8px;
-    padding: 10px;
+  .sessions-view,
+  .settings-view {
+    flex: 1;
+    min-height: 0;
     display: flex;
     flex-direction: column;
-    gap: 8px;
   }
 
-  .auth-gate strong {
+  .view-header {
+    padding: 20px 32px 0;
+  }
+
+  .view-header h1 {
+    margin: 0;
+    font-size: 32px;
+    font-weight: 300;
     color: var(--colors-text-primary);
+  }
+
+  .settings-header h1 {
+    font-size: 36px;
+  }
+
+  .view-header p {
+    margin: 4px 0 0;
     font-size: 13px;
+    color: var(--colors-text-secondary);
   }
 
-  .auth-gate p {
+  .message-box,
+  .settings-message {
+    margin: 12px 32px 0;
+    padding: 12px;
+    border-radius: 10px;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    background: rgba(255, 255, 255, 0.04);
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+
+  .error-message,
+  .success-message {
+    font-size: 11px;
+    line-height: 1.35;
+  }
+
+  .error-message {
+    color: var(--colors-accent-danger);
+  }
+
+  .success-message {
+    color: var(--colors-accent-success);
+  }
+
+  .scroll-panel,
+  .settings-scroll {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    padding: 32px;
+    display: flex;
+    flex-direction: column;
+    gap: 32px;
+  }
+
+  .session-section,
+  .settings-group {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .session-section h2,
+  .settings-group h3 {
     margin: 0;
-    font-size: 12px;
-    color: var(--colors-text-secondary);
-  }
-
-  .auth-actions {
-    display: flex;
-    gap: 8px;
-    flex-wrap: wrap;
-  }
-
-  .auth-cta {
-    padding: 10px 12px;
-    font-size: 12px;
-    white-space: nowrap;
-  }
-
-  .active-session {
-    display: flex;
-    flex-direction: column;
-    gap: 10px;
-  }
-
-  .transfer-controls {
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-    padding: 10px;
-    border-radius: 8px;
-    border: 1px solid rgba(255, 255, 255, 0.1);
-    background: rgba(0, 0, 0, 0.2);
-  }
-
-  .transfer-label {
-    display: block;
-    font-size: 11px;
-    letter-spacing: 0.06em;
+    font-size: 10px;
+    letter-spacing: 0.08em;
     text-transform: uppercase;
-    color: var(--colors-text-secondary);
-    font-weight: var(--font-weight-bold);
+    font-weight: 700;
+    color: rgba(0, 122, 255, 0.82);
   }
 
-  .transfer-actions {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 8px;
-  }
-
-  .transfer-btn {
-    padding: 8px 10px;
-    font-size: 11px;
-  }
-
-  .transfer-cancel {
-    margin-top: 0;
-  }
-
-  .session-line {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    padding: 8px 10px;
-    background: rgba(0, 0, 0, 0.25);
-    border-radius: 6px;
-    color: var(--colors-text-secondary);
-    font-size: 12px;
-  }
-
-  .session-line strong {
-    color: var(--colors-text-primary);
-    font-weight: 600;
-  }
-
-  .danger-btn {
-    margin-top: 4px;
-    padding: 10px;
-    color: #fff;
-    font-weight: 600;
-    background: var(--colors-accent-danger);
-  }
-
-  .danger-btn:hover {
-    filter: brightness(1.05);
-  }
-
-  .placeholder-box {
-    min-height: 110px;
-    border-radius: 8px;
-    border: 1px dashed rgba(255, 255, 255, 0.16);
+  .remote-content {
     display: flex;
     flex-direction: column;
+    gap: 12px;
+    padding: 16px;
+    border-radius: 12px;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    background: rgba(255, 255, 255, 0.03);
+  }
+
+  .video-placeholder {
+    height: 240px;
+    border-radius: 12px;
+    border: 1px solid rgba(52, 199, 89, 0.5);
+    background: rgba(0, 0, 0, 0.3);
+    color: rgba(255, 255, 255, 0.65);
+    display: flex;
     align-items: center;
     justify-content: center;
-    gap: 8px;
-  }
-
-  .p-icon {
-    font-size: 22px;
-    opacity: 0.8;
-  }
-
-  .p-text {
     font-size: 12px;
+  }
+
+  .helper-text,
+  .or-text,
+  .setting-help {
+    margin: 0;
+    font-size: 11px;
     color: var(--colors-text-secondary);
   }
 
-  .error {
-    color: var(--colors-accent-danger);
-    font-size: 12px;
+  .or-text {
+    text-align: center;
+    letter-spacing: 0.08em;
   }
 
-  .success {
-    color: var(--colors-accent-success);
-    font-size: 12px;
-  }
-
-  .settings-header {
+  .connect-row {
     display: flex;
-    align-items: flex-start;
-    justify-content: space-between;
-    gap: 12px;
-  }
-
-  .settings-actions {
-    display: flex;
+    gap: 10px;
     align-items: center;
-    gap: 8px;
+    padding: 10px;
+    border-radius: 12px;
+    background: rgba(255, 255, 255, 0.05);
   }
 
-  .ghost-btn,
-  .save-settings-btn,
-  .mini-btn {
-    border: 1px solid var(--colors-border-subtle);
-    background: var(--colors-bg-elevation2);
+  .connect-row input {
+    flex: 1;
+    min-width: 0;
+    padding: 10px;
+    border-radius: 8px;
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    background: rgba(0, 0, 0, 0.22);
     color: var(--colors-text-primary);
+    font-size: 14px;
   }
 
-  .ghost-btn,
-  .save-settings-btn {
-    padding: 8px 14px;
-    font-size: 12px;
-  }
-
-  .save-settings-btn {
-    background: rgba(58, 130, 246, 0.18);
-    border-color: rgba(58, 130, 246, 0.55);
-  }
-
-  .settings-feedback-row {
+  .settings-tabs {
     display: flex;
-    align-items: center;
-    gap: 8px;
-    padding: 0 var(--spacing-xxl) var(--spacing-xl);
-    flex-wrap: wrap;
+    align-items: flex-end;
+    gap: 20px;
+    padding: 20px 32px 8px;
   }
 
-  .pcvr-banner {
-    padding: 8px 12px;
-    border-radius: var(--radius-md);
-    background: var(--colors-bg-elevation2);
-    border: 1px solid var(--colors-border-subtle);
-    color: var(--colors-text-primary);
-    font-size: 12px;
-  }
-
-  .unsaved-pill,
-  .saved-pill {
-    padding: 6px 10px;
-    border-radius: 999px;
-    font-size: 11px;
-    border: 1px solid;
-  }
-
-  .unsaved-pill {
-    color: #f59e0b;
-    border-color: rgba(245, 158, 11, 0.55);
-    background: rgba(245, 158, 11, 0.12);
-  }
-
-  .saved-pill {
-    color: #10b981;
-    border-color: rgba(16, 185, 129, 0.55);
-    background: rgba(16, 185, 129, 0.12);
-  }
-
-  .saved-pill.error {
-    color: #ef4444;
-    border-color: rgba(239, 68, 68, 0.55);
-    background: rgba(239, 68, 68, 0.12);
-  }
-
-  .settings-group {
-    background: linear-gradient(180deg, rgba(23, 31, 44, 0.8), rgba(15, 21, 32, 0.8));
-    border: 1px solid rgba(255, 255, 255, 0.06);
-    border-radius: var(--radius-md);
-    padding: var(--spacing-lg);
-  }
-
-  .group-label {
-    display: block;
-    font-size: 11px;
-    letter-spacing: 0.06em;
-    text-transform: uppercase;
-    font-weight: var(--font-weight-bold);
+  .settings-tab {
+    border: none;
+    border-radius: 0;
+    background: transparent;
     color: var(--colors-text-secondary);
-    margin-bottom: var(--spacing-md);
+    font-size: 14px;
+    line-height: 1;
+    padding: 0 0 8px;
+    border-bottom: 2px solid transparent;
+  }
+
+  .settings-tab.active {
+    color: var(--colors-accent-primary);
+    border-bottom-color: var(--colors-accent-primary);
+    font-weight: 700;
+  }
+
+  .settings-version {
+    margin-left: auto;
+    padding-bottom: 8px;
+    color: rgba(255, 255, 255, 0.36);
+    font-size: 10px;
+    line-height: 1;
+  }
+
+  .settings-divider {
+    height: 1px;
+    margin: 0 32px;
+    background: rgba(255, 255, 255, 0.08);
   }
 
   .setting-row {
     display: flex;
-    justify-content: space-between;
+    gap: 14px;
     align-items: center;
-    gap: 12px;
+    justify-content: space-between;
     padding: 12px;
-    background: rgba(0, 0, 0, 0.24);
-    border-radius: var(--radius-sm);
-    margin-bottom: var(--spacing-sm);
+    border-radius: 8px;
+    background: rgba(255, 255, 255, 0.025);
   }
 
-  .setting-row label {
+  .setting-copy {
+    min-width: 0;
+    flex: 1;
+  }
+
+  .setting-label {
     color: var(--colors-text-primary);
-    font-size: var(--font-size-body);
+    font-size: 13px;
+    font-weight: 600;
+    line-height: 1.25;
+  }
+
+  .setting-sub {
+    margin-top: 4px;
+    color: var(--colors-text-secondary);
+    font-size: 11px;
+    line-height: 1.35;
+  }
+
+  .setting-value {
+    color: var(--colors-text-secondary);
+    font-size: 12px;
+    text-align: right;
+    max-width: 340px;
   }
 
   .setting-row input[type="text"],
   .setting-row input[type="url"],
   .setting-row input[type="number"],
   .setting-row select {
-    width: 220px;
+    width: 240px;
     max-width: 100%;
     padding: 8px;
-    border: 1px solid var(--colors-border-input);
-    border-radius: var(--radius-sm);
-    background: var(--colors-bg-base);
+    border-radius: 8px;
+    border: 1px solid rgba(255, 255, 255, 0.14);
+    background: rgba(0, 0, 0, 0.22);
     color: var(--colors-text-primary);
     text-align: right;
+    font-size: 12px;
   }
 
-  .setting-row.checkbox input {
+  .setting-row input[type="checkbox"] {
     width: 18px;
     height: 18px;
-  }
-
-  .setting-hint {
-    margin: 0 0 var(--spacing-sm);
-    font-size: 11px;
-    color: var(--colors-text-secondary);
-  }
-
-  .deadzone-wrap {
-    width: 220px;
-    display: flex;
-    align-items: center;
-    justify-content: flex-end;
-    gap: 10px;
-  }
-
-  .deadzone-wrap input {
-    width: 150px;
+    accent-color: var(--colors-accent-primary);
   }
 
   .monitor-picker-wrap {
+    width: 320px;
+    max-width: 100%;
     display: flex;
     align-items: center;
     justify-content: flex-end;
     gap: 8px;
-    width: 320px;
-    max-width: 100%;
   }
 
   .monitor-picker-wrap select {
@@ -1289,81 +902,151 @@
     min-width: 0;
   }
 
-  .mini-btn {
-    padding: 7px 10px;
-    font-size: 11px;
-    white-space: nowrap;
+  .settings-footer {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 20px;
+    border-top: 1px solid rgba(255, 255, 255, 0.08);
+    background: rgba(0, 0, 0, 0.24);
   }
 
+  .settings-footer .primary-btn {
+    margin-left: auto;
+    padding-left: 32px;
+    padding-right: 32px;
+  }
+
+  .primary-btn,
+  .ghost-btn,
+  .danger-btn {
+    border-radius: 8px;
+    padding: 10px 14px;
+    font-size: 12px;
+    font-weight: 700;
+    line-height: 1;
+    cursor: pointer;
+  }
+
+  .primary-btn {
+    border: 1px solid rgba(255, 255, 255, 0.16);
+    background: var(--colors-accent-primary);
+    color: #fff;
+  }
+
+  .ghost-btn {
+    border: 1px solid rgba(255, 255, 255, 0.16);
+    background: rgba(255, 255, 255, 0.06);
+    color: var(--colors-text-primary);
+  }
+
+  .danger-btn {
+    border: 1px solid rgba(255, 255, 255, 0.16);
+    background: var(--colors-accent-danger);
+    color: #fff;
+  }
+
+  .primary-btn:hover:enabled,
+  .ghost-btn:hover:enabled,
+  .danger-btn:hover:enabled {
+    filter: brightness(1.05);
+  }
+
+  .primary-btn:disabled,
   .ghost-btn:disabled,
-  .save-settings-btn:disabled,
-  .mini-btn:disabled {
+  .danger-btn:disabled {
     opacity: 0.55;
     cursor: not-allowed;
   }
 
-  .setting-info {
-    max-width: 420px;
-    font-size: 12px;
-    color: var(--colors-text-secondary);
-    text-align: right;
-    line-height: 1.4;
-  }
-
-  .setting-info.full {
-    text-align: left;
-    max-width: none;
-  }
-
-  .advanced-group {
-    color: var(--colors-text-secondary);
-  }
-
-  .advanced-group summary {
-    cursor: pointer;
-    font-size: 12px;
-    font-weight: var(--font-weight-bold);
-    margin: 0 var(--spacing-sm);
-  }
-
-  .advanced-inner {
-    margin-top: var(--spacing-sm);
-  }
-
   @media (max-width: 1040px) {
-    .field-row {
+    .top-bar,
+    .view-header,
+    .message-box,
+    .settings-message,
+    .settings-tabs,
+    .scroll-panel,
+    .settings-scroll {
+      padding-left: 20px;
+      padding-right: 20px;
+    }
+
+    .settings-divider {
+      margin-left: 20px;
+      margin-right: 20px;
+    }
+  }
+
+  @media (max-width: 780px) {
+    .connect-row,
+    .setting-row,
+    .monitor-picker-wrap,
+    .settings-footer {
       flex-direction: column;
       align-items: stretch;
     }
 
-    .primary-btn {
+    .primary-btn,
+    .ghost-btn,
+    .danger-btn,
+    .settings-footer .primary-btn {
       width: 100%;
-    }
-
-    .settings-header {
-      flex-direction: column;
-      align-items: stretch;
-    }
-
-    .settings-actions {
-      justify-content: flex-end;
-    }
-
-    .setting-row {
-      flex-direction: column;
-      align-items: stretch;
+      margin-left: 0;
     }
 
     .setting-row input[type="text"],
     .setting-row input[type="url"],
     .setting-row input[type="number"],
     .setting-row select,
-    .deadzone-wrap,
-    .monitor-picker-wrap {
+    .monitor-picker-wrap,
+    .setting-value {
       width: 100%;
       max-width: 100%;
       text-align: left;
       justify-content: flex-start;
+    }
+
+    .settings-tabs {
+      flex-wrap: wrap;
+      gap: 12px;
+    }
+
+    .settings-version {
+      width: 100%;
+      margin-left: 0;
+    }
+  }
+
+  @media (max-width: 760px) {
+    .content-view {
+      flex-direction: column;
+    }
+
+    .sidebar {
+      width: 100%;
+      height: 64px;
+      padding: 0 12px;
+      flex-direction: row;
+      justify-content: center;
+      border-right: none;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+    }
+
+    .spacer {
+      display: none;
+    }
+
+    .top-bar {
+      justify-content: flex-end;
+      padding-top: 14px;
+    }
+
+    .view-header h1 {
+      font-size: 30px;
+    }
+
+    .settings-header h1 {
+      font-size: 32px;
     }
   }
 </style>

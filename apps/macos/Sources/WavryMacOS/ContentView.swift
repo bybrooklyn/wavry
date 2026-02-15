@@ -27,9 +27,15 @@ struct ContentView: View {
                         activeTab = .settings
                     }
                 }
-                .padding(.vertical, .themeSpacing.xl)
+                .padding(.bottom, .themeSpacing.xl)
+                .padding(.top, 54)
                 .frame(width: 60)
                 .background(VisualEffectView(material: .sidebar, blendingMode: .behindWindow))
+                .overlay(alignment: .trailing) {
+                    Rectangle()
+                        .fill(Color.borderSubtle)
+                        .frame(width: 1)
+                }
                 
                 // 2. Main Content Area
                 ZStack {
@@ -74,6 +80,7 @@ struct ContentView: View {
                     }
                 }
             }
+            .ignoresSafeArea(.container, edges: .top)
             .frame(minWidth: 800, maxWidth: .infinity, minHeight: 600, maxHeight: .infinity)
             .preferredColorScheme(.dark)
         }
@@ -326,10 +333,16 @@ struct SidebarIcon: View {
     
     var body: some View {
         Button(action: action) {
-            WavryIcon(name: icon, size: 20, color: active ? .accentPrimary : .textSecondary)
-                .frame(width: 40, height: 40)
-                .background(active ? Color.accentPrimary.opacity(0.1) : Color.clear)
-                .cornerRadius(.themeRadius.lg)
+            WavryIcon(name: icon, size: 18, color: active ? .accentPrimary : .textSecondary.opacity(0.95))
+                .frame(width: 42, height: 42)
+                .background(
+                    RoundedRectangle(cornerRadius: .themeRadius.lg)
+                        .fill(active ? Color.accentPrimary.opacity(0.14) : Color.clear)
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: .themeRadius.lg)
+                        .stroke(active ? Color.accentPrimary.opacity(0.35) : Color.clear, lineWidth: 1)
+                )
         }
         .buttonStyle(.plain)
     }

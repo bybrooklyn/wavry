@@ -10,11 +10,20 @@
     "frontendDist": "../build"
   },
   "app": {
+    "macOSPrivateApi": true,
     "windows": [
       {
         "title": "crateswavry-desktop",
         "width": 800,
-        "height": 600
+        "height": 600,
+        "transparent": true,
+        "hiddenTitle": true,
+        "titleBarStyle": "Overlay",
+        "trafficLightPosition": {
+          "x": 16,
+          "y": 16
+        },
+        "backgroundColor": "#1E2024D0"
       }
     ],
     "security": {

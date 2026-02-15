@@ -16,7 +16,7 @@
         try {
             // Dynamically import the SVG
             // In production build, Vite will bundle these as assets
-            const module = await import(`../assets/icons/${name}.svg?raw`);
+            const module = await import(`../../assets/icons/${name}.svg?raw`);
             svgContent = module.default;
         } catch (err) {
             console.warn(`Icon "${name}" not found, using placeholder`);
